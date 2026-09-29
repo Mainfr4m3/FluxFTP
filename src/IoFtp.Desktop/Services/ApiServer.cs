@@ -21,14 +21,15 @@ namespace IoFtp.Desktop.Services;
 internal sealed class ApiServer : IAsyncDisposable
 {
     private WebApplication? _app;
-    private CbftpUdpServer? _udpServer;
+    private VisionaryPipeServer? _visionaryPipe;
     private readonly Dictionary<string, SpreadJobState> _spreadJobs = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _spreadJobsLock = new();
     private int _nextSpreadJobId;
 
     public async Task StartAsync(GlobalSettings settings, Func<IReadOnlyList<TransferJobInfo>> getJobs,
         Func<ApiTransferRequest, Task<object>> startTransfer, Func<ApiDownloadRequest, Task<object>> startDownload,
-        Action<Guid> removeJob, Action<Guid> resetJob, Action<string>? diagnosticLog = null)
+        Action<Guid> removeJob, Action<Guid> resetJob, Action<string>? diagnosticLog = null,
+        Func<IrcConnectRequest, Task>? connectIrc = null)
     {
         if (!settings.EnableHttpsApi) return;
         var certificate = LoadOrCreateCertificate();
@@ -62,7 +63,23 @@ internal sealed class ApiServer : IAsyncDisposable
             }
         });
 
-        _app.MapGet("/info", () => Results.Json(new { name = "FluxFTP", version = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "1.0.0", api = "cbftp-compatible", tls = true, udp = true }));
+        _app.MapGet("/info", () => Results.Json(new { name = "FluxFTP", version = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "1.0.0", api = "cbftp-compatible", tls = true, udp = false }));
+        _app.MapPost("/irc/connect", async (HttpContext context) =>
+        {
+            if (connectIrc is null) return Results.StatusCode(503);
+            try
+            {
+                var request = await context.Request.ReadFromJsonAsync<IrcConnectRequest>(context.RequestAborted);
+                if (request is null) return Results.BadRequest(new { error = "JSON connection settings are required." });
+                request.Apply(null); // Validate before dispatching any mutation.
+                await connectIrc(request);
+                return Results.Json(new { status = "connecting", saved = true }, statusCode: 202);
+            }
+            catch (Exception ex) when (ex is ArgumentException or JsonException or BadHttpRequestException)
+            { return Results.BadRequest(new { error = "Invalid IRC settings. Supply host, port, nick, channel and ZNC credentials when enabled." }); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or CryptographicException)
+            { return Results.Json(new { error = "Could not save or restart IRC. Check local configuration access." }, statusCode: 500); }
+        });
         // Stock cbftp returns name arrays from the collection endpoints.  RaceTrade
         // subsequently requests the detail endpoint for every selected name.
         _app.MapGet("/sites", () => Results.Json(new ProfileStore().Load().Select(site => site.Name)));
@@ -208,13 +225,17 @@ internal sealed class ApiServer : IAsyncDisposable
             // mIRC parser consumes this indented structure line-by-line.
             var response = new
             {
-                failures = results.Where(result => result.Error is not null)
-                    .Select(result => new { name = result.Name, reason = result.Error }),
-                successes = results.Where(result => result.Error is null)
-                    .Select(result => new { name = result.Name, result = result.Result })
+                failures = results.Where(result => result.Error is not null || result.Outcome == "failed")
+                    .Select(result => new { name = result.Name, reason = result.Error ?? result.Result, status = "failed" }),
+                successes = results.Where(result => result.Error is null && result.Outcome != "failed")
+                    .Select(result => new { name = result.Name, result = result.Result, status = result.Outcome }),
+                dupes = results.Where(result => result.Error is null && result.Outcome == "dupe")
+                    .Select(result => new { name = result.Name, result = result.Result, status = "dupe" })
             };
             var json = JsonSerializer.Serialize(response, new JsonSerializerOptions { WriteIndented = true });
-            diagnosticLog?.Invoke($"API /raw completed: {results.Count(result => result.Error is null)} success, {results.Count(result => result.Error is not null)} failure, {Encoding.UTF8.GetByteCount(json)} bytes");
+            diagnosticLog?.Invoke($"API /raw completed: {results.Count(result => result.Error is null && result.Outcome == "success")} success, " +
+                $"{results.Count(result => result.Error is null && result.Outcome == "dupe")} dupe, " +
+                $"{results.Count(result => result.Error is not null || result.Outcome == "failed")} failure, {Encoding.UTF8.GetByteCount(json)} bytes");
             return Results.Text(json, "application/json");
         });
         _app.MapGet("/transferjobs", () => Results.Json(getJobs()));
@@ -278,14 +299,13 @@ internal sealed class ApiServer : IAsyncDisposable
         _app.MapPost("/transferjobs/{id:guid}/reset", (Guid id) => { resetJob(id); return Results.Ok(new { reset = id }); });
 
         await _app.StartAsync();
-        _udpServer = new CbftpUdpServer(settings.ApiLocalhostOnly ? IPAddress.Loopback : IPAddress.Any, settings.HttpsApiPort,
-            settings.ApiPassword, ExecuteRawAsync, startTransfer, startDownload);
-        await _udpServer.StartAsync();
+        _visionaryPipe = new VisionaryPipeServer(startTransfer, diagnosticLog);
+        _visionaryPipe.Start();
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (_udpServer is not null) { await _udpServer.DisposeAsync(); _udpServer = null; }
+        if (_visionaryPipe is not null) { await _visionaryPipe.DisposeAsync(); _visionaryPipe = null; }
         if (_app is null) return;
         await _app.StopAsync(); await _app.DisposeAsync(); _app = null;
     }
@@ -353,7 +373,7 @@ internal sealed class ApiServer : IAsyncDisposable
     private static string? SitePath(SectionDefinition section, string site) => section.SitePaths.FirstOrDefault(pair => pair.Key.Equals(site, StringComparison.OrdinalIgnoreCase)).Value;
     private static void SetSitePath(SectionDefinition section, string site, string path) { RemoveSitePath(section, site); section.SitePaths[site] = path; }
     private static bool RemoveSitePath(SectionDefinition section, string site) { var key = section.SitePaths.Keys.FirstOrDefault(key => key.Equals(site, StringComparison.OrdinalIgnoreCase)); return key is not null && section.SitePaths.Remove(key); }
-    private static string ResolvePath(string site, string path) => path.StartsWith('/') ? path : FindSection(path) is { } section && SitePath(section, site) is { } sectionPath ? sectionPath : path;
+    private static string ResolvePath(string site, string path) => path.StartsWith('/') ? path : new SiteRuleStore().ResolvePath(site, path) ?? (FindSection(path) is { } section && SitePath(section, site) is { } sectionPath ? sectionPath : path);
     private static object ToApiSection(SectionDefinition section) => new { name = section.Name, hotkey = section.Hotkey, num_jobs = 0,
         validation_mode = section.ValidationMode.ToString().ToUpperInvariant(), allow_patterns = SplitPatterns(section.AllowPatterns),
         deny_patterns = SplitPatterns(section.DenyPatterns),
@@ -367,6 +387,13 @@ internal sealed class ApiServer : IAsyncDisposable
         cepr = profile.EffectiveOptions.CeprSupported, use_xdupe = profile.EffectiveOptions.UseXdupe,
         xdupe = profile.EffectiveOptions.UseXdupe, disabled = false,
         fxp_protection = profile.EffectiveOptions.FxpProtection == FxpProtectionMode.Clear ? "CLEAR" : "AUTO",
+        fxp_data_role = profile.EffectiveOptions.FxpDataRole switch
+        {
+            FxpDataRole.Passive => "PASV",
+            FxpDataRole.Active => "PORT",
+            _ => "AUTO"
+        },
+        broken_pasv = profile.EffectiveOptions.FxpDataRole == FxpDataRole.Active,
         except_source_sites = SplitList(profile.EffectiveOptions.BlockTransfersFrom), except_target_sites = SplitList(profile.EffectiveOptions.BlockTransfersTo),
         affils = SplitList(profile.EffectiveOptions.Affils), force_binary = profile.EffectiveOptions.ForceBinaryMode,
         force_binary_mode = profile.EffectiveOptions.ForceBinaryMode,
@@ -383,7 +410,11 @@ internal sealed class ApiServer : IAsyncDisposable
             BlockTransfersTo: string.Join(' ', request.ExceptTargetSites ?? []), ForceBinaryMode: request.ForceBinary ?? true,
             Affils: string.Join(' ', request.Affils ?? []));
         if (request.ForceBinaryMode is not null) options = options with { ForceBinaryMode = request.ForceBinaryMode.Value };
-        options = options with { FxpProtection = ParseFxpProtection(request.FxpProtection) };
+        options = options with
+        {
+            FxpProtection = ParseFxpProtection(request.FxpProtection),
+            FxpDataRole = request.BrokenPasv == true ? FxpDataRole.Active : ParseFxpDataRole(request.FxpDataRole)
+        };
         return new(Guid.NewGuid(), request.Name!, primary.Host, primary.Port, request.User ?? "anonymous", protocol,
             request.Password ?? "", ListingMode: ParseListingMode(request.ListCommand),
             Options: options, AlternateAddresses: string.Join(' ', alternates), Description: request.Description ?? "");
@@ -404,6 +435,11 @@ internal sealed class ApiServer : IAsyncDisposable
             CeprSupported = request.CeprSupported ?? request.Cepr ?? profile.EffectiveOptions.CeprSupported,
             UseXdupe = request.UseXdupe ?? request.Xdupe ?? profile.EffectiveOptions.UseXdupe,
             FxpProtection = request.FxpProtection is null ? profile.EffectiveOptions.FxpProtection : ParseFxpProtection(request.FxpProtection),
+            FxpDataRole = request.BrokenPasv == true
+                ? FxpDataRole.Active
+                : request.BrokenPasv == false && request.FxpDataRole is null
+                    ? FxpDataRole.Auto
+                    : request.FxpDataRole is null ? profile.EffectiveOptions.FxpDataRole : ParseFxpDataRole(request.FxpDataRole),
             BlockTransfersFrom = request.ExceptSourceSites is null ? profile.EffectiveOptions.BlockTransfersFrom : string.Join(' ', request.ExceptSourceSites),
             BlockTransfersTo = request.ExceptTargetSites is null ? profile.EffectiveOptions.BlockTransfersTo : string.Join(' ', request.ExceptTargetSites),
             Affils = request.Affils is null ? profile.EffectiveOptions.Affils : string.Join(' ', request.Affils),
@@ -418,6 +454,12 @@ internal sealed class ApiServer : IAsyncDisposable
     private static TransferProtocol ParseTls(string? value) => value?.ToUpperInvariant() switch { "IMPLICIT" => TransferProtocol.FtpsImplicit, "NONE" => TransferProtocol.Ftp, _ => TransferProtocol.FtpsExplicit };
     private static FxpProtectionMode ParseFxpProtection(string? value) =>
         value?.Equals("CLEAR", StringComparison.OrdinalIgnoreCase) == true ? FxpProtectionMode.Clear : FxpProtectionMode.AutoSecure;
+    private static FxpDataRole ParseFxpDataRole(string? value) => value?.ToUpperInvariant() switch
+    {
+        "PASV" or "PASSIVE" => FxpDataRole.Passive,
+        "PORT" or "ACTIVE" => FxpDataRole.Active,
+        _ => FxpDataRole.Auto
+    };
     private static DirectoryListingMode ParseListingMode(string? value) => value?.ToUpperInvariant() switch
     {
         "LIST" => DirectoryListingMode.ListOnly,
@@ -455,7 +497,7 @@ internal sealed class ApiServer : IAsyncDisposable
         var results = new List<RawApiResult>();
         foreach (var name in names)
         {
-            var profile = FindSite(name); if (profile is null) { results.Add(new(name, "", null, "Site not found")); continue; }
+            var profile = FindSite(name); if (profile is null) { results.Add(new(name, "", null, "Site not found", "failed")); continue; }
             using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Clamp(request.Timeout ?? 10, 1, 300)));
             await using var session = new FtpRemoteSession();
             try
@@ -463,12 +505,14 @@ internal sealed class ApiServer : IAsyncDisposable
                 await session.ConnectAsync(profile, cancellation.Token);
                 var rawPath = request.PathSection is not null ? ResolvePath(name, request.PathSection) : request.Path;
                 if (!string.IsNullOrWhiteSpace(rawPath)) await session.ExecuteCommandAsync($"CWD {rawPath}", cancellation.Token);
-                ValidateRawPre(request.Command);
+                ValidateRawPre(name, request.Command);
                 var response = await session.ExecuteCommandAsync(request.Command ?? "", cancellation.Token);
                 var result = StripAnsi(response.Message).Trim();
-                results.Add(new(name, result.Length > 0 ? result : $"{response.StatusCode} Command successful", response.StatusCode, null));
+                var outcome = PreCommandResultClassifier.Classify(request.Command, response.StatusCode, result);
+                results.Add(new(name, result.Length > 0 ? result : $"{response.StatusCode} Command successful",
+                    response.StatusCode, null, outcome.ToString().ToLowerInvariant()));
             }
-            catch (Exception exception) { results.Add(new(name, "", null, exception.Message)); }
+            catch (Exception exception) { results.Add(new(name, "", null, exception.Message, "failed")); }
         }
         return results;
     }
@@ -482,13 +526,15 @@ internal sealed class ApiServer : IAsyncDisposable
     private static SectionValidationMode ParseValidationMode(string? value) =>
         Enum.TryParse<SectionValidationMode>(value, true, out var mode) ? mode : SectionValidationMode.Disabled;
 
-    private static void ValidateRawPre(string? command)
+    private static void ValidateRawPre(string site, string? command)
     {
         if (string.IsNullOrWhiteSpace(command)) return;
         var fields = command.Split(' ', 4, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (fields.Length < 4 || !fields[0].Equals("SITE", StringComparison.OrdinalIgnoreCase) ||
             !fields[1].Equals("PRE", StringComparison.OrdinalIgnoreCase)) return;
         var validation = SectionReleaseValidator.Validate(fields[2], fields[3]);
+        var siteRules = new SiteRuleStore().Evaluate(site, fields[2], fields[3]);
+        if (!siteRules.Accepted) throw new InvalidOperationException($"PRE blocked by site rules: {siteRules.Message}");
         if (!validation.Accepted && validation.Mode == SectionValidationMode.Block)
             throw new InvalidOperationException($"PRE blocked: {validation.Message}");
     }
@@ -522,6 +568,8 @@ internal sealed class ApiServer : IAsyncDisposable
         [property: JsonPropertyName("use_xdupe")] bool? UseXdupe = null,
         bool? Xdupe = null,
         [property: JsonPropertyName("fxp_protection")] string? FxpProtection = null,
+        [property: JsonPropertyName("fxp_data_role")] string? FxpDataRole = null,
+        [property: JsonPropertyName("broken_pasv")] bool? BrokenPasv = null,
         [property: JsonPropertyName("except_source_sites")] List<string>? ExceptSourceSites = null,
         [property: JsonPropertyName("except_target_sites")] List<string>? ExceptTargetSites = null,
         List<string>? Affils = null,
@@ -555,7 +603,8 @@ internal sealed record RawApiResult(
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("result")] string Result,
     [property: JsonPropertyName("code")] int? Code,
-    [property: JsonPropertyName("error")] string? Error);
+    [property: JsonPropertyName("error")] string? Error,
+    [property: JsonPropertyName("outcome")] string Outcome = "success");
 
 internal sealed record ApiTransferRequest(
     [property: JsonPropertyName("src_site")] string? SrcSite = null,

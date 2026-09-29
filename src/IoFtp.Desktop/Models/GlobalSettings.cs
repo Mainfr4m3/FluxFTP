@@ -36,4 +36,7 @@ public sealed record GlobalSettings(
     string ProxyPassword = "",
     bool ProxyDns = true,
     bool ProxyDataConnections = true,
-    bool CheckForUpdatesAtStartup = true);
+    bool CheckForUpdatesAtStartup = true,
+    AdvancedSkipRule[]? AdvancedSkipRules = null,
+    ThemeSettings? Theme = null,
+    IrcSettings? Irc = null);

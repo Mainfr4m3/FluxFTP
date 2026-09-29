@@ -1,10 +1,11 @@
 <Window x:Class="IoFtp.Desktop.GlobalSettingsWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Global Settings" Width="720" Height="680" WindowStartupLocation="CenterOwner" ShowInTaskbar="False" Background="{StaticResource WindowBrush}" Foreground="{StaticResource TextBrush}">
-    <DockPanel Margin="18" Background="{StaticResource WindowBrush}">
+        Title="Global Settings" Width="720" Height="680" WindowStartupLocation="CenterOwner" ShowInTaskbar="False" Background="{DynamicResource WindowBrush}" Foreground="{DynamicResource TextBrush}">
+    <DockPanel Margin="18" Background="{DynamicResource WindowBrush}">
         <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0"><Button Content="Cancel" IsCancel="True"/><Button Content="Save" IsDefault="True" Click="Save_Click"/></StackPanel>
-        <StackPanel>
-            <TextBlock Text="GLOBAL SETTINGS" FontSize="22" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" Margin="0,0,0,12"/>
-            <TabControl Height="550">
+        <DockPanel>
+            <TextBlock DockPanel.Dock="Top" Text="GLOBAL SETTINGS" FontSize="22" FontWeight="SemiBold" Foreground="{DynamicResource AccentBrush}" Margin="0,0,0,12"/>
+            <TextBlock DockPanel.Dock="Bottom" x:Name="ErrorText" Foreground="#F07178" Margin="0,8" TextWrapping="Wrap"/>
+            <TabControl>
                 <TabItem Header="Network"><Grid Margin="16"><Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                     <TextBlock Text="Bind address/interface"/><TextBox x:Name="BindBox" Grid.Column="1" Margin="0,4" ToolTip="Blank means Windows chooses the interface."/>
                     <TextBlock Grid.Row="1" Text="Active port range from"/><TextBox x:Name="PortFromBox" Grid.Row="1" Grid.Column="1" Margin="0,4"/>
@@ -13,6 +14,28 @@
                     <StackPanel Grid.Row="4" Grid.ColumnSpan="2" Orientation="Horizontal"><TextBlock Text="API port" Width="220"/><TextBox x:Name="ApiPortBox" Width="100"/><CheckBox x:Name="ApiLocalBox" Content="Localhost only" Margin="18,0"/></StackPanel>
                     <TextBlock Grid.Row="5" Text="API password" VerticalAlignment="Center"/><PasswordBox x:Name="ApiPasswordBox" Grid.Row="5" Grid.Column="1" Margin="0,4" Padding="8,5"/>
                 </Grid></TabItem>
+                <TabItem Header="IRC">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="16">
+                        <CheckBox x:Name="IrcEnabledBox" Content="Connect to IRC when FluxFTP starts" Margin="0,0,0,10"/>
+                        <TextBlock Text="IRC server / ZNC host"/><TextBox x:Name="IrcHostBox" Margin="0,4,0,8"/>
+                        <StackPanel Orientation="Horizontal"><TextBlock Text="Port" VerticalAlignment="Center"/><TextBox x:Name="IrcPortBox" Width="85" Margin="12,0"/><CheckBox x:Name="IrcTlsBox" Content="TLS" VerticalAlignment="Center"/></StackPanel>
+                        <CheckBox x:Name="IrcAllowInvalidCertificateBox" Content="Accept invalid / self-signed certificates" Margin="0,8" IsEnabled="{Binding IsChecked, ElementName=IrcTlsBox}" ToolTip="Keeps TLS encryption but skips server certificate validation for this IRC/ZNC connection."/>
+                        <TextBlock Text="Network name (used by IRC commands)"/><TextBox x:Name="IrcNetworkNameBox" Margin="0,4,0,8"/>
+                        <TextBlock Text="Nickname" Margin="0,10,0,0"/><TextBox x:Name="IrcNickBox" Margin="0,4,0,8"/>
+                        <CheckBox x:Name="IrcZncBox" Content="Connect through ZNC" Margin="0,4"/>
+                        <TextBlock Text="ZNC username / network"/><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions><TextBox x:Name="IrcZncUserBox" Margin="0,4,6,8" ToolTip="ZNC username"/><TextBox x:Name="IrcZncNetworkBox" Grid.Column="1" Margin="6,4,0,8" ToolTip="ZNC network name"/></Grid>
+                        <TextBlock Text="Server password / ZNC password"/><PasswordBox x:Name="IrcPasswordBox" Margin="0,4,0,8" Padding="8,5"/>
+                        <TextBlock Text="Channel (FluxFTP needs @ here)"/><TextBox x:Name="IrcChannelBox" Margin="0,4,0,8"/>
+                        <TextBlock Text="FTP site used to verify admins (ioFTPD flags 1 or M)"/><ComboBox x:Name="IrcSiteBox" DisplayMemberPath="Name" SelectedValuePath="Id" Margin="0,4,0,8"/>
+                        <TextBlock Text="Choose a site using FTPS with a valid certificate. Its saved account must be able to run SITE USER for other users." TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" Margin="0,0,0,8"/>
+                        <CheckBox x:Name="IrcLoginBox" Content="Allow private !login &lt;FTP-user&gt; &lt;password&gt; (requires TLS)" Margin="0,4"/>
+                        <TextBlock Text="Private messages pass through your IRC server and ZNC; their logging settings apply. FluxFTP does not log or save these passwords." TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" Margin="0,4,0,8"/>
+                        <TextBlock Text="Saved account links — one IRC-account=FTP-user per line"/><TextBox x:Name="IrcLinksBox" AcceptsReturn="True" Height="105" VerticalScrollBarVisibility="Auto" Margin="0,4,0,8"/>
+                        <TextBlock Text="Use the registered account name, not the nickname. Identify with NickServ, then !op. Linked admins also receive an @ request on joining when extended-join is supported." TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}"/>
+                        <TextBox x:Name="IrcNewsPathBox" Visibility="Collapsed"/>
+                        <TextBlock Text="Commands: !help, !op, private !login, !news, !announces, !logout. !news shows FluxFTP project releases in the requesting channel or private conversation. Saving reconnects IRC; connection status appears in the main log." TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}"/>
+                    </StackPanel></ScrollViewer>
+                </TabItem>
                 <TabItem Header="Jobs &amp; history"><Grid Margin="16"><Grid.ColumnDefinitions><ColumnDefinition Width="250"/><ColumnDefinition Width="120"/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                     <TextBlock Text="Prepared job expiration (seconds)"/><TextBox x:Name="ExpirationBox" Grid.Column="1" Margin="0,4"/><TextBlock Grid.Row="1" Text="Starter timeout (seconds)"/><TextBox x:Name="StarterBox" Grid.Row="1" Grid.Column="1" Margin="0,4"/>
                     <TextBlock Grid.Row="2" Text="Max transfer runtime (minutes, 0 unlimited)"/><TextBox x:Name="RuntimeBox" Grid.Row="2" Grid.Column="1" Margin="0,4"/>
@@ -27,23 +50,52 @@
                     <CheckBox x:Name="MinimizeToTrayBox" Grid.Row="3" Grid.ColumnSpan="2" Content="Minimize and close FluxFTP to the system tray" Margin="0,14,0,4"/>
                 </Grid></TabItem>
                 <TabItem Header="Skiplist"><Grid Margin="16"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                    <TextBlock Text="Files skipped during folder / PRE transfers" FontWeight="SemiBold"/>
-                    <TextBox x:Name="SkipPatternsBox" Grid.Row="1" Margin="0,10" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" FontFamily="Cascadia Mono, Consolas"/>
-                    <TextBlock Grid.Row="2" Text="One wildcard per line, for example *.message or *sample*. Matching files are not queued." Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap"/>
+                    <Grid><TextBlock Text="Files skipped during folder / PRE transfers" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        <Button Content="Advanced…" HorizontalAlignment="Right" Click="AdvancedSkiplist_Click"/>
+                    </Grid>
+                    <TextBox x:Name="SkipPatternsBox" Grid.Row="1" Margin="0,10" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" FontFamily="{DynamicResource AppMonospaceFontFamily}"/>
+                    <TextBlock Grid.Row="2" Text="One wildcard per line, for example *.message or *sample*. Matching files are not queued." Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap"/>
                 </Grid></TabItem>
                 <TabItem Header="Prio List"><Grid Margin="16"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                     <TextBlock Text="PRE / folder upload priority" FontWeight="SemiBold"/>
-                    <TextBox x:Name="PriorityPatternsBox" Grid.Row="1" Margin="0,10" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" FontFamily="Cascadia Mono, Consolas"/>
-                    <TextBlock Grid.Row="2" Text="One wildcard per line. Earlier entries are queued first; for example *.nfo then *.sfv." Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap"/>
+                    <TextBox x:Name="PriorityPatternsBox" Grid.Row="1" Margin="0,10" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" FontFamily="{DynamicResource AppMonospaceFontFamily}"/>
+                    <TextBlock Grid.Row="2" Text="One wildcard per line. Earlier entries are queued first; for example *.nfo then *.sfv." Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap"/>
                 </Grid></TabItem>
                 <TabItem Header="Appearance"><Grid Margin="16"><Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="220"/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                     <TextBlock Text="Legend bar mode" VerticalAlignment="Center"/><ComboBox x:Name="LegendModeBox" Grid.Column="1" Margin="0,4"/>
-                    <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Margin="0,14,0,0" TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Text="Scrolling shows a moving activity summary. Static shows the color legend. Activity shows the latest connection state. Compact shows sites, jobs and speed. Hidden removes the bottom bar."/>
+                    <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Margin="0,14,0,0" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" Text="Scrolling shows a moving activity summary. Static shows the color legend. Activity shows the latest connection state. Compact shows sites, jobs and speed. Hidden removes the bottom bar."/>
                 </Grid></TabItem>
+                <TabItem Header="Themes">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <Grid Margin="16">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="145"/><ColumnDefinition Width="150"/><ColumnDefinition Width="145"/><ColumnDefinition Width="150"/></Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <TextBlock Text="Theme name" VerticalAlignment="Center"/><TextBox x:Name="ThemeNameBox" Grid.Column="1" Grid.ColumnSpan="3" Margin="0,4"/>
+                            <TextBlock Grid.Row="1" Text="Window" VerticalAlignment="Center"/><TextBox x:Name="ThemeWindowBox" Grid.Row="1" Grid.Column="1" Margin="0,4"/>
+                            <TextBlock Grid.Row="1" Grid.Column="2" Text="Surface" VerticalAlignment="Center"/><TextBox x:Name="ThemeSurfaceBox" Grid.Row="1" Grid.Column="3" Margin="0,4"/>
+                            <TextBlock Grid.Row="2" Text="Raised surface" VerticalAlignment="Center"/><TextBox x:Name="ThemeRaisedBox" Grid.Row="2" Grid.Column="1" Margin="0,4"/>
+                            <TextBlock Grid.Row="2" Grid.Column="2" Text="Border" VerticalAlignment="Center"/><TextBox x:Name="ThemeBorderBox" Grid.Row="2" Grid.Column="3" Margin="0,4"/>
+                            <TextBlock Grid.Row="3" Text="Accent" VerticalAlignment="Center"/><TextBox x:Name="ThemeAccentBox" Grid.Row="3" Grid.Column="1" Margin="0,4"/>
+                            <TextBlock Grid.Row="3" Grid.Column="2" Text="Strong accent" VerticalAlignment="Center"/><TextBox x:Name="ThemeAccentStrongBox" Grid.Row="3" Grid.Column="3" Margin="0,4"/>
+                            <TextBlock Grid.Row="4" Text="Text" VerticalAlignment="Center"/><TextBox x:Name="ThemeTextBox" Grid.Row="4" Grid.Column="1" Margin="0,4"/>
+                            <TextBlock Grid.Row="4" Grid.Column="2" Text="Muted text" VerticalAlignment="Center"/><TextBox x:Name="ThemeMutedTextBox" Grid.Row="4" Grid.Column="3" Margin="0,4"/>
+                            <TextBlock Grid.Row="5" Text="Selection" VerticalAlignment="Center"/><TextBox x:Name="ThemeSelectionBox" Grid.Row="5" Grid.Column="1" Margin="0,4"/>
+                            <TextBlock Grid.Row="5" Grid.Column="2" Text="Hover" VerticalAlignment="Center"/><TextBox x:Name="ThemeHoverBox" Grid.Row="5" Grid.Column="3" Margin="0,4"/>
+                            <TextBlock Grid.Row="6" Text="UI font" VerticalAlignment="Center"/><TextBox x:Name="ThemeFontBox" Grid.Row="6" Grid.Column="1" Grid.ColumnSpan="3" Margin="0,4" ToolTip="For example Segoe UI"/>
+                            <TextBlock Grid.Row="7" Text="Monospace font" VerticalAlignment="Center"/><TextBox x:Name="ThemeMonoFontBox" Grid.Row="7" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,4" ToolTip="For example Cascadia Mono, Consolas"/>
+                            <TextBlock Grid.Row="7" Grid.Column="3" Text="Size" VerticalAlignment="Center" HorizontalAlignment="Left" Margin="8,0,0,0"/><TextBox x:Name="ThemeFontSizeBox" Grid.Row="7" Grid.Column="3" Width="58" HorizontalAlignment="Right" Margin="0,4"/>
+                            <StackPanel Grid.Row="8" Grid.ColumnSpan="4" Orientation="Horizontal" Margin="0,14,0,0">
+                                <Button Content="Preview" Click="PreviewTheme_Click"/><Button Content="Reset default" Click="ResetTheme_Click"/><Button Content="Import…" Click="ImportTheme_Click"/><Button Content="Export…" Click="ExportTheme_Click"/>
+                            </StackPanel>
+                        </Grid>
+                    </ScrollViewer>
+                </TabItem>
                 <TabItem Header="Updates"><Grid Margin="16"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                     <CheckBox x:Name="CheckUpdatesBox" Content="Check for updates at startup" Margin="0,4,0,14"/>
                     <Button Grid.Row="1" Content="Check now" HorizontalAlignment="Left" Click="CheckUpdates_Click"/>
-                    <TextBlock x:Name="UpdateStatusText" Grid.Row="2" Margin="0,14,0,0" TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}"/>
+                    <TextBlock x:Name="UpdateStatusText" Grid.Row="2" Margin="0,14,0,0" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}"/>
                 </Grid></TabItem>
                 <TabItem Header="Proxy"><Grid Margin="16"><Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="260"/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                     <TextBlock Text="Proxy type"/><ComboBox x:Name="ProxyTypeBox" Grid.Column="1" Margin="0,4"/>
@@ -53,11 +105,10 @@
                     <TextBlock Grid.Row="4" Text="Password"/><PasswordBox x:Name="ProxyPasswordBox" Grid.Row="4" Grid.Column="1" Margin="0,4" Padding="8,5"/>
                     <CheckBox x:Name="ProxyDnsBox" Grid.Row="5" Grid.ColumnSpan="2" Content="Resolve destination hostnames through proxy" Margin="0,10,0,4"/>
                     <CheckBox x:Name="ProxyDataBox" Grid.Row="6" Grid.ColumnSpan="2" Content="Use proxy for PASV/EPSV data connections" Margin="0,4"/>
-                    <TextBlock Grid.Row="7" Grid.ColumnSpan="2" Margin="0,14,0,0" TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Text="Direct FXP data remains server-to-server. Active-mode incoming connections cannot be routed through this proxy."/>
+                    <TextBlock Grid.Row="7" Grid.ColumnSpan="2" Margin="0,14,0,0" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" Text="Direct FXP data remains server-to-server. Active-mode incoming connections cannot be routed through this proxy."/>
                     <Button Grid.Row="8" Grid.Column="1" Content="Test proxy" HorizontalAlignment="Left" Margin="0,14,0,0" Click="TestProxy_Click"/>
                 </Grid></TabItem>
             </TabControl>
-            <TextBlock x:Name="ErrorText" Foreground="#F07178" Margin="0,8"/>
-        </StackPanel>
+        </DockPanel>
     </DockPanel>
 </Window>

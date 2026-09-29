@@ -8,9 +8,10 @@
     <AssemblyName>FluxFTP</AssemblyName>
     <Product>FluxFTP</Product>
     <Title>FluxFTP</Title>
-    <Version>1.0.17</Version>
-    <AssemblyVersion>1.0.17.0</AssemblyVersion>
-    <FileVersion>1.0.17.0</FileVersion>
+    <Version>1.0.53</Version>
+    <AssemblyVersion>1.0.53.0</AssemblyVersion>
+    <FileVersion>1.0.53.0</FileVersion>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <RootNamespace>IoFtp.Desktop</RootNamespace>
     <ApplicationIcon>Assets\fluxftp-server.ico</ApplicationIcon>
   </PropertyGroup>
@@ -19,5 +20,10 @@
     <FrameworkReference Include="Microsoft.WindowsDesktop.App.WindowsForms" />
     <ProjectReference Include="..\IoFtp.Core\IoFtp.Core.csproj" />
     <ProjectReference Include="..\IoFtp.Engine\IoFtp.Engine.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\CHANGELOG.md" Link="CHANGELOG.md" />
+    <Content Include="..\..\Rules\_site\*.example" Link="Rules\_site\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    <Content Include="..\..\Rules\_site\README.md" Link="Rules\_site\README.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
   </ItemGroup>
 </Project>

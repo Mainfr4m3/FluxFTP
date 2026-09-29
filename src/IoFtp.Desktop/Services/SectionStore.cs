@@ -44,6 +44,28 @@ internal sealed class SectionStore
         lock (Gate) SaveCore(sections);
     }
 
+    public List<SectionDefinition> Import(string path)
+    {
+        if (Path.GetExtension(path).Equals(".xml", StringComparison.OrdinalIgnoreCase))
+        {
+            var bookmarks = CaptionBookmarkImporter.Import(path, "ioFTPD");
+            if (bookmarks.Count == 0)
+                throw new InvalidDataException("No CAPTION/REMOTE section entries were found in the XML file.");
+            return bookmarks.GroupBy(bookmark => bookmark.Name, StringComparer.OrdinalIgnoreCase)
+                .Select(group => new SectionDefinition(group.Key,
+                    new(StringComparer.OrdinalIgnoreCase) { ["ioFTPD"] = group.Last().Path }))
+                .ToList();
+        }
+        var sections = JsonSerializer.Deserialize<List<SectionDefinition>>(File.ReadAllText(path),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            ?? throw new InvalidDataException("The selected file does not contain a sections list.");
+        if (sections.Any(section => string.IsNullOrWhiteSpace(section.Name)))
+            throw new InvalidDataException("Every imported section must have a name.");
+        if (sections.Any(section => section.SitePaths is null))
+            throw new InvalidDataException("Every imported section must contain SitePaths.");
+        return sections;
+    }
+
     private void SaveCore(IEnumerable<SectionDefinition> sections)
     {
         var temporary = _path + ".tmp";

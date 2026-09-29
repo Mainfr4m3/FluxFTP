@@ -1,8 +1,10 @@
 using System.Globalization;
+using System.Diagnostics;
 using System.Net.Security;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using IoFtp.Core.Abstractions;
 using IoFtp.Core.Models;
@@ -17,20 +19,83 @@ public sealed class FtpRemoteSession : IRemoteSession
     private StreamWriter? _writer;
     private ConnectionProfile? _profile;
     private readonly SemaphoreSlim _operationGate = new(1, 1);
+    private readonly List<(string Name, TimeSpan Elapsed)> _lastFxpStageTimings = [];
     private bool _protectData = true;
+    private SslPolicyErrors _lastTlsPolicyErrors;
+    private int _loggedDataTlsDetails;
+    private bool _tls12Only;
+    private bool _useOpenSslFallback;
+    private Encoding _controlEncoding = Encoding.ASCII;
+    private SftpRemoteSession? _sftpSession;
+
+    /// <summary>Raw FTP control-channel traffic. PASS arguments are always masked.</summary>
+    public event Action<string>? ProtocolMessage;
 
     public bool IsConnected { get; private set; }
     public string ConnectedHost { get; private set; } = "";
     public int ConnectedPort { get; private set; }
     public IReadOnlySet<string> Capabilities { get; private set; } = new HashSet<string>();
     public string LastFxpNegotiation { get; private set; } = "None";
+    public IReadOnlyList<(string Name, TimeSpan Elapsed)> LastFxpStageTimings => _lastFxpStageTimings;
+    public string LastTransferCompletion { get; private set; } = "";
     public FxpProtectionMode FxpProtection => _profile?.EffectiveOptions.FxpProtection ?? FxpProtectionMode.AutoSecure;
     public bool UsesTlsControl => _profile?.Protocol is TransferProtocol.FtpsExplicit or TransferProtocol.FtpsImplicit;
 
     public async Task ConnectAsync(ConnectionProfile profile, CancellationToken cancellationToken)
     {
+        _tls12Only = false;
+        _useOpenSslFallback = profile.EffectiveOptions.UseOpenSslTls;
+        if (_useOpenSslFallback)
+        {
+            ProtocolMessage?.Invoke("< Site option enabled: using OpenSSL TLS directly.");
+            await ConnectCoreAsync(profile, cancellationToken);
+            return;
+        }
+        try
+        {
+            await ConnectCoreAsync(profile, cancellationToken);
+        }
+        catch (Exception exception) when (
+            profile.Protocol is TransferProtocol.FtpsExplicit or TransferProtocol.FtpsImplicit &&
+            IsTlsHandshakeFailure(exception) && !cancellationToken.IsCancellationRequested)
+        {
+            ProtocolMessage?.Invoke(
+                $"< TLS negotiation failed ({TlsFailureSummary(exception)}); reconnecting with TLS 1.2 only...");
+            using (var cleanupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2)))
+                await DisconnectAsync(cleanupTimeout.Token);
+            _tls12Only = true;
+            try { await ConnectCoreAsync(profile, cancellationToken); }
+            catch (Exception retryException) when (IsTlsHandshakeFailure(retryException) && !cancellationToken.IsCancellationRequested)
+            {
+                ProtocolMessage?.Invoke(
+                    $"< TLS 1.2 Schannel negotiation failed ({TlsFailureSummary(retryException)}); reconnecting with OpenSSL compatibility fallback...");
+                using (var cleanupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2)))
+                    await DisconnectAsync(cleanupTimeout.Token);
+                _useOpenSslFallback = true;
+                await ConnectCoreAsync(profile, cancellationToken);
+            }
+        }
+    }
+
+    private async Task ConnectCoreAsync(ConnectionProfile profile, CancellationToken cancellationToken)
+    {
+        _lastTlsPolicyErrors = SslPolicyErrors.None;
+        _loggedDataTlsDetails = 0;
+        _controlEncoding = Encoding.ASCII;
+
         if (profile.Protocol == TransferProtocol.Sftp)
-            throw new NotSupportedException("SFTP transport is not available yet.");
+        {
+            _profile = profile;
+            var sftp = new SftpRemoteSession();
+            await sftp.ConnectAsync(profile, cancellationToken);
+            _sftpSession = sftp;
+            ConnectedHost = profile.Host;
+            ConnectedPort = profile.Port;
+            Capabilities = sftp.Capabilities;
+            IsConnected = true;
+            ProtocolMessage?.Invoke($"< SFTP connected to {profile.Host}:{profile.Port}");
+            return;
+        }
 
         _profile = profile;
         // Prefer IPv4 for FTP/FXP. A dual-stack DNS result could otherwise make
@@ -48,15 +113,24 @@ public sealed class FtpRemoteSession : IRemoteSession
 
         if (profile.Protocol == TransferProtocol.FtpsExplicit)
         {
-            EnsureSuccess(await CommandAsync("AUTH TLS", cancellationToken), 234, 334);
+            var authResponse = await CommandAsync("AUTH TLS", cancellationToken);
+            if (authResponse.Code is not (234 or 334))
+            {
+                // Some older FTP daemons label explicit TLS as AUTH SSL even
+                // though the following SChannel handshake negotiates TLS 1.2.
+                // Prefer the modern command and retain this compatibility path.
+                authResponse = await CommandAsync("AUTH SSL", cancellationToken);
+            }
+            EnsureSuccess(authResponse, 234, 334);
+            // AUTH TLS has switched the control socket to TLS. The plaintext
+            // reader/writer must not be reused (or send QUIT) if the following
+            // handshake or certificate validation fails.
+            _writer?.Dispose();
+            _reader?.Dispose();
+            _writer = null;
+            _reader = null;
             await EnableTlsAsync(cancellationToken);
             CreateTextStreams();
-        }
-
-        if (profile.Protocol is TransferProtocol.FtpsExplicit or TransferProtocol.FtpsImplicit)
-        {
-            EnsureSuccess(await CommandAsync("PBSZ 0", cancellationToken), 200);
-            EnsureSuccess(await CommandAsync("PROT P", cancellationToken), 200);
         }
 
         var username = string.IsNullOrWhiteSpace(profile.Username) ? "anonymous" : profile.Username;
@@ -66,6 +140,26 @@ public sealed class FtpRemoteSession : IRemoteSession
             EnsureSuccess(await CommandAsync($"PASS {password}", cancellationToken), 230);
         else
             EnsureSuccess(userResponse, 230);
+
+        // DrFTPD requires an authenticated user before accepting PBSZ/PROT,
+        // while glFTPD and ioFTPD accept this standards-compatible ordering too.
+        if (profile.Protocol is TransferProtocol.FtpsExplicit or TransferProtocol.FtpsImplicit)
+        {
+            EnsureSuccess(await CommandAsync("PBSZ 0", cancellationToken), 200);
+            var privateProtection = await CommandAsync("PROT P", cancellationToken);
+            if (privateProtection.Code is >= 200 and < 300)
+            {
+                _protectData = true;
+            }
+            else
+            {
+                ProtocolMessage?.Invoke(
+                    $"< Server rejected protected data channels with PROT P ({privateProtection.Code}); " +
+                    "continuing with encrypted control and clear data (PROT C).");
+                EnsureSuccess(await CommandAsync("PROT C", cancellationToken), 200);
+                _protectData = false;
+            }
+        }
 
         if (profile.EffectiveOptions.ForceBinaryMode)
             EnsureSuccess(await CommandAsync("TYPE I", cancellationToken), 200);
@@ -91,6 +185,36 @@ public sealed class FtpRemoteSession : IRemoteSession
             }
         }
         Capabilities = capabilities;
+
+        // FTP control channels historically use ASCII, but RFC 2640 servers
+        // advertising UTF8 expect path arguments to be encoded as UTF-8. Keep
+        // the greeting/login phase ASCII-compatible, then upgrade the command
+        // reader/writer before any directory or transfer commands are issued.
+        // This preserves characters such as typographic apostrophes in RETR,
+        // STOR, CWD and other pathname-bearing commands.
+        if (capabilities.Contains("UTF8"))
+        {
+            var utf8Options = await CommandAsync("OPTS UTF8 ON", cancellationToken);
+            if (utf8Options.Code is >= 200 and < 300)
+                ProtocolMessage?.Invoke("< FTP control encoding: UTF-8 enabled (OPTS UTF8 ON accepted).");
+            else
+                ProtocolMessage?.Invoke($"< FTP control encoding: UTF-8 enabled (advertised by FEAT; OPTS returned {utf8Options.Code}).");
+
+            _controlEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+            RecreateTextStreams();
+        }
+        else
+        {
+            // Older Windows FTP servers such as ioFTPD commonly use the ANSI
+            // Windows code page on the control channel without advertising
+            // RFC 2640 UTF8. ASCII would replace characters such as U+2019
+            // with '?', producing a different RETR/STOR pathname.
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+            _controlEncoding = Encoding.GetEncoding(1252,
+                EncoderFallback.ExceptionFallback, DecoderFallback.ReplacementFallback);
+            RecreateTextStreams();
+            ProtocolMessage?.Invoke("< FTP control encoding: Windows-1252 compatibility mode (UTF8 not advertised).");
+        }
     }
 
     private static async Task<(TcpClient Client, SiteEndpoint Endpoint)> ConnectToFirstAddressAsync(ConnectionProfile profile, CancellationToken cancellationToken)
@@ -119,10 +243,17 @@ public sealed class FtpRemoteSession : IRemoteSession
         throw new IOException("None of the configured site addresses could be reached.", lastError);
     }
 
-    public async Task FxpToAsync(FtpRemoteSession destination, string sourcePath, string destinationPath, CancellationToken cancellationToken)
+    public async Task FxpToAsync(FtpRemoteSession destination, string sourcePath, string destinationPath,
+        CancellationToken cancellationToken, bool reverseDataConnection = false)
     {
+        LastTransferCompletion = "";
+        destination.LastTransferCompletion = "";
         EnsureConnected(); destination.EnsureConnected();
+        if (_sftpSession is not null || destination._sftpSession is not null)
+            throw new NotSupportedException("Direct FXP is unavailable for SFTP; use client relay instead.");
         if (ReferenceEquals(this, destination)) throw new InvalidOperationException("FXP requires two different sessions.");
+        _lastFxpStageTimings.Clear();
+        LastFxpNegotiation = "None";
 
         var sourceProfile = _profile!;
         var destinationProfile = destination._profile!;
@@ -138,92 +269,209 @@ public sealed class FtpRemoteSession : IRemoteSession
         var secureFxp = !clearFxp;
         if (clearFxp)
         {
-            if (sourceProfile.Protocol is TransferProtocol.FtpsExplicit or TransferProtocol.FtpsImplicit)
-            {
-                EnsureSuccess(await CommandAsync("PROT C", cancellationToken), 200);
-                _protectData = false;
-            }
-            if (destinationProfile.Protocol is TransferProtocol.FtpsExplicit or TransferProtocol.FtpsImplicit)
-            {
-                EnsureSuccess(await destination.CommandAsync("PROT C", cancellationToken), 200);
-                destination._protectData = false;
-            }
+            await MeasureFxpStageAsync("PROT", async () => await Task.WhenAll(
+                SetClearDataProtectionAsync(cancellationToken),
+                destination.SetClearDataProtectionAsync(cancellationToken)));
         }
         var usedCpsv = false;
-        await PrepareDataCommandAsync($"RETR {sourcePath}", cancellationToken);
-        await destination.PrepareDataCommandAsync($"STOR {destinationPath}", cancellationToken);
+        var relativePaths = await MeasureFxpStageAsync("CWD", async () => await Task.WhenAll(
+            PrepareRelativeFilePathAsync(sourcePath, cancellationToken),
+            destination.PrepareRelativeFilePathAsync(destinationPath, cancellationToken)));
+        var sourceFile = relativePaths[0];
+        var destinationFile = relativePaths[1];
+        await MeasureFxpStageAsync("PRET", async () => await Task.WhenAll(
+            PrepareDataCommandAsync($"RETR {sourceFile}", cancellationToken),
+            destination.PrepareDataCommandAsync($"STOR {destinationFile}", cancellationToken)));
+        if (reverseDataConnection)
+        {
+            if (!clearFxp) throw new NotSupportedException("Reversed FXP topology is currently available for clear FXP only.");
+            FtpResponse sourcePassive;
+            (string Host, int Port) sourceAdvertised;
+            if (_profile!.EffectiveOptions.CeprSupported)
+            {
+                sourcePassive = await MeasureFxpStageAsync("EPSV", () => FxpCommandAsync("EPSV", cancellationToken));
+                if (sourcePassive.Code == 229)
+                    sourceAdvertised = ParseExtendedPassiveEndpoint(sourcePassive.Message, GetControlPeerHost(), true);
+                else
+                {
+                    // CEPR may be enabled for a bouncer while the currently selected
+                    // endpoint does not implement EPSV. Fall back without sacrificing
+                    // the otherwise valid PASV/PORT FXP route.
+                    sourcePassive = await MeasureFxpStageAsync("PASV", () => FxpCommandAsync("PASV", cancellationToken));
+                    EnsureSuccess(sourcePassive, 227);
+                    sourceAdvertised = ParsePassiveEndpoint(sourcePassive.Message);
+                }
+            }
+            else
+            {
+                sourcePassive = await MeasureFxpStageAsync("PASV", () => FxpCommandAsync("PASV", cancellationToken));
+                EnsureSuccess(sourcePassive, 227);
+                sourceAdvertised = ParsePassiveEndpoint(sourcePassive.Message);
+            }
+            await MeasureFxpStageAsync("PORT", () =>
+                ConfigureActiveFxpEndpointAsync(destination, sourceAdvertised, cancellationToken));
+            LastFxpNegotiation = "PASV/PORT (reverse)";
+            await StartAndCompleteFxpAsync(destination, sourceFile, destinationFile, cancellationToken);
+            return;
+        }
         FtpResponse passive;
         (string Host, int Port) advertised;
         if (destination._profile!.EffectiveOptions.CeprSupported)
         {
-            passive = await destination.CommandAsync("EPSV", cancellationToken);
-            EnsureSuccess(passive, 229);
-            advertised = ParseExtendedPassiveEndpoint(passive.Message, destination._profile.Host, true);
+            passive = await MeasureFxpStageAsync("EPSV", () => destination.FxpCommandAsync("EPSV", cancellationToken));
+            if (passive.Code == 229)
+                advertised = ParseExtendedPassiveEndpoint(passive.Message, destination.GetControlPeerHost(), true);
+            else
+            {
+                // A CEPR-configured endpoint may reject EPSV even though the
+                // underlying ioFTPD site supports CPSV. Preserve secure FXP by
+                // preferring CPSV before falling all the way back to PASV/SSCN.
+                if (secureFxp && destination.Capabilities.Contains("CPSV"))
+                {
+                    passive = await MeasureFxpStageAsync("CPSV", () => destination.FxpCommandAsync("CPSV", cancellationToken));
+                    usedCpsv = passive.Code == 227;
+                }
+                if (!usedCpsv)
+                    passive = await MeasureFxpStageAsync("PASV", () => destination.FxpCommandAsync("PASV", cancellationToken));
+                EnsureSuccess(passive, 227);
+                advertised = ParsePassiveEndpoint(passive.Message);
+            }
         }
         else if (secureFxp && destination.Capabilities.Contains("CPSV"))
         {
-            passive = await destination.CommandAsync("CPSV", cancellationToken);
+            passive = await MeasureFxpStageAsync("CPSV", () => destination.FxpCommandAsync("CPSV", cancellationToken));
             usedCpsv = passive.Code == 227;
-            if (!usedCpsv) passive = await destination.CommandAsync("PASV", cancellationToken);
+            if (!usedCpsv) passive = await MeasureFxpStageAsync("PASV", () => destination.FxpCommandAsync("PASV", cancellationToken));
             EnsureSuccess(passive, 227);
             advertised = ParsePassiveEndpoint(passive.Message);
         }
         else
         {
-            passive = await destination.CommandAsync("PASV", cancellationToken);
+            passive = await MeasureFxpStageAsync("PASV", () => destination.FxpCommandAsync("PASV", cancellationToken));
             EnsureSuccess(passive, 227);
             advertised = ParsePassiveEndpoint(passive.Message);
         }
         // For FXP the source server must connect to the address explicitly
         // advertised by the passive destination. This may be its public/NAT
         // address and is intentionally not the control connection address.
-        if (!IPAddress.TryParse(advertised.Host, out var destinationAddress))
-            throw new IOException("The passive FXP server returned an invalid address.");
-        if (destinationAddress.AddressFamily is not (AddressFamily.InterNetwork or AddressFamily.InterNetworkV6))
-            throw new NotSupportedException("The passive FXP server returned an unsupported address family.");
-
         if (secureFxp && usedCpsv)
         {
             // CPSV makes the passive destination the TLS client for this transfer;
             // the active source must remain in its default TLS server role.
-            if (Capabilities.Contains("SSCN")) EnsureSuccess(await CommandAsync("SSCN OFF", cancellationToken), 200);
+            if (Capabilities.Contains("SSCN")) EnsureSuccess(await FxpCommandAsync("SSCN OFF", cancellationToken), 200);
             LastFxpNegotiation = "CPSV";
         }
         else if (secureFxp)
         {
-            var secureClient = await CommandAsync("SSCN ON", cancellationToken);
+            var secureReplies = await MeasureFxpStageAsync("SSCN", async () => await Task.WhenAll(
+                FxpCommandAsync("SSCN ON", cancellationToken),
+                destination.FxpCommandAsync("SSCN OFF", cancellationToken)));
+            var secureClient = secureReplies[0];
             if (secureClient.Code is < 200 or >= 300)
                 throw new FtpCommandException(secureClient.Code, secureClient.Message);
-            var secureServer = await destination.CommandAsync("SSCN OFF", cancellationToken);
+            var secureServer = secureReplies[1];
             if (secureServer.Code is < 200 or >= 300)
                 throw new FtpCommandException(secureServer.Code, secureServer.Message);
             LastFxpNegotiation = "SSCN/PASV";
         }
         else LastFxpNegotiation = "PASV";
 
-        if (destinationAddress.AddressFamily == AddressFamily.InterNetworkV6)
-        {
-            if (!Capabilities.Contains("EPRT")) throw new NotSupportedException("IPv6 FXP requires EPRT support on the source server.");
-            EnsureSuccess(await CommandAsync($"EPRT |2|{destinationAddress}|{advertised.Port}|", cancellationToken), 200);
-        }
-        else
-        {
-            var bytes = destinationAddress.GetAddressBytes();
-            EnsureSuccess(await CommandAsync($"PORT {string.Join(',', bytes)},{advertised.Port / 256},{advertised.Port % 256}", cancellationToken), 200);
-        }
+        await MeasureFxpStageAsync("PORT", () => ConfigureActiveFxpEndpointAsync(this, advertised, cancellationToken));
+        await StartAndCompleteFxpAsync(destination, sourceFile, destinationFile, cancellationToken);
+    }
 
-        var store = await destination.CommandAsync($"STOR {destinationPath}", cancellationToken);
-        EnsureSuccess(store, 125, 150);
-        var retrieve = await CommandAsync($"RETR {sourcePath}", cancellationToken);
-        EnsureSuccess(retrieve, 125, 150);
+    public async Task RetryFxpWithReversedTopologyAsync(FtpRemoteSession destination, string sourcePath,
+        string destinationPath, CancellationToken cancellationToken)
+    {
+        var sourceProfile = _profile ?? throw new InvalidOperationException("The FXP source profile is unavailable.");
+        var destinationProfile = destination._profile ?? throw new InvalidOperationException("The FXP destination profile is unavailable.");
+        await Task.WhenAll(DisconnectAsync(CancellationToken.None), destination.DisconnectAsync(CancellationToken.None));
+        await Task.WhenAll(ConnectAsync(sourceProfile, cancellationToken), destination.ConnectAsync(destinationProfile, cancellationToken));
+        await FxpToAsync(destination, sourcePath, destinationPath, cancellationToken, reverseDataConnection: true);
+    }
 
-        var completions = await Task.WhenAll(ReadResponseAsync(cancellationToken), destination.ReadResponseAsync(cancellationToken));
+    private async Task StartAndCompleteFxpAsync(FtpRemoteSession destination, string sourcePath,
+        string destinationPath, CancellationToken cancellationToken)
+    {
+        // Start both ends together. Some FTP servers do not emit 125/150 until
+        // the peer has actually opened the negotiated data connection; awaiting
+        // STOR before sending RETR can therefore deadlock until a 425 timeout.
+        var starts = await MeasureFxpStageAsync("STOR/RETR", async () => await Task.WhenAll(
+            destination.StartTransferCommandAsync($"STOR {destinationPath}", cancellationToken),
+            StartTransferCommandAsync($"RETR {sourcePath}", cancellationToken)));
+
+        var completions = await MeasureFxpStageAsync("Data", async () => await Task.WhenAll(
+            starts[1].Completed ? Task.FromResult(starts[1].Response) : ReadResponseAsync(cancellationToken),
+            starts[0].Completed ? Task.FromResult(starts[0].Response) : destination.ReadResponseAsync(cancellationToken)));
+        LastTransferCompletion = completions[0].Message;
+        destination.LastTransferCompletion = completions[1].Message;
         EnsureSuccess(completions[0], 226, 250);
         EnsureSuccess(completions[1], 226, 250);
     }
 
+    private async Task<TransferStart> StartTransferCommandAsync(string command, CancellationToken cancellationToken)
+    {
+        var response = await FxpCommandAsync(command, cancellationToken);
+        // Some SSCN implementations acknowledge the selected client/server TLS
+        // role asynchronously. That acknowledgement can arrive immediately before
+        // the transfer reply even though the STOR/RETR command is already active.
+        while (response.Code == 200 && response.Message.Contains("SSCN:", StringComparison.OrdinalIgnoreCase))
+            response = await ReadResponseAsync(cancellationToken);
+
+        if (response.Code is 125 or 150) return new TransferStart(response, false);
+        // A few FTP daemons suppress the preliminary reply for FXP and answer only
+        // after the data connection closes. Treat their final reply as completion.
+        if (response.Code is 226 or 250) return new TransferStart(response, true);
+        throw new FtpCommandException(response.Code, response.Message);
+    }
+
+    private async Task SetClearDataProtectionAsync(CancellationToken cancellationToken)
+    {
+        if (_profile?.Protocol is not (TransferProtocol.FtpsExplicit or TransferProtocol.FtpsImplicit)) return;
+        EnsureSuccess(await CommandAsync("PROT C", cancellationToken), 200);
+        _protectData = false;
+    }
+
+    private async Task MeasureFxpStageAsync(string name, Func<Task> operation)
+    {
+        var timer = Stopwatch.StartNew();
+        try { await operation(); }
+        finally { _lastFxpStageTimings.Add((name, timer.Elapsed)); }
+    }
+
+    private async Task<T> MeasureFxpStageAsync<T>(string name, Func<Task<T>> operation)
+    {
+        var timer = Stopwatch.StartNew();
+        try { return await operation(); }
+        finally { _lastFxpStageTimings.Add((name, timer.Elapsed)); }
+    }
+
+    private static async Task ConfigureActiveFxpEndpointAsync(FtpRemoteSession activeSession,
+        (string Host, int Port) advertised, CancellationToken cancellationToken)
+    {
+        IPAddress address;
+        try { address = await ResolveIpv4Async(advertised.Host, cancellationToken); }
+        catch (Exception exception) when (exception is SocketException or NotSupportedException or ArgumentException)
+        {
+            throw new IOException($"The passive FXP server returned an invalid address ({advertised.Host}).", exception);
+        }
+        if (address.AddressFamily == AddressFamily.InterNetworkV6)
+        {
+            if (!activeSession.Capabilities.Contains("EPRT"))
+                throw new NotSupportedException("IPv6 FXP requires EPRT support on the active server.");
+            EnsureSuccess(await activeSession.FxpCommandAsync($"EPRT |2|{address}|{advertised.Port}|", cancellationToken), 200);
+            return;
+        }
+        if (address.AddressFamily != AddressFamily.InterNetwork)
+            throw new NotSupportedException("The passive FXP server returned an unsupported address family.");
+        var bytes = address.GetAddressBytes();
+        EnsureSuccess(await activeSession.FxpCommandAsync(
+            $"PORT {string.Join(',', bytes)},{advertised.Port / 256},{advertised.Port % 256}", cancellationToken), 200);
+    }
+
     public async Task<IReadOnlyList<RemoteEntry>> ListAsync(string path, CancellationToken cancellationToken)
     {
+        if (_sftpSession is not null) return await _sftpSession.ListAsync(path, cancellationToken);
         await _operationGate.WaitAsync(cancellationToken);
         var clearListing = _profile?.Protocol is TransferProtocol.FtpsExplicit or TransferProtocol.FtpsImplicit &&
             _profile.EffectiveOptions.SecureFileListings == false;
@@ -244,8 +492,12 @@ public sealed class FtpRemoteSession : IRemoteSession
         {
             if (clearListing)
             {
-                _protectData = true;
-                try { EnsureSuccess(await CommandAsync("PROT P", CancellationToken.None), 200); } catch { }
+                try
+                {
+                    var privateProtection = await CommandAsync("PROT P", CancellationToken.None);
+                    _protectData = privateProtection.Code is >= 200 and < 300;
+                }
+                catch { _protectData = false; }
             }
             _operationGate.Release();
         }
@@ -328,7 +580,7 @@ public sealed class FtpRemoteSession : IRemoteSession
         // FTPS servers begin the data-channel TLS handshake only after accepting
         // the transfer command. Starting TLS before LIST deadlocks with ioFTPD.
         Stream dataStream;
-        try { dataStream = await ProtectDataStreamAsync(dataClient.GetStream(), cancellationToken); }
+        try { dataStream = await ProtectDataStreamAsync(dataClient.GetStream(), dataClient.Client, cancellationToken); }
         catch (Exception exception) when (_protectData &&
             _profile!.Protocol is TransferProtocol.FtpsExplicit or TransferProtocol.FtpsImplicit &&
             exception is IOException or AuthenticationException)
@@ -376,6 +628,7 @@ public sealed class FtpRemoteSession : IRemoteSession
     }
 
     public Task DownloadAsync(string remotePath, Stream destination, long offset, IProgress<long>? progress, CancellationToken cancellationToken) =>
+        _sftpSession is not null ? _sftpSession.DownloadAsync(remotePath, destination, offset, progress, cancellationToken) :
         TransferAsync($"RETR {remotePath}", offset, async data =>
         {
             var buffer = new byte[64 * 1024]; long total = offset; int read;
@@ -384,6 +637,7 @@ public sealed class FtpRemoteSession : IRemoteSession
         }, cancellationToken);
 
     public Task UploadAsync(string remotePath, Stream source, long offset, IProgress<long>? progress, CancellationToken cancellationToken) =>
+        _sftpSession is not null ? _sftpSession.UploadAsync(remotePath, source, offset, progress, cancellationToken) :
         TransferAsync($"STOR {remotePath}", offset, async data =>
         {
             var buffer = new byte[64 * 1024]; long total = offset; int read;
@@ -394,21 +648,40 @@ public sealed class FtpRemoteSession : IRemoteSession
 
     public async Task<RemoteCommandResult> ExecuteCommandAsync(string command, CancellationToken cancellationToken)
     {
+        if (_sftpSession is not null) return await _sftpSession.ExecuteCommandAsync(command, cancellationToken);
         await _operationGate.WaitAsync(cancellationToken);
         try
         {
         EnsureConnected();
-        var normalized = command.Trim();
-        if (normalized.Length == 0 || normalized.Contains('\r') || normalized.Contains('\n'))
+        var raw = command.Trim();
+        if (raw.Length == 0 || raw.Contains('\r') || raw.Contains('\n'))
+            throw new ArgumentException("Enter exactly one FTP command.", nameof(command));
+        var normalized = string.Concat(raw.Where(character => !char.IsControl(character))).Trim();
+        if (normalized.Length == 0)
             throw new ArgumentException("Enter exactly one FTP command.", nameof(command));
         var verb = normalized.Split(' ', 2)[0];
         if (verb.Equals("PASS", StringComparison.OrdinalIgnoreCase) || verb.Equals("USER", StringComparison.OrdinalIgnoreCase) || verb.Equals("ACCT", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Credential commands are blocked in the command console.");
         var response = await CommandAsync(normalized, cancellationToken);
+        // ioFTPD CWD event scripts can emit an additional 250 reply after the
+        // normal CWD completion. If it arrives just after SITE PRE is sent,
+        // it is the first reply we read even though it belongs to CWD. Keep
+        // reading until the actual SITE PRE reply so the control channel does
+        // not remain one response behind.
+        if (normalized.StartsWith("SITE PRE ", StringComparison.OrdinalIgnoreCase))
+        {
+            var skippedCwdReplies = 0;
+            while (response.Code == 250 && LooksLikeDelayedCwdReply(response.Message) && skippedCwdReplies++ < 4)
+                response = await ReadResponseAsync(cancellationToken);
+        }
         return new RemoteCommandResult(response.Code, response.Message);
         }
         finally { _operationGate.Release(); }
     }
+
+    private static bool LooksLikeDelayedCwdReply(string message) =>
+        message.Contains("CWD", StringComparison.OrdinalIgnoreCase) ||
+        message.Contains("looks like a PRE", StringComparison.OrdinalIgnoreCase);
 
     public async Task<long?> GetSizeAsync(string remotePath, CancellationToken cancellationToken)
     {
@@ -422,6 +695,8 @@ public sealed class FtpRemoteSession : IRemoteSession
     private async Task TransferAsync(string command, long offset, Func<Stream, Task> transfer, CancellationToken cancellationToken)
     {
         EnsureConnected();
+        LastTransferCompletion = "";
+        command = await PrepareRelativeTransferCommandAsync(command, cancellationToken);
         TcpClient? dataClient = null;
         try
         {
@@ -445,17 +720,38 @@ public sealed class FtpRemoteSession : IRemoteSession
             EnsureSuccess(await CommandAsync(command, cancellationToken), 125, 150);
             try
             {
-                await using var stream = await ProtectDataStreamAsync(dataClient.GetStream(), cancellationToken);
+                await using var stream = await ProtectDataStreamAsync(dataClient.GetStream(), dataClient.Client, cancellationToken);
                 await transfer(stream);
             }
             catch (IOException exception) { dataError = exception; }
         }
         var completion = await ReadResponseAsync(cancellationToken);
+        LastTransferCompletion = completion.Message;
         EnsureSuccess(completion, 226, 250);
         // Some Windows FTPS stacks report WSAENETNAMEDELETED when the peer
         // closes TLS immediately after the last byte. A successful 226/250
         // control reply confirms that the transfer itself completed.
         if (dataError is not null && completion.Code is not (226 or 250)) throw dataError;
+    }
+
+    private async Task<string> PrepareRelativeTransferCommandAsync(string command, CancellationToken cancellationToken)
+    {
+        var parts = command.Split(' ', 2, StringSplitOptions.TrimEntries);
+        if (parts.Length != 2 || parts[0] is not ("RETR" or "STOR")) return command;
+        var file = await PrepareRelativeFilePathAsync(parts[1], cancellationToken);
+        return $"{parts[0]} {file}";
+    }
+
+    private async Task<string> PrepareRelativeFilePathAsync(string remotePath, CancellationToken cancellationToken)
+    {
+        var normalized = remotePath.Replace('\\', '/').TrimEnd('/');
+        var slash = normalized.LastIndexOf('/');
+        if (slash < 0) return normalized;
+        var file = normalized[(slash + 1)..];
+        if (file.Length == 0) throw new ArgumentException("A remote file path must include a filename.", nameof(remotePath));
+        var parent = slash == 0 ? "/" : normalized[..slash];
+        EnsureSuccess(await CommandAsync($"CWD {parent}", cancellationToken), 250);
+        return file;
     }
 
     private async Task TransferActiveAsync(string command, long offset, Func<Stream, Task> transfer, CancellationToken cancellationToken)
@@ -470,9 +766,11 @@ public sealed class FtpRemoteSession : IRemoteSession
             if (offset > 0) EnsureSuccess(await CommandAsync($"REST {offset}", cancellationToken), 350);
             EnsureSuccess(await CommandAsync(command, cancellationToken), 125, 150);
             using var client = await listener.AcceptTcpClientAsync(cancellationToken);
-            await using var stream = await ProtectDataStreamAsync(client.GetStream(), cancellationToken);
+            await using var stream = await ProtectDataStreamAsync(client.GetStream(), client.Client, cancellationToken);
             await transfer(stream);
-            EnsureSuccess(await ReadResponseAsync(cancellationToken), 226, 250);
+            var completion = await ReadResponseAsync(cancellationToken);
+            LastTransferCompletion = completion.Message;
+            EnsureSuccess(completion, 226, 250);
         }
         finally { listener.Stop(); }
     }
@@ -496,7 +794,7 @@ public sealed class FtpRemoteSession : IRemoteSession
             EnsureSuccess(listResponse, 125, 150);
 
             using var dataClient = await listener.AcceptTcpClientAsync(cancellationToken);
-            var dataStream = await ProtectDataStreamAsync(dataClient.GetStream(), cancellationToken);
+            var dataStream = await ProtectDataStreamAsync(dataClient.GetStream(), dataClient.Client, cancellationToken);
             string listing;
             try { listing = await ReadListingDataAsync(dataStream, cancellationToken); }
             finally { await DisposeDataStreamSafelyAsync(dataStream); }
@@ -507,15 +805,26 @@ public sealed class FtpRemoteSession : IRemoteSession
         finally { listener.Stop(); }
     }
 
-    private async Task<Stream> ProtectDataStreamAsync(Stream stream, CancellationToken cancellationToken)
+    private async Task<Stream> ProtectDataStreamAsync(Stream stream, Socket socket, CancellationToken cancellationToken)
     {
         if (!_protectData || _profile!.Protocol is not (TransferProtocol.FtpsExplicit or TransferProtocol.FtpsImplicit)) return stream;
+        if (_useOpenSslFallback)
+        {
+            var targetHost = string.IsNullOrWhiteSpace(ConnectedHost) ? _profile.Host : ConnectedHost;
+            var openSsl = await OpenSslTlsStream.AuthenticateAsync(socket, stream, targetHost,
+                _profile.AllowInvalidCertificate, cancellationToken);
+            if (Interlocked.Exchange(ref _loggedDataTlsDetails, 1) == 0)
+                LogOpenSslDetails(openSsl, "data");
+            return openSsl;
+        }
         var ssl = new SslStream(stream, false, ValidateCertificate);
         await ssl.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
         {
             TargetHost = string.IsNullOrWhiteSpace(ConnectedHost) ? _profile.Host : ConnectedHost,
-            EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13
+            EnabledSslProtocols = EnabledTlsProtocols
         }, cancellationToken);
+        if (Interlocked.Exchange(ref _loggedDataTlsDetails, 1) == 0)
+            LogTlsDetails(ssl, "data");
         return ssl;
     }
 
@@ -585,7 +894,10 @@ public sealed class FtpRemoteSession : IRemoteSession
         long? size = !directory && long.TryParse(facts.GetValueOrDefault("size"), out var bytes) ? bytes : null;
         DateTimeOffset? modified = DateTimeOffset.TryParseExact(facts.GetValueOrDefault("modify"), "yyyyMMddHHmmss",
             CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var timestamp) ? timestamp : null;
-        return new(name, Combine(parent, name), directory, size, modified, facts.GetValueOrDefault("perm", type));
+        var symbolicLink = type.Contains("slink", StringComparison.OrdinalIgnoreCase);
+        var target = symbolicLink && type.Contains(':') ? type[(type.IndexOf(':') + 1)..] : null;
+        return new(name, Combine(parent, name), directory || symbolicLink, size, modified,
+            facts.GetValueOrDefault("perm", type), symbolicLink, target);
     }
 
     private static IReadOnlyList<RemoteEntry> ParseStatListing(string path, string response)
@@ -617,24 +929,32 @@ public sealed class FtpRemoteSession : IRemoteSession
 
     private async Task<(string Host, int Port)> OpenPassiveEndpointAsync(CancellationToken cancellationToken)
     {
+        var profile = _profile ?? throw new InvalidOperationException("The connection profile is unavailable.");
         // EPSV keeps the data connection on the same host as the control connection,
         // avoiding the unusable private addresses many FTP servers advertise in PASV.
-        var extended = await CommandAsync("EPSV", cancellationToken);
-        if (extended.Code == 229)
-            return ParseExtendedPassiveEndpoint(extended.Message, _profile!.Host, _profile.EffectiveOptions.CeprSupported);
+        // Do not probe it when FEAT did not advertise EPSV; some servers treat an
+        // unsupported probe as a fatal data-operation error instead of allowing PASV.
+        if (Capabilities.Contains("EPSV") || profile.EffectiveOptions.CeprSupported)
+        {
+            var extended = await CommandAsync("EPSV", cancellationToken);
+            if (extended.Code == 229)
+                return ParseExtendedPassiveEndpoint(extended.Message, GetControlPeerHost(), profile.EffectiveOptions.CeprSupported);
+        }
 
         var passive = await CommandAsync("PASV", cancellationToken);
         EnsureSuccess(passive, 227);
         var advertised = ParsePassiveEndpoint(passive.Message);
         // When connecting through localhost, never replace it with a server-advertised LAN address.
-        var host = _profile!.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ? _profile.Host : advertised.Host;
+        var host = profile.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ? profile.Host : advertised.Host;
         return (host, advertised.Port);
     }
+
+    private sealed record TransferStart(FtpResponse Response, bool Completed);
 
     private async Task PrepareDataCommandAsync(string command, CancellationToken cancellationToken)
     {
         if (_profile?.EffectiveOptions.NeedsPret != true) return;
-        var response = await CommandAsync($"PRET {command}", cancellationToken);
+        var response = await FxpCommandAsync($"PRET {command}", cancellationToken);
         EnsureSuccess(response, 200);
     }
 
@@ -653,6 +973,15 @@ public sealed class FtpRemoteSession : IRemoteSession
 
     public async Task DisconnectAsync(CancellationToken cancellationToken)
     {
+        if (_sftpSession is not null)
+        {
+            await _sftpSession.DisconnectAsync(cancellationToken);
+            _sftpSession = null;
+            IsConnected = false;
+            _profile = null;
+            Capabilities = new HashSet<string>();
+            return;
+        }
         if (_writer is not null)
         {
             try { await CommandAsync("QUIT", cancellationToken); } catch { }
@@ -667,41 +996,179 @@ public sealed class FtpRemoteSession : IRemoteSession
 
     private async Task EnableTlsAsync(CancellationToken cancellationToken)
     {
+        var targetHost = string.IsNullOrWhiteSpace(ConnectedHost) ? _profile!.Host : ConnectedHost;
+        if (_useOpenSslFallback)
+        {
+            ProtocolMessage?.Invoke($"< TLS control handshake: OpenSSL compatibility fallback; protocols TLS 1.2 + TLS 1.3; SNI {targetHost}");
+            var openSsl = await OpenSslTlsStream.AuthenticateAsync(_controlClient!.Client, _controlStream!, targetHost,
+                _profile!.AllowInvalidCertificate, cancellationToken);
+            LogOpenSslDetails(openSsl, "control");
+            _controlStream = openSsl;
+            return;
+        }
         var ssl = new SslStream(_controlStream!, false, ValidateCertificate);
+        ProtocolMessage?.Invoke(
+            $"< TLS control handshake: Windows Schannel; protocols {(_tls12Only ? "TLS 1.2 only" : "TLS 1.2 + TLS 1.3")}; SNI {targetHost}");
         await ssl.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
         {
-            TargetHost = string.IsNullOrWhiteSpace(ConnectedHost) ? _profile!.Host : ConnectedHost,
-            EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13
+            TargetHost = targetHost,
+            EnabledSslProtocols = EnabledTlsProtocols
         }, cancellationToken);
+        LogTlsDetails(ssl, "control");
         _controlStream = ssl;
     }
 
-    private bool ValidateCertificate(object sender, System.Security.Cryptography.X509Certificates.X509Certificate? certificate,
-        System.Security.Cryptography.X509Certificates.X509Chain? chain, SslPolicyErrors errors) =>
-        errors == SslPolicyErrors.None || _profile?.AllowInvalidCertificate == true;
+    private string GetControlPeerHost()
+    {
+        // ConnectedHost is the selected site/bouncer address. When the control
+        // connection uses SOCKS, RemoteEndPoint is the proxy itself and must not
+        // be reused as the EPSV data target.
+        if (!string.IsNullOrWhiteSpace(ConnectedHost)) return ConnectedHost;
+        if (_controlClient?.Client.RemoteEndPoint is IPEndPoint peer)
+            return peer.Address.IsIPv4MappedToIPv6 ? peer.Address.MapToIPv4().ToString() : peer.Address.ToString();
+        return _profile?.Host ?? throw new InvalidOperationException("The control connection address is unavailable.");
+    }
+
+    private bool ValidateCertificate(object sender, X509Certificate? certificate,
+        X509Chain? chain, SslPolicyErrors errors)
+    {
+        _lastTlsPolicyErrors = errors;
+        return errors == SslPolicyErrors.None || _profile?.AllowInvalidCertificate == true;
+    }
+
+    private void LogTlsDetails(SslStream ssl, string channel)
+    {
+        var protocol = ssl.SslProtocol switch
+        {
+            SslProtocols.Tls12 => "TLS 1.2",
+            SslProtocols.Tls13 => "TLS 1.3",
+            _ => ssl.SslProtocol.ToString()
+        };
+        ProtocolMessage?.Invoke(
+            $"< TLS {channel}: {protocol}; cipher {ssl.NegotiatedCipherSuite}; strength {ssl.CipherStrength} bits");
+
+        if (ssl.RemoteCertificate is null)
+        {
+            ProtocolMessage?.Invoke("< TLS certificate: unavailable");
+            return;
+        }
+
+        using var certificate = new X509Certificate2(ssl.RemoteCertificate);
+        var validation = _lastTlsPolicyErrors == SslPolicyErrors.None
+            ? "valid"
+            : _profile?.AllowInvalidCertificate == true
+                ? $"accepted despite {_lastTlsPolicyErrors}"
+                : $"failed: {_lastTlsPolicyErrors}";
+        ProtocolMessage?.Invoke(
+            $"< TLS certificate: Subject={SingleLine(certificate.Subject)}; Issuer={SingleLine(certificate.Issuer)}; " +
+            $"valid {certificate.NotBefore:yyyy-MM-dd HH:mm:ss} to {certificate.NotAfter:yyyy-MM-dd HH:mm:ss}; validation {validation}");
+    }
+
+    private void LogOpenSslDetails(OpenSslTlsStream ssl, string channel)
+    {
+        ProtocolMessage?.Invoke(
+            $"< TLS {channel}: backend OpenSSL; {ssl.Protocol}; cipher {ssl.Cipher}; strength {ssl.CipherBits} bits");
+        if (ssl.RemoteCertificate is null)
+        {
+            ProtocolMessage?.Invoke("< TLS certificate: unavailable");
+            return;
+        }
+        var validation = _profile?.AllowInvalidCertificate == true ? "accepted by site setting" : "valid";
+        ProtocolMessage?.Invoke(
+            $"< TLS certificate: Subject={SingleLine(ssl.RemoteCertificate.Subject)}; " +
+            $"Issuer={SingleLine(ssl.RemoteCertificate.Issuer)}; valid {ssl.RemoteCertificate.NotBefore:yyyy-MM-dd HH:mm:ss} " +
+            $"to {ssl.RemoteCertificate.NotAfter:yyyy-MM-dd HH:mm:ss}; validation {validation}");
+    }
+
+    private static string SingleLine(string value) => value.Replace('\r', ' ').Replace('\n', ' ');
+
+    private SslProtocols EnabledTlsProtocols =>
+        _tls12Only ? SslProtocols.Tls12 : SslProtocols.Tls12 | SslProtocols.Tls13;
+
+    private static bool IsTlsCompatibilityFailure(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            if (current.Message.Contains("Cannot determine the frame size", StringComparison.OrdinalIgnoreCase) ||
+                current.Message.Contains("corrupted frame", StringComparison.OrdinalIgnoreCase) ||
+                current.Message.Contains("HandshakeFailure", StringComparison.OrdinalIgnoreCase) ||
+                current.Message.Contains("handshake failure", StringComparison.OrdinalIgnoreCase) ||
+                current.Message.Contains("no shared cipher", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool IsTlsHandshakeFailure(Exception exception)
+    {
+        if (IsTlsCompatibilityFailure(exception)) return true;
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+            if (current is AuthenticationException) return true;
+        return false;
+    }
+
+    private static string TlsFailureSummary(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            if (current.Message.Contains("HandshakeFailure", StringComparison.OrdinalIgnoreCase) ||
+                current.Message.Contains("handshake failure", StringComparison.OrdinalIgnoreCase)) return "server alert HandshakeFailure";
+            if (current.Message.Contains("no shared cipher", StringComparison.OrdinalIgnoreCase)) return "no shared cipher";
+            if (current.Message.Contains("frame", StringComparison.OrdinalIgnoreCase)) return "invalid TLS frame";
+        }
+        return exception.GetType().Name;
+    }
 
     private void CreateTextStreams()
     {
-        _reader = new StreamReader(_controlStream!, Encoding.ASCII, false, 1024, true);
-        _writer = new StreamWriter(_controlStream!, Encoding.ASCII, 1024, true) { NewLine = "\r\n", AutoFlush = true };
+        _reader = new StreamReader(_controlStream!, _controlEncoding, false, 1024, true);
+        _writer = new StreamWriter(_controlStream!, _controlEncoding, 1024, true) { NewLine = "\r\n", AutoFlush = true };
+    }
+
+    private void RecreateTextStreams()
+    {
+        _writer?.Dispose();
+        _reader?.Dispose();
+        _writer = null;
+        _reader = null;
+        CreateTextStreams();
     }
 
     private async Task<FtpResponse> CommandAsync(string command, CancellationToken cancellationToken)
     {
+        ProtocolMessage?.Invoke($"> {RedactCommand(command)}");
         await _writer!.WriteLineAsync(command.AsMemory(), cancellationToken);
         return await ReadResponseAsync(cancellationToken);
+    }
+
+    private async Task<FtpResponse> FxpCommandAsync(string command, CancellationToken cancellationToken)
+    {
+        var response = await CommandAsync(command, cancellationToken);
+        var skippedCwdReplies = 0;
+        while (response.Code == 250 && LooksLikeDelayedCwdReply(response.Message) && skippedCwdReplies++ < 4)
+        {
+            ProtocolMessage?.Invoke($"< Ignoring delayed ioFTPD CWD event reply before {RedactCommand(command)}.");
+            response = await ReadResponseAsync(cancellationToken);
+        }
+        return response;
     }
 
     private async Task<FtpResponse> ReadResponseAsync(CancellationToken cancellationToken)
     {
         var first = await _reader!.ReadLineAsync(cancellationToken) ?? throw new IOException("FTP server closed the connection.");
+        ProtocolMessage?.Invoke($"< {first}");
         if (first.Length < 3 || !int.TryParse(first[..3], out var code)) throw new IOException($"Invalid FTP response: {first}");
         var lines = new List<string> { first };
         if (first.Length > 3 && first[3] == '-')
         {
             var terminator = $"{code} ";
             string line;
-            do { line = await _reader.ReadLineAsync(cancellationToken) ?? throw new IOException("FTP server closed the connection."); lines.Add(line); }
+            do
+            {
+                line = await _reader.ReadLineAsync(cancellationToken) ?? throw new IOException("FTP server closed the connection.");
+                lines.Add(line);
+                ProtocolMessage?.Invoke($"< {line}");
+            }
             while (!line.StartsWith(terminator, StringComparison.Ordinal));
         }
         return new FtpResponse(code, string.Join(Environment.NewLine, lines));
@@ -743,10 +1210,25 @@ public sealed class FtpRemoteSession : IRemoteSession
         var unix = line.Split(' ', 9, StringSplitOptions.RemoveEmptyEntries);
         if (unix.Length >= 9 && unix[0].Length > 0 && unix[0][0] is 'd' or '-' or 'l')
         {
-            var name = unix[8]; if (name is "." or "..") return null;
+            var symbolicLink = unix[0][0] == 'l';
+            var displayedName = unix[8];
+            string? linkTarget = null;
+            if (symbolicLink)
+            {
+                var arrow = displayedName.IndexOf(" -> ", StringComparison.Ordinal);
+                if (arrow >= 0)
+                {
+                    linkTarget = displayedName[(arrow + 4)..].Trim();
+                    displayedName = displayedName[..arrow].TrimEnd();
+                }
+            }
+            var name = displayedName; if (name is "." or ".." || name.Length == 0) return null;
             long? size = long.TryParse(unix[4], out var bytes) ? bytes : null;
             var unixModified = ParseUnixModified(unix[5], unix[6], unix[7]);
-            return new(name, Combine(parent, name), unix[0][0] == 'd', size, unixModified, unix[0]);
+            // FTP LIST does not expose the target kind. Treat links as navigable;
+            // directory listing will provide the authoritative answer on activation.
+            return new(name, Combine(parent, name), unix[0][0] == 'd' || symbolicLink,
+                size, unixModified, unix[0], symbolicLink, linkTarget);
         }
         var windows = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (windows.Length >= 4 && DateTimeOffset.TryParse($"{windows[0]} {windows[1]}", CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out var modified))
@@ -776,6 +1258,8 @@ public sealed class FtpRemoteSession : IRemoteSession
     }
 
     private static string Combine(string parent, string name) => $"/{string.Join('/', new[] { parent.Trim('/'), name }.Where(value => value.Length > 0))}";
+    private static string RedactCommand(string command) =>
+        command.StartsWith("PASS ", StringComparison.OrdinalIgnoreCase) ? "PASS ********" : command;
     private sealed record FtpResponse(int Code, string Message);
 }
 

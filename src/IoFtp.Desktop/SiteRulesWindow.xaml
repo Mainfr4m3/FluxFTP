@@ -1,0 +1,15 @@
+<Window x:Class="IoFtp.Desktop.SiteRulesWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Site rules" Width="850" Height="570" MinWidth="640" MinHeight="450" WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        Background="{DynamicResource WindowBrush}" Foreground="{DynamicResource TextBrush}">
+    <Grid Margin="18">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <TextBlock Text="SITE RULES" FontSize="22" Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold"/>
+        <TextBlock x:Name="FolderText" Grid.Row="1" TextWrapping="Wrap" Margin="0,8,0,12"/>
+        <DataGrid x:Name="RulesGrid" Grid.Row="2" IsReadOnly="True" AutoGenerateColumns="False" SelectionMode="Single" CanUserAddRows="False">
+            <DataGrid.Columns><DataGridTextColumn Header="SITE" Binding="{Binding Site}" Width="*"/><DataGridTextColumn Header="SECTION" Binding="{Binding Section}" Width="*"/><DataGridTextColumn Header="PATH" Binding="{Binding Path}" Width="2*"/><DataGridCheckBoxColumn Header="NEEDS METADATA" Binding="{Binding Metadata}" Width="150"/></DataGrid.Columns>
+        </DataGrid>
+        <StackPanel Grid.Row="3" Margin="0,12,0,0"><TextBlock Text="Release name to test against the selected section"/><TextBox x:Name="ReleaseBox" Margin="0,5"/><TextBlock Text="Rules are re-read before uploads/FXP and PRE. Local downloads are unaffected. Edit *.rules.json in the folder; Reload validates the files." TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}"/></StackPanel>
+        <TextBox x:Name="ResultText" Grid.Row="4" IsReadOnly="True" TextWrapping="Wrap" Height="75" VerticalScrollBarVisibility="Auto" Margin="0,10"/>
+        <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right"><Button Content="Open rules folder" Click="OpenFolder_Click"/><Button Content="Reload" Click="Reload_Click"/><Button Content="Test release" Click="Test_Click"/><Button Content="Close" IsCancel="True"/></StackPanel>
+    </Grid>
+</Window>

@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "site": "ExampleSite",
+  "rules": [],
+  "sections": [
+    {
+      "name": "RELEASES",
+      "path": "/releases",
+      "rules": [
+        { "field": "release", "match": "glob", "values": ["*.tmp"], "action": "drop" }
+      ]
+    },
+    { "name": "ARCHIVE", "path": "/archive", "rules": [] }
+  ]
+}

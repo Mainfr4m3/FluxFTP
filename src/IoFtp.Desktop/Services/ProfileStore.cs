@@ -8,11 +8,20 @@ namespace IoFtp.Desktop.Services;
 
 internal sealed class ProfileStore
 {
+    private const string FormatHeader = "; FluxFTP INI format: 2 (literal values; @json: for escaped values)";
     private static readonly object AddressOrderGate = new();
     private readonly string _path = Path.Combine(AppContext.BaseDirectory, "FluxFTP-sites.ini");
     private readonly string _oldIniPath = Path.Combine(AppContext.BaseDirectory, "ioFTP-sites.ini");
     private readonly string _legacyPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ioFTP", "sites.json");
+
+    internal ProfileStore(string? directory = null)
+    {
+        if (directory is null) return;
+        _path = Path.Combine(directory, "FluxFTP-sites.ini");
+        _oldIniPath = Path.Combine(directory, "ioFTP-sites.ini");
+        _legacyPath = Path.Combine(directory, "sites.json");
+    }
 
     public IReadOnlyList<ConnectionProfile> Load()
     {
@@ -36,6 +45,7 @@ internal sealed class ProfileStore
     {
         var text = new StringBuilder();
         text.AppendLine("; FluxFTP saved sites");
+        text.AppendLine(FormatHeader);
         text.AppendLine("; Passwords are protected for the current Windows user.");
 
         foreach (var profile in profiles)
@@ -51,6 +61,7 @@ internal sealed class ProfileStore
             Write(text, "Password", Protect(profile.Password));
             Write(text, "Protocol", profile.Protocol);
             Write(text, "AllowInvalidCertificate", profile.AllowInvalidCertificate);
+            Write(text, "SshHostKeyFingerprint", profile.SshHostKeyFingerprint);
             Write(text, "ListingMode", profile.ListingMode);
             Write(text, "MaxSlots", options.MaxSlots);
             Write(text, "MaxUploadSlots", options.MaxUploadSlots);
@@ -71,15 +82,31 @@ internal sealed class ProfileStore
             Write(text, "UseXdupe", options.UseXdupe);
             Write(text, "Affils", options.Affils);
             Write(text, "FxpProtection", options.FxpProtection);
+            Write(text, "FxpDataRole", options.FxpDataRole);
+            Write(text, "UseOpenSslTls", options.UseOpenSslTls);
+            Write(text, "ProxyMode", profile.Proxy is null ? "Inherit" : profile.Proxy.Type == ProxyType.None ? "None" : "Custom");
+            if (profile.Proxy is not null)
+            {
+                Write(text, "ProxyType", profile.Proxy.Type);
+                Write(text, "ProxyHost", profile.Proxy.Host);
+                Write(text, "ProxyPort", profile.Proxy.Port);
+                Write(text, "ProxyUsername", profile.Proxy.Username);
+                Write(text, "ProxyPassword", Protect(profile.Proxy.Password));
+                Write(text, "ProxyDns", profile.Proxy.ProxyDns);
+                Write(text, "ProxyDataConnections", profile.Proxy.UseForData);
+            }
         }
 
-        var temporaryPath = _path + ".tmp";
-        File.WriteAllText(temporaryPath, text.ToString(), new UTF8Encoding(false));
-        File.Move(temporaryPath, _path, true);
+        AtomicWrite(_path, text.ToString());
     }
 
     private static IReadOnlyList<ConnectionProfile> LoadIni(string path)
     {
+        var lines = File.ReadAllLines(path);
+        var literal = lines.Contains(FormatHeader);
+        var updated = new List<string>();
+        if (!literal) updated.Add(FormatHeader);
+        var changed = !literal;
         var result = new List<ConnectionProfile>();
         Dictionary<string, string>? values = null;
         Guid id = Guid.Empty;
@@ -93,15 +120,25 @@ internal sealed class ProfileStore
                 Bool(values, "StayLoggedIn"), Get(values, "BasePath", "/"), Bool(values, "PreferTlsTransfers", true),
                 Bool(values, "ForceBinaryMode", true), Int(values, "MaxIdleSeconds", 60),
                 Get(values, "BlockTransfersFrom"), Get(values, "BlockTransfersTo"), Bool(values, "SecureFileListings", true), Bool(values, "NeedsPret"), Bool(values, "CeprSupported"), Bool(values, "UseXdupe"), Get(values, "Affils"),
-                EnumValue(values, "FxpProtection", FxpProtectionMode.AutoSecure));
+                EnumValue(values, "FxpProtection", FxpProtectionMode.AutoSecure),
+                EnumValue(values, "FxpDataRole", FxpDataRole.Auto),
+                Bool(values, "UseOpenSslTls"));
+            var proxyMode = Get(values, "ProxyMode", "Inherit");
+            ProxyConfiguration? proxy = proxyMode.Equals("Inherit", StringComparison.OrdinalIgnoreCase) ? null
+                : proxyMode.Equals("None", StringComparison.OrdinalIgnoreCase) ? new ProxyConfiguration(ProxyType.None)
+                : new ProxyConfiguration(EnumValue(values, "ProxyType", ProxyType.Socks5), Get(values, "ProxyHost"),
+                    Int(values, "ProxyPort", 1080), Get(values, "ProxyUsername"), Unprotect(Get(values, "ProxyPassword")),
+                    Bool(values, "ProxyDns", true), Bool(values, "ProxyDataConnections", true));
             result.Add(new ConnectionProfile(id, Get(values, "Name", "Site"), Get(values, "Host"), Int(values, "Port", 21),
                 Get(values, "Username"), EnumValue(values, "Protocol", TransferProtocol.Ftp), Unprotect(Get(values, "Password")),
-                Bool(values, "AllowInvalidCertificate"), EnumValue(values, "ListingMode", DirectoryListingMode.Auto), options,
-                AlternateAddresses: Get(values, "AlternateAddresses"), Description: Get(values, "Description")));
+                Bool(values, "AllowInvalidCertificate"), EnumValue(values, "ListingMode", DirectoryListingMode.Auto), options, proxy,
+                AlternateAddresses: Get(values, "AlternateAddresses"), Description: Get(values, "Description"),
+                SshHostKeyFingerprint: Get(values, "SshHostKeyFingerprint")));
         }
 
-        foreach (var rawLine in File.ReadLines(path))
+        foreach (var rawLine in lines)
         {
+            updated.Add(rawLine);
             var line = rawLine.Trim();
             if (line.Length == 0 || line.StartsWith(';')) continue;
             if (line.StartsWith("[site:", StringComparison.OrdinalIgnoreCase) && line.EndsWith(']'))
@@ -111,11 +148,46 @@ internal sealed class ProfileStore
                 values = new(StringComparer.OrdinalIgnoreCase);
                 continue;
             }
-            var separator = line.IndexOf('=');
-            if (values is not null && separator > 0) values[line[..separator].Trim()] = Decode(line[(separator + 1)..].Trim());
+            if (line.StartsWith('[') && line.EndsWith(']'))
+            {
+                AddCurrent();
+                values = null;
+                id = Guid.Empty;
+                continue;
+            }
+            var separator = rawLine.IndexOf('=');
+            if (values is not null && id != Guid.Empty && separator > 0)
+            {
+                var key = rawLine[..separator].Trim();
+                var raw = rawLine[(separator + 1)..];
+                var secret = key.Equals("Password", StringComparison.OrdinalIgnoreCase) || key.Equals("ProxyPassword", StringComparison.OrdinalIgnoreCase);
+                // Legacy protected values were URL encoded. Manually entered passwords are literal.
+                var value = literal ? DecodeLiteral(raw) : secret && !raw.StartsWith("dpapi%3A", StringComparison.OrdinalIgnoreCase) ? raw : Decode(raw);
+                values[key] = value;
+                if (secret && value.Length > 0 && !value.StartsWith("dpapi:", StringComparison.OrdinalIgnoreCase))
+                {
+                    value = Protect(value);
+                    changed = true;
+                }
+                if (!literal || (secret && value != values[key]))
+                    updated[^1] = rawLine[..(separator + 1)] + Encode(value);
+            }
         }
         AddCurrent();
+        // Preserve comments, unknown settings and unreadable protected passwords verbatim.
+        if (changed) AtomicWrite(path, string.Join(Environment.NewLine, updated) + Environment.NewLine);
         return result;
+    }
+
+    private static void AtomicWrite(string path, string text)
+    {
+        var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            File.WriteAllText(temporary, text, new UTF8Encoding(false));
+            File.Move(temporary, path, true);
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 
     public void PromoteAddress(Guid profileId, string host, int port)
@@ -142,7 +214,10 @@ internal sealed class ProfileStore
 
     private static void Write(StringBuilder target, string key, object? value) =>
         target.Append(key).Append('=').AppendLine(Encode(Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture) ?? ""));
-    private static string Encode(string value) => Uri.EscapeDataString(value);
+    private static string Encode(string value) => value.StartsWith("@json:", StringComparison.Ordinal) || value.Any(char.IsControl)
+        ? "@json:" + JsonSerializer.Serialize(value) : value;
+    private static string DecodeLiteral(string value) => value.StartsWith("@json:", StringComparison.Ordinal)
+        ? JsonSerializer.Deserialize<string>(value[6..]) ?? "" : value;
     private static string Decode(string value) { try { return Uri.UnescapeDataString(value); } catch { return value; } }
     private static string Get(Dictionary<string, string> values, string key, string fallback = "") => values.GetValueOrDefault(key, fallback);
     private static int Int(Dictionary<string, string> values, string key, int fallback = 0) => int.TryParse(Get(values, key), out var value) ? value : fallback;

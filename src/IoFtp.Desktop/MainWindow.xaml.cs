@@ -1,4 +1,7 @@
 using System.IO;
+using System.Net.Http;
+using System.Diagnostics;
+using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
@@ -41,6 +44,12 @@ public partial class MainWindow : Window
     private readonly GlobalSettingsStore _settingsStore = new();
     private readonly WindowLayoutStore _layoutStore = new();
     private ApiServer? _apiServer;
+    private IrcManager? _ircService;
+    private readonly SemaphoreSlim _ircRestartGate = new(1, 1);
+    private readonly RaceLogStore _raceLog = new();
+    private readonly ConcurrentDictionary<Guid, string> _raceSiteNames = new();
+    private RaceLogWindow? _raceLogWindow;
+    private readonly System.Windows.Threading.DispatcherTimer _raceLogTimer = new() { Interval = TimeSpan.FromMinutes(1) };
     private GlobalSettings _settings;
     private readonly string _queuePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FluxFTP", "queue.json");
     private readonly string _oldQueuePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ioFTP", "queue.json");
@@ -50,20 +59,46 @@ public partial class MainWindow : Window
     private string _rightSortProperty = "Name";
     private ListSortDirection _leftSortDirection = ListSortDirection.Ascending;
     private ListSortDirection _rightSortDirection = ListSortDirection.Ascending;
+    private string _queueSortProperty = "";
+    private ListSortDirection _queueSortDirection = ListSortDirection.Ascending;
     private Point _dragStart;
+    private ListViewItem? _preservedDragItem;
+    private bool _dragStarted;
     private bool _reloadingQuickSites;
     private bool _reloadingBookmarks;
+    private bool _reloadingDrives;
+    private bool _reloadingPathChoices;
+    private bool _leftHistoryNavigation;
+    private bool _rightHistoryNavigation;
+    private readonly Stack<string> _leftBackHistory = new();
+    private readonly Stack<string> _leftForwardHistory = new();
+    private readonly Stack<string> _rightBackHistory = new();
+    private readonly Stack<string> _rightForwardHistory = new();
+    private readonly List<string> _leftRecentPaths = [];
+    private readonly List<string> _rightRecentPaths = [];
     private readonly SemaphoreSlim _leftNavigationGate = new(1, 1);
     private readonly SemaphoreSlim _rightNavigationGate = new(1, 1);
     private readonly System.Windows.Forms.NotifyIcon _trayIcon = new();
     private readonly System.Windows.Threading.DispatcherTimer _legendTimer = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly ExternalScriptRunner _scriptRunner = new();
     private readonly UpdateCheckService _updateCheckService = new();
+    private readonly FxpRouteStore _fxpRouteStore = new();
+    private readonly HashSet<(Guid Source, Guid Destination)> _reverseFxpPairs;
+    private readonly ConcurrentDictionary<ConnectionProfile, ConcurrentBag<PooledWorker>> _workerPool = new();
+    private static readonly TimeSpan WorkerHealthCheckInterval = TimeSpan.FromSeconds(30);
+    private static readonly HttpClient TelemetryClient = new()
+    {
+        BaseAddress = new Uri("http://127.0.0.1:55478/"),
+        Timeout = TimeSpan.FromMilliseconds(300)
+    };
+    private static readonly JsonSerializerOptions TelemetryJsonOptions = new() { PropertyNameCaseInsensitive = true };
     private bool _exitRequested;
+    private bool _workerPoolShuttingDown;
     private int _legendOffset;
     public MainWindow()
     {
         InitializeComponent();
+        _reverseFxpPairs = _fxpRouteStore.LoadReverseRoutes();
         _settings = _settingsStore.Load();
         LogText.Text = $"FluxFTP {UpdateCheckService.CurrentVersion} started.{Environment.NewLine}No network connections have been opened.";
         _engine = new GlobalTransferEngine(new DesktopTransferExecutor(this));
@@ -72,10 +107,19 @@ public partial class MainWindow : Window
         QueueList.ItemsSource = _queue;
         ReloadQuickSites(LeftQuickSites);
         ReloadQuickSites(RightQuickSites);
+        ReloadLocalDrives();
         LoadQueue();
+        foreach (var entry in _queue) TrackRaceEntry(entry);
+        _raceLog.Write("SESSION", "FluxFTP " + UpdateCheckService.CurrentVersion + " started");
+        _raceLogTimer.Tick += (_, _) =>
+        {
+            _raceLog.Maintain();
+            if (_raceLog.LastError is { } error) ConnectionStatus.Text = error;
+        };
+        _raceLogTimer.Start();
         if (!string.IsNullOrWhiteSpace(_settings.LocalDownloadPath) && Directory.Exists(_settings.LocalDownloadPath)) _localDirectory = _settings.LocalDownloadPath;
         if (LeftMode.SelectedIndex == 0) LoadLocalDirectory(_localDirectory);
-        Loaded += async (_, _) => { RestoreWindowLayout(); await RestartApiServerAsync(); if (_settings.CheckForUpdatesAtStartup) await CheckForUpdatesAsync(); };
+        Loaded += async (_, _) => { RestoreWindowLayout(); await RestartApiServerAsync(); await RestartIrcAsync(); if (_settings.CheckForUpdatesAtStartup) await CheckForUpdatesAsync(); };
         ConfigureTrayIcon();
         StateChanged += MainWindow_StateChanged;
         _legendTimer.Tick += (_, _) => UpdateLegendBar();
@@ -86,23 +130,28 @@ public partial class MainWindow : Window
     {
         try
         {
-            var fullDirectory = Path.GetFullPath(directory);
+            var previous = _localDirectory;
+            var fullDirectory = NormalizeLocalDirectory(directory);
             LocalList.ItemsSource = Directory.EnumerateFileSystemEntries(fullDirectory)
-                .Take(100)
                 .Select(path =>
                 {
                     var isDirectory = Directory.Exists(path);
                     var modified = isDirectory
                         ? Directory.GetLastWriteTime(path)
                         : File.GetLastWriteTime(path);
-                    var size = isDirectory ? "Folder" : FormatSize(new FileInfo(path).Length);
-                    return new LocalEntryView(Path.GetFileName(path), size, modified.ToString("yyyy-MM-dd HH:mm"), File.GetAttributes(path).ToString(), "", false, path, isDirectory);
+                    var sizeBytes = isDirectory ? 0 : new FileInfo(path).Length;
+                    var size = isDirectory ? "Folder" : FormatSize(sizeBytes);
+                    return new LocalEntryView(Path.GetFileName(path), size, modified.ToString("yyyy-MM-dd HH:mm"), File.GetAttributes(path).ToString(), "", false, path, isDirectory, sizeBytes, modified);
                 })
                 .OrderByDescending(entry => entry.IsDirectory)
                 .ThenBy(entry => entry.Name, StringComparer.CurrentCultureIgnoreCase)
                 .ToList();
+            ApplyCurrentSort(LocalList, _leftSortProperty, _leftSortDirection, LeftNameHeader, LeftSizeHeader, LeftModifiedHeader);
             _localDirectory = fullDirectory;
             LocalPath.Text = fullDirectory;
+            SelectCurrentDrive(LeftDrives, fullDirectory);
+            UpdateDriveBarSelection(LeftDriveBar, fullDirectory);
+            CommitNavigation(true, previous, fullDirectory);
         }
         catch (Exception exception)
         {
@@ -150,9 +199,11 @@ public partial class MainWindow : Window
         LogText.AppendText($"{Environment.NewLine}Connecting with {TransferProtocolNames.Display(profile.Protocol)} to {profile.Host}:{profile.Port}…");
         try
         {
+            await DisposePooledWorkersAsync(profile.Id);
             var session = left ? _leftRemoteSession : _remoteSession;
             if (session is not null) await session.DisposeAsync();
             session = new FtpRemoteSession();
+            AttachProtocolLog(session, profile.Name);
             if (left) { _leftRemoteSession = session; _leftProfile = profile; LeftMode.SelectedIndex = 1; }
             else { _remoteSession = session; _rightProfile = profile; RightMode.SelectedIndex = 1; }
             var options = profile.EffectiveOptions;
@@ -163,11 +214,26 @@ public partial class MainWindow : Window
                 Priority: options.Priority,
                 BlockedSources: ResolveSiteNames(options.BlockTransfersFrom),
                 BlockedTargets: ResolveSiteNames(options.BlockTransfersTo)));
-            using (var connectTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(15)))
-                await session.ConnectAsync(profile, connectTimeout.Token);
+            using (var connectTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(20)))
+            {
+                try { await session.ConnectAsync(profile, connectTimeout.Token); }
+                catch (SshHostKeyException hostKey)
+                {
+                    var trust = MessageBox.Show(
+                        $"The SFTP server presented this SSH host key:\n\n{hostKey.Fingerprint}\n\nTrust and save this key for {profile.Name}?",
+                        "Trust SFTP host key", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+                    if (trust != MessageBoxResult.Yes) throw;
+                    profile = profile with { SshHostKeyFingerprint = hostKey.Fingerprint };
+                    SaveTrustedHostKey(profile);
+                    await session.ConnectAsync(profile, connectTimeout.Token);
+                    if (left) _leftProfile = profile; else _rightProfile = profile;
+                }
+            }
             new ProfileStore().PromoteAddress(profile.Id, session.ConnectedHost, session.ConnectedPort);
             ConnectionStatus.Text = $"Connected: {session.ConnectedHost}:{session.ConnectedPort}; loading files…";
-            LogText.AppendText($"{Environment.NewLine}TLS login succeeded. Loading directory with {DescribeListingMode(profile.ListingMode, session.Capabilities)}…");
+            LogText.AppendText(profile.Protocol == TransferProtocol.Sftp
+                ? $"{Environment.NewLine}SFTP login succeeded. Loading directory…"
+                : $"{Environment.NewLine}TLS login succeeded. Loading directory with {DescribeListingMode(profile.ListingMode, session.Capabilities)}…");
             LogText.ScrollToEnd();
             IReadOnlyList<IoFtp.Core.Abstractions.RemoteEntry> entries;
             using (var listTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(20)))
@@ -188,10 +254,42 @@ public partial class MainWindow : Window
         finally { LogText.ScrollToEnd(); }
     }
 
-    private ConnectionProfile ApplyGlobalProxy(ConnectionProfile profile) => _settings.ProxyType == ProxyType.None ? profile with { Proxy = null } : profile with
+    private static void SaveTrustedHostKey(ConnectionProfile trustedProfile)
     {
-        Proxy = new ProxyConfiguration(_settings.ProxyType, _settings.ProxyHost, _settings.ProxyPort, _settings.ProxyUsername, _settings.ProxyPassword, _settings.ProxyDns, _settings.ProxyDataConnections)
-    };
+        var store = new ProfileStore();
+        var profiles = store.Load().ToList();
+        var index = profiles.FindIndex(profile => profile.Id == trustedProfile.Id);
+        if (index < 0) return;
+        profiles[index] = trustedProfile;
+        store.Save(profiles);
+    }
+
+    private void AttachProtocolLog(FtpRemoteSession session, string siteName)
+    {
+        session.ProtocolMessage += message => Dispatcher.BeginInvoke(() =>
+        {
+            LogText.AppendText($"{Environment.NewLine}{DateTime.Now:HH:mm:ss} [{siteName}] {message}");
+            LogText.ScrollToEnd();
+        });
+    }
+
+    private void CopyLog_Click(object sender, RoutedEventArgs e)
+    {
+        if (!string.IsNullOrEmpty(LogText.Text)) Clipboard.SetText(LogText.Text);
+    }
+
+    private void ClearLog_Click(object sender, RoutedEventArgs e) =>
+        LogText.Text = $"FluxFTP {UpdateCheckService.CurrentVersion} log cleared at {DateTime.Now:yyyy-MM-dd HH:mm:ss}.";
+
+    private ConnectionProfile ApplyGlobalProxy(ConnectionProfile profile)
+    {
+        if (profile.Proxy is not null) return profile;
+        return _settings.ProxyType == ProxyType.None ? profile : profile with
+        {
+            Proxy = new ProxyConfiguration(_settings.ProxyType, _settings.ProxyHost, _settings.ProxyPort,
+                _settings.ProxyUsername, _settings.ProxyPassword, _settings.ProxyDns, _settings.ProxyDataConnections)
+        };
+    }
 
     private static IReadOnlySet<Guid> ResolveSiteNames(string value)
     {
@@ -223,6 +321,7 @@ public partial class MainWindow : Window
         var selectedId = (combo.SelectedItem as QuickSiteChoice)?.Profile?.Id;
         var choices = new List<QuickSiteChoice> { new("Quick Connect…", null) };
         choices.AddRange(new ProfileStore().Load().Select(profile => new QuickSiteChoice(profile.Name, profile)));
+        foreach (var choice in choices) if (choice.Profile is { } profile) _raceSiteNames[profile.Id] = profile.Name;
         combo.ItemsSource = choices;
         combo.SelectedItem = choices.FirstOrDefault(choice => choice.Profile?.Id == selectedId) ?? choices[0];
         _reloadingQuickSites = false;
@@ -243,6 +342,7 @@ public partial class MainWindow : Window
         if (_leftProfile is not null) await RunScriptsAsync("OnDisconnect", new() { ["site"] = _leftProfile.Name, ["host"] = _leftProfile.Host, ["path"] = _leftRemoteDirectory, ["status"] = "Disconnected" }, true);
         if (_leftRemoteSession is not null) { await _leftRemoteSession.DisposeAsync(); _leftRemoteSession = null; }
         if (_leftProfile is not null) _engine.DisconnectSite(_leftProfile.Id);
+        if (_leftProfile is not null) await DisposePooledWorkersAsync(_leftProfile.Id);
         LeftQuickSites.SelectedIndex = 0;
         LocalList.ItemsSource = null; _leftRemoteDirectory = "/"; LocalPath.Text = "/";
         LeftSiteTitle.Text = _leftProfile is null ? "REMOTE SITE" : $"REMOTE — {_leftProfile.Name.ToUpperInvariant()} (DISCONNECTED)";
@@ -255,6 +355,7 @@ public partial class MainWindow : Window
         if (_rightProfile is not null) await RunScriptsAsync("OnDisconnect", new() { ["site"] = _rightProfile.Name, ["host"] = _rightProfile.Host, ["path"] = _remoteDirectory, ["status"] = "Disconnected" }, true);
         if (_remoteSession is not null) { await _remoteSession.DisposeAsync(); _remoteSession = null; }
         if (_rightProfile is not null) _engine.DisconnectSite(_rightProfile.Id);
+        if (_rightProfile is not null) await DisposePooledWorkersAsync(_rightProfile.Id);
         RightQuickSites.SelectedIndex = 0;
         RemoteList.ItemsSource = null; _remoteDirectory = "/"; RemotePath.Text = "/";
         RemoteSiteTitle.Text = _rightProfile is null ? "REMOTE SITE" : $"REMOTE — {_rightProfile.Name.ToUpperInvariant()} (DISCONNECTED)";
@@ -267,7 +368,8 @@ public partial class MainWindow : Window
         if (LeftMode.SelectedIndex != 1 || _leftRemoteSession?.IsConnected != true) { MessageBox.Show("Connect Remote first.", "Commands"); return; }
         var selectedItem = LocalList.SelectedItem as LocalEntryView;
         var selected = selectedItem?.FullPath ?? _leftRemoteDirectory;
-        new CommandsWindow(_leftRemoteSession, _leftProfile?.Name ?? "Remote", selected, selectedItem?.IsDirectory ?? false, () => NavigateLeftRemoteAsync(_leftRemoteDirectory), RunScriptsAsync) { Owner = this }.Show();
+        var selectedDirectories = LocalList.SelectedItems.Cast<LocalEntryView>().Where(item => item.IsDirectory).Select(item => item.FullPath).ToList();
+        new CommandsWindow(_leftRemoteSession, _leftProfile?.Name ?? "Remote", selected, selectedItem?.IsDirectory ?? false, () => NavigateLeftRemoteAsync(_leftRemoteDirectory), RunScriptsAsync, selectedDirectories) { Owner = this }.Show();
     }
 
     private void CommandsRight_Click(object sender, RoutedEventArgs e)
@@ -275,13 +377,31 @@ public partial class MainWindow : Window
         if (RightMode.SelectedIndex != 1 || _remoteSession?.IsConnected != true) { MessageBox.Show("Connect Remote first.", "Commands"); return; }
         var selectedItem = RemoteList.SelectedItem as RemoteEntryView;
         var selected = selectedItem?.FullPath ?? _remoteDirectory;
-        new CommandsWindow(_remoteSession, _rightProfile?.Name ?? "Remote", selected, selectedItem?.IsDirectory ?? false, () => NavigateRemoteAsync(_remoteDirectory), RunScriptsAsync) { Owner = this }.Show();
+        var selectedDirectories = RemoteList.SelectedItems.Cast<RemoteEntryView>().Where(item => item.IsDirectory).Select(item => item.FullPath).ToList();
+        new CommandsWindow(_remoteSession, _rightProfile?.Name ?? "Remote", selected, selectedItem?.IsDirectory ?? false, () => NavigateRemoteAsync(_remoteDirectory), RunScriptsAsync, selectedDirectories) { Owner = this }.Show();
+    }
+
+    private void BookmarksLeft_Click(object sender, RoutedEventArgs e)
+    {
+        var remote = LeftMode.SelectedIndex == 1;
+        var dialog = new BookmarksWindow(remote ? _leftProfile?.Name ?? "" : "", remote ? _leftRemoteDirectory : _localDirectory) { Owner = this };
+        if (dialog.ShowDialog() == true) { ReloadBookmarks(true); ReloadBookmarks(false); }
+    }
+
+    private void BookmarksRight_Click(object sender, RoutedEventArgs e)
+    {
+        var remote = RightMode.SelectedIndex == 1;
+        var dialog = new BookmarksWindow(remote ? _rightProfile?.Name ?? "" : "", remote ? _remoteDirectory : _rightLocalDirectory) { Owner = this };
+        if (dialog.ShowDialog() == true) { ReloadBookmarks(true); ReloadBookmarks(false); }
     }
 
     private void LeftMode_Changed(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
         if (!IsLoaded) return;
-        if (LeftMode.SelectedIndex == 0) { LeftSiteTitle.Text = "LOCAL"; LoadLocalDirectory(_localDirectory); }
+        _leftBackHistory.Clear(); _leftForwardHistory.Clear(); _leftRecentPaths.Clear(); _leftHistoryNavigation = false;
+        LeftDrives.Visibility = LeftMode.SelectedIndex == 0 ? Visibility.Visible : Visibility.Collapsed;
+        LeftDriveBarBorder.Visibility = LeftMode.SelectedIndex == 0 ? Visibility.Visible : Visibility.Collapsed;
+        if (LeftMode.SelectedIndex == 0) { LeftSiteTitle.Text = "LOCAL"; ReloadLocalDrives(); LoadLocalDirectory(_localDirectory); }
         else
         {
             LeftSiteTitle.Text = _leftProfile is null ? "REMOTE SITE" : $"REMOTE — {_leftProfile.Name.ToUpperInvariant()}";
@@ -295,7 +415,10 @@ public partial class MainWindow : Window
     private void RightMode_Changed(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
         if (!IsLoaded) return;
-        if (RightMode.SelectedIndex == 0) { RemoteSiteTitle.Text = "LOCAL"; LoadRightLocalDirectory(_rightLocalDirectory); }
+        _rightBackHistory.Clear(); _rightForwardHistory.Clear(); _rightRecentPaths.Clear(); _rightHistoryNavigation = false;
+        RightDrives.Visibility = RightMode.SelectedIndex == 0 ? Visibility.Visible : Visibility.Collapsed;
+        RightDriveBarBorder.Visibility = RightMode.SelectedIndex == 0 ? Visibility.Visible : Visibility.Collapsed;
+        if (RightMode.SelectedIndex == 0) { RemoteSiteTitle.Text = "LOCAL"; ReloadLocalDrives(); LoadRightLocalDirectory(_rightLocalDirectory); }
         else
         {
             RemoteSiteTitle.Text = _rightProfile is null ? "REMOTE SITE" : $"REMOTE — {_rightProfile.Name.ToUpperInvariant()}";
@@ -345,17 +468,23 @@ public partial class MainWindow : Window
         LocalList.ItemsSource = entries.Select(entry => new LocalEntryView(entry.Name,
             entry.IsDirectory ? "Folder" : entry.Size is { } size ? FormatSize(size) : "—",
             entry.ModifiedAt?.LocalDateTime.ToString("yyyy-MM-dd HH:mm") ?? "—", entry.Attributes,
-            NukeDetector.DetectName(entry.Name).Display, NukeDetector.DetectName(entry.Name).IsNuked, entry.FullPath, entry.IsDirectory))
+            NukeDetector.DetectName(entry.Name).Display, NukeDetector.DetectName(entry.Name).IsNuked, entry.FullPath, entry.IsDirectory,
+            entry.Size ?? 0, entry.ModifiedAt?.LocalDateTime ?? DateTime.MinValue))
             .OrderByDescending(entry => entry.IsDirectory).ThenBy(entry => entry.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
+        ApplyCurrentSort(LocalList, _leftSortProperty, _leftSortDirection, LeftNameHeader, LeftSizeHeader, LeftModifiedHeader);
     }
 
     private void LeftHeader_Click(object sender, RoutedEventArgs e) =>
         SortList(LocalList, (GridViewColumnHeader)sender, ref _leftSortProperty, ref _leftSortDirection,
-            LeftNameHeader, LeftModifiedHeader);
+            LeftNameHeader, LeftSizeHeader, LeftModifiedHeader);
 
     private void RightHeader_Click(object sender, RoutedEventArgs e) =>
         SortList(RemoteList, (GridViewColumnHeader)sender, ref _rightSortProperty, ref _rightSortDirection,
-            RightNameHeader, RightModifiedHeader);
+            RightNameHeader, RightSizeHeader, RightModifiedHeader);
+
+    private void QueueHeader_Click(object sender, RoutedEventArgs e) =>
+        SortList(QueueList, (GridViewColumnHeader)sender, ref _queueSortProperty, ref _queueSortDirection,
+            QueueStateHeader, QueueNameHeader, QueueSourceHeader, QueueDestinationHeader, QueueProgressHeader);
 
     private void FileList_SizeChanged(object sender, SizeChangedEventArgs e)
     {
@@ -366,6 +495,34 @@ public partial class MainWindow : Window
         else if (ReferenceEquals(sender, RemoteList)) RightNameColumn.Width = width;
     }
 
+    private void QueueList_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        var available = Math.Max(620, e.NewSize.Width - 28);
+        QueueStateColumn.Width = 82;
+        QueueProgressColumn.Width = Math.Clamp(available * 0.20, 170, 220);
+        var paths = Math.Max(420, available - QueueStateColumn.Width - QueueProgressColumn.Width);
+        QueueNameColumn.Width = Math.Max(140, paths * 0.30);
+        QueueSourceColumn.Width = Math.Max(140, paths * 0.35);
+        QueueDestinationColumn.Width = Math.Max(140, paths * 0.35);
+    }
+
+    private void LegendBar_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        var compact = e.NewSize.Width < 1050;
+        var veryCompact = e.NewSize.Width < 850;
+        var scrolling = _settings.LegendBarMode.Equals("Scrolling", StringComparison.OrdinalIgnoreCase);
+
+        ElapsedColumn.Width = compact ? new GridLength(0) : new GridLength(125);
+        ElapsedText.Visibility = scrolling || compact ? Visibility.Collapsed : Visibility.Visible;
+        ElapsedSeparator.Visibility = scrolling || compact ? Visibility.Collapsed : Visibility.Visible;
+        QueueTimeColumn.Width = veryCompact ? new GridLength(0) : new GridLength(compact ? 92 : 115);
+        QueueTimeText.Visibility = scrolling || veryCompact ? Visibility.Collapsed : Visibility.Visible;
+        QueueTimeSeparator.Visibility = scrolling || veryCompact ? Visibility.Collapsed : Visibility.Visible;
+        TransferBytesColumn.Width = new GridLength(compact ? 160 : 205);
+        StatusProgressColumn.Width = new GridLength(compact ? 120 : 150);
+        RemainingColumn.Width = new GridLength(compact ? 120 : 145);
+    }
+
     private static void SortList(ListView list, GridViewColumnHeader header, ref string currentProperty,
         ref ListSortDirection currentDirection, params GridViewColumnHeader[] headers)
     {
@@ -374,13 +531,26 @@ public partial class MainWindow : Window
         currentDirection = currentProperty == property && currentDirection == ListSortDirection.Ascending
             ? ListSortDirection.Descending : ListSortDirection.Ascending;
         currentProperty = property;
+        ApplyCurrentSort(list, currentProperty, currentDirection, headers);
+    }
+
+    private static void ApplyCurrentSort(ListView list, string property, ListSortDirection direction,
+        params GridViewColumnHeader[] headers)
+    {
+        if (string.IsNullOrWhiteSpace(property) || list.ItemsSource is null) return;
         var view = CollectionViewSource.GetDefaultView(list.ItemsSource);
         view.SortDescriptions.Clear();
-        view.SortDescriptions.Add(new SortDescription(property, currentDirection));
+        view.SortDescriptions.Add(new SortDescription(property, direction));
         foreach (var item in headers)
         {
-            var label = item.Tag?.ToString() is "Modified" or "DisplayModified" ? "Modified" : "Name";
-            item.Content = item == header ? $"{label} {(currentDirection == ListSortDirection.Ascending ? "▲" : "▼")}" : label;
+            var label = item.Tag?.ToString() switch
+            {
+                "SortModified" => "Modified",
+                "SortSize" => "Size",
+                "ProgressPercent" => "Progress",
+                var value => value ?? ""
+            };
+            item.Content = item.Tag?.ToString() == property ? $"{label} {(direction == ListSortDirection.Ascending ? "▲" : "▼")}" : label;
         }
     }
 
@@ -392,8 +562,10 @@ public partial class MainWindow : Window
         {
             if (_leftRemoteSession?.IsConnected != true) return;
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            var previous = _leftRemoteDirectory;
             var entries = await _leftRemoteSession.ListAsync(NormalizeRemotePath(path), timeout.Token);
             ShowLeftRemoteEntries(path, entries);
+            CommitNavigation(true, previous, _leftRemoteDirectory);
         }
         catch (Exception exception) { LogText.AppendText($"{Environment.NewLine}Remote: {FriendlyMessage(exception)}"); }
         finally { _leftNavigationGate.Release(); }
@@ -403,15 +575,112 @@ public partial class MainWindow : Window
     {
         try
         {
-            var full = Path.GetFullPath(directory);
-            RemoteList.ItemsSource = Directory.EnumerateFileSystemEntries(full).Take(100).Select(path =>
+            var previous = _rightLocalDirectory;
+            var full = NormalizeLocalDirectory(directory);
+            RemoteList.ItemsSource = Directory.EnumerateFileSystemEntries(full).Select(path =>
             {
                 var folder = Directory.Exists(path); var modified = folder ? Directory.GetLastWriteTime(path) : File.GetLastWriteTime(path);
-                return new RemoteEntryView(Path.GetFileName(path), folder ? "Folder" : FormatSize(new FileInfo(path).Length), modified.ToString("yyyy-MM-dd HH:mm"), File.GetAttributes(path).ToString(), "", false, path, folder);
+                var sizeBytes = folder ? 0 : new FileInfo(path).Length;
+                return new RemoteEntryView(Path.GetFileName(path), folder ? "Folder" : FormatSize(sizeBytes), modified.ToString("yyyy-MM-dd HH:mm"), File.GetAttributes(path).ToString(), "", false, path, folder, sizeBytes, modified);
             }).OrderByDescending(item => item.IsDirectory).ThenBy(item => item.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
-            _rightLocalDirectory = full; RemotePath.Text = full;
+            ApplyCurrentSort(RemoteList, _rightSortProperty, _rightSortDirection, RightNameHeader, RightSizeHeader, RightModifiedHeader);
+            _rightLocalDirectory = full; RemotePath.Text = full; SelectCurrentDrive(RightDrives, full);
+            UpdateDriveBarSelection(RightDriveBar, full);
+            CommitNavigation(false, previous, full);
         }
         catch (Exception exception) { LogText.AppendText($"{Environment.NewLine}Local browse error: {exception.Message}"); }
+    }
+
+    private static string NormalizeLocalDirectory(string directory)
+    {
+        var value = Environment.ExpandEnvironmentVariables(directory.Trim());
+        if (Regex.IsMatch(value, @"^[A-Za-z]:$")) value += Path.DirectorySeparatorChar;
+        return Path.GetFullPath(value);
+    }
+
+    private void ReloadLocalDrives()
+    {
+        _reloadingDrives = true;
+        try
+        {
+            var drives = DriveInfo.GetDrives().Select(drive => drive.RootDirectory.FullName).ToList();
+            LeftDrives.ItemsSource = drives;
+            RightDrives.ItemsSource = drives;
+            PopulateDriveBar(LeftDriveBar, drives, true);
+            PopulateDriveBar(RightDriveBar, drives, false);
+            SelectCurrentDrive(LeftDrives, _localDirectory);
+            SelectCurrentDrive(RightDrives, _rightLocalDirectory);
+            UpdateDriveBarSelection(LeftDriveBar, _localDirectory);
+            UpdateDriveBarSelection(RightDriveBar, _rightLocalDirectory);
+        }
+        finally { _reloadingDrives = false; }
+    }
+
+    private static void SelectCurrentDrive(ComboBox combo, string path)
+    {
+        var root = Path.GetPathRoot(Path.GetFullPath(path));
+        if (!string.IsNullOrWhiteSpace(root)) combo.SelectedItem = root;
+    }
+
+    private void PopulateDriveBar(StackPanel bar, IEnumerable<string> drives, bool left)
+    {
+        bar.Children.Clear();
+        foreach (var root in drives)
+        {
+            var drive = new DriveInfo(root);
+            var label = drive.Name.TrimEnd(Path.DirectorySeparatorChar);
+            var details = drive.IsReady
+                ? $"{drive.VolumeLabel}\n{FormatSize(drive.AvailableFreeSpace)} free of {FormatSize(drive.TotalSize)}"
+                : "Drive is not ready";
+            var button = new Button
+            {
+                Content = label,
+                Tag = root,
+                ToolTip = details,
+                MinWidth = 48,
+                Padding = new Thickness(10, 4, 10, 4),
+                Margin = new Thickness(0, 0, 4, 0),
+                FontWeight = FontWeights.SemiBold
+            };
+            button.Click += left ? LeftDriveButton_Click : RightDriveButton_Click;
+            bar.Children.Add(button);
+        }
+    }
+
+    private static void UpdateDriveBarSelection(StackPanel bar, string path)
+    {
+        var activeRoot = Path.GetPathRoot(Path.GetFullPath(path));
+        foreach (var button in bar.Children.OfType<Button>())
+        {
+            var active = string.Equals(button.Tag as string, activeRoot, StringComparison.OrdinalIgnoreCase);
+            button.Visibility = active ? Visibility.Visible : Visibility.Collapsed;
+            button.SetResourceReference(BackgroundProperty, active ? "AccentBrush" : "SurfaceRaisedBrush");
+            button.SetResourceReference(ForegroundProperty, active ? "WindowBrush" : "TextBrush");
+        }
+    }
+
+    private void LeftDriveButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string drive } && LeftMode.SelectedIndex == 0)
+            LoadLocalDirectory(drive);
+    }
+
+    private void RightDriveButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string drive } && RightMode.SelectedIndex == 0)
+            LoadRightLocalDirectory(drive);
+    }
+
+    private void LeftDrives_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_reloadingDrives && LeftMode.SelectedIndex == 0 && LeftDrives.SelectedItem is string drive)
+            LoadLocalDirectory(drive);
+    }
+
+    private void RightDrives_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_reloadingDrives && RightMode.SelectedIndex == 0 && RightDrives.SelectedItem is string drive)
+            LoadRightLocalDirectory(drive);
     }
 
     private void ShowRemoteEntries(string path, IReadOnlyList<RemoteEntry> entries)
@@ -426,10 +695,13 @@ public partial class MainWindow : Window
             NukeDetector.DetectName(entry.Name).Display,
             NukeDetector.DetectName(entry.Name).IsNuked,
             entry.FullPath,
-            entry.IsDirectory))
+            entry.IsDirectory,
+            entry.Size ?? 0,
+            entry.ModifiedAt?.LocalDateTime ?? DateTime.MinValue))
             .OrderByDescending(entry => entry.IsDirectory)
             .ThenBy(entry => entry.Name, StringComparer.CurrentCultureIgnoreCase)
             .ToList();
+        ApplyCurrentSort(RemoteList, _rightSortProperty, _rightSortDirection, RightNameHeader, RightSizeHeader, RightModifiedHeader);
     }
 
     private async Task NavigateRemoteAsync(string path)
@@ -442,8 +714,10 @@ public partial class MainWindow : Window
         {
             if (_remoteSession?.IsConnected != true) return;
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            var previous = _remoteDirectory;
             var entries = await _remoteSession.ListAsync(normalized, timeout.Token);
             ShowRemoteEntries(normalized, entries);
+            CommitNavigation(false, previous, _remoteDirectory);
             ConnectionStatus.Text = $"Connected — {entries.Count} entries";
         }
         catch (Exception exception)
@@ -506,23 +780,32 @@ public partial class MainWindow : Window
         return slash <= 0 ? "/" : normalized[..slash];
     }
 
-    private async void Download_Click(object sender, RoutedEventArgs e)
+    private async void Download_Click(object sender, RoutedEventArgs e) => await TransferRightAsync(true);
+
+    private async Task TransferRightAsync(bool startImmediately)
     {
         var entries = RemoteList.SelectedItems.Cast<RemoteEntryView>().ToList();
         if (entries.Count == 0) return;
+        if (RightMode.SelectedIndex == 0 && LeftMode.SelectedIndex == 0)
+        {
+            if (startImmediately) await CopyLocalPathsAsync(entries.Select(entry => entry.FullPath), _localDirectory);
+            else QueueLocalCopyPaths(entries.Select(entry => entry.FullPath), _localDirectory);
+            LoadLocalDirectory(_localDirectory);
+            return;
+        }
         foreach (var entry in entries)
         {
             if (entry.IsDirectory)
             {
                 if (RightMode.SelectedIndex == 1 && LeftMode.SelectedIndex == 1 && _remoteSession is not null && _leftRemoteSession is not null)
                     await QueueRemoteDirectoryAsync(_remoteSession, _leftRemoteSession, entry.FullPath,
-                        NormalizeRemotePath($"{_leftRemoteDirectory}/{entry.Name}"), TransferDirection.RelayRightToLeft);
+                        NormalizeRemotePath($"{_leftRemoteDirectory}/{entry.Name}"), TransferDirection.RelayRightToLeft, startImmediately);
                 else if (RightMode.SelectedIndex == 1 && LeftMode.SelectedIndex == 0 && _remoteSession is not null)
                     await QueueRemoteToLocalDirectoryAsync(_remoteSession, entry.FullPath,
-                        Path.Combine(_localDirectory, entry.Name), TransferDirection.Download);
+                        Path.Combine(_localDirectory, entry.Name), TransferDirection.Download, startImmediately);
                 else if (RightMode.SelectedIndex == 0 && LeftMode.SelectedIndex == 1 && _leftRemoteSession is not null)
                     await QueueLocalDirectoryAsync(entry.FullPath, _leftRemoteSession,
-                        NormalizeRemotePath($"{_leftRemoteDirectory}/{entry.Name}"), TransferDirection.UploadToLeft);
+                        NormalizeRemotePath($"{_leftRemoteDirectory}/{entry.Name}"), TransferDirection.UploadToLeft, startImmediately);
                 continue;
             }
             QueueEntryView queueEntry;
@@ -537,28 +820,156 @@ public partial class MainWindow : Window
             else if (RightMode.SelectedIndex == 1 && LeftMode.SelectedIndex == 1)
                 queueEntry = AddQueue(entry.Name, entry.FullPath, NormalizeRemotePath($"{_leftRemoteDirectory}/{entry.Name}"), TransferDirection.RelayRightToLeft);
             else continue;
-            Schedule(queueEntry);
+            if (startImmediately) Schedule(queueEntry);
         }
         if (LeftMode.SelectedIndex == 0) LoadLocalDirectory(_localDirectory); else await NavigateLeftRemoteAsync(_leftRemoteDirectory);
     }
 
-    private async void Upload_Click(object sender, RoutedEventArgs e)
+    private void CommitNavigation(bool left, string previous, string current)
+    {
+        if (string.Equals(previous, current, StringComparison.OrdinalIgnoreCase))
+        {
+            AddRecentPath(left, current);
+            return;
+        }
+
+        if (left)
+        {
+            if (_leftHistoryNavigation) _leftHistoryNavigation = false;
+            else { _leftBackHistory.Push(previous); _leftForwardHistory.Clear(); }
+        }
+        else
+        {
+            if (_rightHistoryNavigation) _rightHistoryNavigation = false;
+            else { _rightBackHistory.Push(previous); _rightForwardHistory.Clear(); }
+        }
+        AddRecentPath(left, current);
+    }
+
+    private void AddRecentPath(bool left, string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return;
+        var recent = left ? _leftRecentPaths : _rightRecentPaths;
+        recent.RemoveAll(item => item.Equals(path, StringComparison.OrdinalIgnoreCase));
+        recent.Insert(0, path);
+        if (recent.Count > 20) recent.RemoveRange(20, recent.Count - 20);
+    }
+
+    private async Task NavigatePaneAsync(bool left, string path, bool fromHistory = false)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return;
+        if (left)
+        {
+            _leftHistoryNavigation = fromHistory;
+            if (LeftMode.SelectedIndex == 0) LoadLocalDirectory(path); else await NavigateLeftRemoteAsync(path);
+        }
+        else
+        {
+            _rightHistoryNavigation = fromHistory;
+            if (RightMode.SelectedIndex == 0) LoadRightLocalDirectory(path); else await NavigateRemoteAsync(path);
+        }
+    }
+
+    private async void LeftBack_Click(object sender, RoutedEventArgs e)
+    {
+        if (_leftBackHistory.Count == 0) return;
+        var current = LeftMode.SelectedIndex == 0 ? _localDirectory : _leftRemoteDirectory;
+        var target = _leftBackHistory.Pop();
+        _leftForwardHistory.Push(current);
+        await NavigatePaneAsync(true, target, true);
+    }
+
+    private async void LeftForward_Click(object sender, RoutedEventArgs e)
+    {
+        if (_leftForwardHistory.Count == 0) return;
+        var current = LeftMode.SelectedIndex == 0 ? _localDirectory : _leftRemoteDirectory;
+        var target = _leftForwardHistory.Pop();
+        _leftBackHistory.Push(current);
+        await NavigatePaneAsync(true, target, true);
+    }
+
+    private async void RightBack_Click(object sender, RoutedEventArgs e)
+    {
+        if (_rightBackHistory.Count == 0) return;
+        var current = RightMode.SelectedIndex == 0 ? _rightLocalDirectory : _remoteDirectory;
+        var target = _rightBackHistory.Pop();
+        _rightForwardHistory.Push(current);
+        await NavigatePaneAsync(false, target, true);
+    }
+
+    private async void RightForward_Click(object sender, RoutedEventArgs e)
+    {
+        if (_rightForwardHistory.Count == 0) return;
+        var current = RightMode.SelectedIndex == 0 ? _rightLocalDirectory : _remoteDirectory;
+        var target = _rightForwardHistory.Pop();
+        _rightBackHistory.Push(current);
+        await NavigatePaneAsync(false, target, true);
+    }
+
+    private void Path_DropDownOpened(object sender, EventArgs e)
+    {
+        if (sender is not ComboBox combo) return;
+        var left = ReferenceEquals(combo, LocalPath);
+        var local = left ? LeftMode.SelectedIndex == 0 : RightMode.SelectedIndex == 0;
+        var current = combo.Text;
+        var choices = new List<string>();
+        if (local)
+        {
+            choices.AddRange(DriveInfo.GetDrives().Where(drive => drive.IsReady).Select(drive => drive.RootDirectory.FullName));
+            choices.AddRange(new[]
+            {
+                Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+                Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads")
+            }.Where(Directory.Exists));
+        }
+        choices.AddRange(left ? _leftRecentPaths : _rightRecentPaths);
+        _reloadingPathChoices = true;
+        combo.ItemsSource = choices.Where(item => !string.IsNullOrWhiteSpace(item)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        combo.Text = current;
+        _reloadingPathChoices = false;
+    }
+
+    private async void LocalPath_DropDownClosed(object sender, EventArgs e)
+    {
+        var current = LeftMode.SelectedIndex == 0 ? _localDirectory : _leftRemoteDirectory;
+        if (!_reloadingPathChoices && LocalPath.SelectedItem is string path && !path.Equals(current, StringComparison.OrdinalIgnoreCase))
+            await NavigatePaneAsync(true, path);
+    }
+
+    private async void RemotePath_DropDownClosed(object sender, EventArgs e)
+    {
+        var current = RightMode.SelectedIndex == 0 ? _rightLocalDirectory : _remoteDirectory;
+        if (!_reloadingPathChoices && RemotePath.SelectedItem is string path && !path.Equals(current, StringComparison.OrdinalIgnoreCase))
+            await NavigatePaneAsync(false, path);
+    }
+
+    private async void Upload_Click(object sender, RoutedEventArgs e) => await TransferLeftAsync(true);
+
+    private async Task TransferLeftAsync(bool startImmediately)
     {
         var entries = LocalList.SelectedItems.Cast<LocalEntryView>().ToList();
         if (entries.Count == 0) return;
+        if (LeftMode.SelectedIndex == 0 && RightMode.SelectedIndex == 0)
+        {
+            if (startImmediately) await CopyLocalPathsAsync(entries.Select(entry => entry.FullPath), _rightLocalDirectory);
+            else QueueLocalCopyPaths(entries.Select(entry => entry.FullPath), _rightLocalDirectory);
+            LoadRightLocalDirectory(_rightLocalDirectory);
+            return;
+        }
         foreach (var entry in entries)
         {
             if (entry.IsDirectory)
             {
                 if (LeftMode.SelectedIndex == 1 && RightMode.SelectedIndex == 1 && _leftRemoteSession is not null && _remoteSession is not null)
                     await QueueRemoteDirectoryAsync(_leftRemoteSession, _remoteSession, entry.FullPath,
-                        NormalizeRemotePath($"{_remoteDirectory}/{entry.Name}"), TransferDirection.RelayLeftToRight);
+                        NormalizeRemotePath($"{_remoteDirectory}/{entry.Name}"), TransferDirection.RelayLeftToRight, startImmediately);
                 else if (LeftMode.SelectedIndex == 1 && RightMode.SelectedIndex == 0 && _leftRemoteSession is not null)
                     await QueueRemoteToLocalDirectoryAsync(_leftRemoteSession, entry.FullPath,
-                        Path.Combine(_rightLocalDirectory, entry.Name), TransferDirection.DownloadFromLeft);
+                        Path.Combine(_rightLocalDirectory, entry.Name), TransferDirection.DownloadFromLeft, startImmediately);
                 else if (LeftMode.SelectedIndex == 0 && RightMode.SelectedIndex == 1 && _remoteSession is not null)
                     await QueueLocalDirectoryAsync(entry.FullPath, _remoteSession,
-                        NormalizeRemotePath($"{_remoteDirectory}/{entry.Name}"), TransferDirection.Upload);
+                        NormalizeRemotePath($"{_remoteDirectory}/{entry.Name}"), TransferDirection.Upload, startImmediately);
                 continue;
             }
             QueueEntryView queueEntry;
@@ -574,7 +985,7 @@ public partial class MainWindow : Window
             else if (LeftMode.SelectedIndex == 1 && RightMode.SelectedIndex == 1)
                 queueEntry = AddQueue(entry.Name, entry.FullPath, NormalizeRemotePath($"{_remoteDirectory}/{entry.Name}"), TransferDirection.RelayLeftToRight);
             else continue;
-            Schedule(queueEntry);
+            if (startImmediately) Schedule(queueEntry);
         }
         if (RightMode.SelectedIndex == 0) LoadRightLocalDirectory(_rightLocalDirectory); else await NavigateRemoteAsync(_remoteDirectory);
     }
@@ -585,25 +996,38 @@ public partial class MainWindow : Window
     private void CopyPathLeft_Click(object sender, RoutedEventArgs e) { if (LocalList.SelectedItem is LocalEntryView item) Clipboard.SetText(item.FullPath); }
     private void CopyNameRight_Click(object sender, RoutedEventArgs e) { if (RemoteList.SelectedItem is RemoteEntryView item) Clipboard.SetText(item.Name); }
     private void CopyPathRight_Click(object sender, RoutedEventArgs e) { if (RemoteList.SelectedItem is RemoteEntryView item) Clipboard.SetText(item.FullPath); }
+    private void CopyUrlLeft_Click(object sender, RoutedEventArgs e) { if (LocalList.SelectedItem is LocalEntryView item) CopyEntryUrl(true, item.FullPath); }
+    private void CopyUrlRight_Click(object sender, RoutedEventArgs e) { if (RemoteList.SelectedItem is RemoteEntryView item) CopyEntryUrl(false, item.FullPath); }
     private async void RefreshLeft_Click(object sender, RoutedEventArgs e) { if (LeftMode.SelectedIndex == 0) LoadLocalDirectory(_localDirectory); else await NavigateLeftRemoteAsync(_leftRemoteDirectory); }
     private async void RefreshRight_Click(object sender, RoutedEventArgs e) { if (RightMode.SelectedIndex == 0) LoadRightLocalDirectory(_rightLocalDirectory); else await NavigateRemoteAsync(_remoteDirectory); }
 
     private async void CreateFolderLeft_Click(object sender, RoutedEventArgs e) => await CreateFolderAsync(true);
     private async void CreateFolderRight_Click(object sender, RoutedEventArgs e) => await CreateFolderAsync(false);
-    private async Task CreateFolderAsync(bool left)
+    private async void CreateFolderAndEnterLeft_Click(object sender, RoutedEventArgs e) => await CreateFolderAsync(true, true);
+    private async void CreateFolderAndEnterRight_Click(object sender, RoutedEventArgs e) => await CreateFolderAsync(false, true);
+    private async Task CreateFolderAsync(bool left, bool enter = false)
     {
         var dialog = new CommandParameterWindow("New folder name:") { Owner = this }; if (dialog.ShowDialog() != true || string.IsNullOrWhiteSpace(dialog.Value)) return;
         try
         {
-            if (left && LeftMode.SelectedIndex == 0) Directory.CreateDirectory(Path.Combine(_localDirectory, dialog.Value));
-            else if (!left && RightMode.SelectedIndex == 0) Directory.CreateDirectory(Path.Combine(_rightLocalDirectory, dialog.Value));
+            string createdPath;
+            if (left && LeftMode.SelectedIndex == 0) { createdPath = Path.Combine(_localDirectory, dialog.Value); Directory.CreateDirectory(createdPath); }
+            else if (!left && RightMode.SelectedIndex == 0) { createdPath = Path.Combine(_rightLocalDirectory, dialog.Value); Directory.CreateDirectory(createdPath); }
             else
             {
                 var session = left ? _leftRemoteSession : _remoteSession; var directory = left ? _leftRemoteDirectory : _remoteDirectory;
                 if (session?.IsConnected != true) return; using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-                await session.ExecuteCommandAsync($"MKD {NormalizeRemotePath($"{directory}/{dialog.Value}")}", timeout.Token);
+                createdPath = NormalizeRemotePath($"{directory}/{dialog.Value}");
+                await session.ExecuteCommandAsync($"MKD {createdPath}", timeout.Token);
             }
-            if (left) RefreshLeft_Click(this, new RoutedEventArgs()); else RefreshRight_Click(this, new RoutedEventArgs());
+            if (enter)
+            {
+                if (left && LeftMode.SelectedIndex == 0) LoadLocalDirectory(createdPath);
+                else if (!left && RightMode.SelectedIndex == 0) LoadRightLocalDirectory(createdPath);
+                else if (left) await NavigateLeftRemoteAsync(createdPath);
+                else await NavigateRemoteAsync(createdPath);
+            }
+            else if (left) RefreshLeft_Click(this, new RoutedEventArgs()); else RefreshRight_Click(this, new RoutedEventArgs());
         }
         catch (Exception exception) { MessageBox.Show(FriendlyMessage(exception), "Create folder", MessageBoxButton.OK, MessageBoxImage.Error); }
     }
@@ -690,7 +1114,7 @@ public partial class MainWindow : Window
     }
 
     private async Task QueueRemoteDirectoryAsync(FtpRemoteSession source, FtpRemoteSession destination,
-        string sourceRoot, string destinationRoot, TransferDirection direction)
+        string sourceRoot, string destinationRoot, TransferDirection direction, bool startImmediately = true)
     {
         try
         {
@@ -722,12 +1146,17 @@ public partial class MainWindow : Window
                 foreach (var child in children)
                 {
                     var target = NormalizeRemotePath($"{folder.Destination}/{child.Name}");
-                    if (child.IsDirectory) pending.Push((child.FullPath, target));
+                    if (child.IsDirectory)
+                    {
+                        if (!ShouldSkip(child.Name, true)) pending.Push((child.FullPath, target));
+                    }
                     else if (!ShouldSkip(child.Name)) { files.Add((child, target)); fileCount++; }
                 }
             }
-            foreach (var file in files.OrderBy(file => PriorityRank(file.Entry.Name)).ThenBy(file => file.Entry.Name, StringComparer.OrdinalIgnoreCase))
-                Schedule(AddQueue(file.Entry.Name, file.Entry.FullPath, file.Destination, direction, file.Entry.Size ?? 0));
+            if (startImmediately) await WarmWorkersForDirectionAsync(direction, files.Count, timeout.Token);
+            var queuedEntries = files.OrderBy(file => PriorityRank(file.Entry.Name)).ThenBy(file => file.Entry.Name, NaturalNameComparer.Instance)
+                .Select(file => AddQueue(file.Entry.Name, file.Entry.FullPath, file.Destination, direction, file.Entry.Size ?? 0, persist: false)).ToList();
+            if (startImmediately) ScheduleBatch(queuedEntries); else { SaveQueue(); UpdateQueueStatus(); }
             LogText.AppendText($"{Environment.NewLine}Queued remote folder {sourceRoot}: {fileCount} files.");
         }
         catch (Exception exception)
@@ -738,8 +1167,153 @@ public partial class MainWindow : Window
         LogText.ScrollToEnd();
     }
 
+    private async void CreateFileLeft_Click(object sender, RoutedEventArgs e) => await CreateEmptyFileAsync(true);
+    private async void CreateFileRight_Click(object sender, RoutedEventArgs e) => await CreateEmptyFileAsync(false);
+    private async Task CreateEmptyFileAsync(bool left)
+    {
+        var dialog = new CommandParameterWindow("New file name:") { Owner = this };
+        if (dialog.ShowDialog() != true || string.IsNullOrWhiteSpace(dialog.Value)) return;
+        try
+        {
+            var local = (left && LeftMode.SelectedIndex == 0) || (!left && RightMode.SelectedIndex == 0);
+            if (local)
+            {
+                var directory = left ? _localDirectory : _rightLocalDirectory;
+                await File.WriteAllBytesAsync(Path.Combine(directory, dialog.Value.Trim()), []);
+            }
+            else
+            {
+                var session = left ? _leftRemoteSession : _remoteSession;
+                var directory = left ? _leftRemoteDirectory : _remoteDirectory;
+                if (session?.IsConnected != true) return;
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                await session.UploadAsync(NormalizeRemotePath($"{directory}/{dialog.Value.Trim()}"), Stream.Null, 0, null, timeout.Token);
+            }
+            if (left) RefreshLeft_Click(this, new RoutedEventArgs()); else RefreshRight_Click(this, new RoutedEventArgs());
+        }
+        catch (Exception exception) { MessageBox.Show(FriendlyMessage(exception), "Create file", MessageBoxButton.OK, MessageBoxImage.Error); }
+    }
+
+    private async void ViewLeft_Click(object sender, RoutedEventArgs e)
+    {
+        if (LocalList.SelectedItem is LocalEntryView item) await OpenOrViewAsync(true, item.FullPath, item.Name, item.IsDirectory);
+    }
+
+    private async void ViewRight_Click(object sender, RoutedEventArgs e)
+    {
+        if (RemoteList.SelectedItem is RemoteEntryView item) await OpenOrViewAsync(false, item.FullPath, item.Name, item.IsDirectory);
+    }
+
+    private async void ViewInternalLeft_Click(object sender, RoutedEventArgs e)
+    {
+        if (LocalList.SelectedItem is LocalEntryView item)
+            await ViewInternallyAsync(true, item.FullPath, item.Name, item.IsDirectory);
+    }
+
+    private async void ViewInternalRight_Click(object sender, RoutedEventArgs e)
+    {
+        if (RemoteList.SelectedItem is RemoteEntryView item)
+            await ViewInternallyAsync(false, item.FullPath, item.Name, item.IsDirectory);
+    }
+
+    private async Task ViewInternallyAsync(bool left, string path, string name, bool directory)
+    {
+        if (directory) { await OpenOrViewAsync(left, path, name, true); return; }
+        try
+        {
+            var local = (left && LeftMode.SelectedIndex == 0) || (!left && RightMode.SelectedIndex == 0);
+            byte[] content;
+            if (local)
+            {
+                content = await ReadPreviewBytesAsync(path);
+            }
+            else
+            {
+                var session = left ? _leftRemoteSession : _remoteSession;
+                if (session?.IsConnected != true) return;
+                await using var output = new MemoryStream();
+                using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+                await session.DownloadAsync(path, output, 0, null, timeout.Token);
+                if (output.Length > FileViewerWindow.MaximumFileSize)
+                    throw new IOException($"The file is larger than the internal viewer limit of {FileViewerWindow.MaximumFileSize / 1024 / 1024} MB.");
+                content = output.ToArray();
+                LogText.AppendText($"{Environment.NewLine}Internal preview downloaded: {path}");
+                LogText.ScrollToEnd();
+            }
+            new FileViewerWindow(name, path, content) { Owner = this }.Show();
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(FriendlyMessage(exception), "Internal file viewer", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private static async Task<byte[]> ReadPreviewBytesAsync(string path)
+    {
+        var info = new FileInfo(path);
+        if (info.Length > FileViewerWindow.MaximumFileSize)
+            throw new IOException($"The file is larger than the internal viewer limit of {FileViewerWindow.MaximumFileSize / 1024 / 1024} MB.");
+        return await File.ReadAllBytesAsync(path);
+    }
+
+    private async Task OpenOrViewAsync(bool left, string path, string name, bool directory)
+    {
+        try
+        {
+            var local = (left && LeftMode.SelectedIndex == 0) || (!left && RightMode.SelectedIndex == 0);
+            if (directory)
+            {
+                if (local) { if (left) LoadLocalDirectory(path); else LoadRightLocalDirectory(path); }
+                else if (left) await NavigateLeftRemoteAsync(path); else await NavigateRemoteAsync(path);
+                return;
+            }
+
+            var openPath = path;
+            if (!local)
+            {
+                var session = left ? _leftRemoteSession : _remoteSession;
+                if (session?.IsConnected != true) return;
+                var previewDirectory = Path.Combine(Path.GetTempPath(), "FluxFTP", "Preview");
+                Directory.CreateDirectory(previewDirectory);
+                openPath = Path.Combine(previewDirectory, $"{Guid.NewGuid():N}-{SanitizeFileName(name)}");
+                await using var output = new FileStream(openPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
+                using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+                await session.DownloadAsync(path, output, 0, null, timeout.Token);
+                LogText.AppendText($"{Environment.NewLine}Preview downloaded: {path}");
+            }
+            Process.Start(new ProcessStartInfo(openPath) { UseShellExecute = true });
+        }
+        catch (Exception exception) { MessageBox.Show(FriendlyMessage(exception), "Open / View", MessageBoxButton.OK, MessageBoxImage.Error); }
+    }
+
+    private void CopyEntryUrl(bool left, string path)
+    {
+        var local = (left && LeftMode.SelectedIndex == 0) || (!left && RightMode.SelectedIndex == 0);
+        if (local) { Clipboard.SetText(new Uri(Path.GetFullPath(path)).AbsoluteUri); return; }
+        var profile = left ? _leftProfile : _rightProfile;
+        if (profile is null) return;
+        var scheme = profile.Protocol switch
+        {
+            TransferProtocol.Sftp => "sftp",
+            TransferProtocol.FtpsImplicit => "ftps",
+            TransferProtocol.FtpsExplicit => "ftpes",
+            _ => "ftp"
+        };
+        var defaultPort = profile.Protocol switch { TransferProtocol.Sftp => 22, TransferProtocol.FtpsImplicit => 990, _ => 21 };
+        var user = string.IsNullOrWhiteSpace(profile.Username) ? "" : $"{Uri.EscapeDataString(profile.Username)}@";
+        var port = profile.Port == defaultPort ? "" : $":{profile.Port}";
+        var encodedPath = "/" + string.Join('/', path.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries).Select(Uri.EscapeDataString));
+        Clipboard.SetText($"{scheme}://{user}{profile.Host}{port}{encodedPath}");
+    }
+
+    private static string SanitizeFileName(string name)
+    {
+        var invalid = Path.GetInvalidFileNameChars().ToHashSet();
+        return new string(name.Select(character => invalid.Contains(character) ? '_' : character).ToArray());
+    }
+
     private async Task QueueRemoteToLocalDirectoryAsync(FtpRemoteSession source, string sourceRoot,
-        string destinationRoot, TransferDirection direction)
+        string destinationRoot, TransferDirection direction, bool startImmediately = true)
     {
         try
         {
@@ -765,12 +1339,17 @@ public partial class MainWindow : Window
                 {
                     if (child.Name is "." or "..") continue;
                     var target = Path.Combine(folder.Destination, child.Name);
-                    if (child.IsDirectory) pending.Push((child.FullPath, target));
+                    if (child.IsDirectory)
+                    {
+                        if (!ShouldSkip(child.Name, true)) pending.Push((child.FullPath, target));
+                    }
                     else if (!ShouldSkip(child.Name)) files.Add((child, target));
                 }
             }
-            foreach (var file in files.OrderBy(file => PriorityRank(file.Entry.Name)).ThenBy(file => file.Entry.Name, StringComparer.OrdinalIgnoreCase))
-                Schedule(AddQueue(file.Entry.Name, file.Entry.FullPath, file.Destination, direction, file.Entry.Size ?? 0));
+            if (startImmediately) await WarmWorkersForDirectionAsync(direction, files.Count, timeout.Token);
+            var queuedEntries = files.OrderBy(file => PriorityRank(file.Entry.Name)).ThenBy(file => file.Entry.Name, NaturalNameComparer.Instance)
+                .Select(file => AddQueue(file.Entry.Name, file.Entry.FullPath, file.Destination, direction, file.Entry.Size ?? 0, persist: false)).ToList();
+            if (startImmediately) ScheduleBatch(queuedEntries); else { SaveQueue(); UpdateQueueStatus(); }
             LogText.AppendText($"{Environment.NewLine}Queued remote folder for local download {sourceRoot}: {files.Count} files.");
             LogText.ScrollToEnd();
             if (direction == TransferDirection.Download) LoadLocalDirectory(_localDirectory); else LoadRightLocalDirectory(_rightLocalDirectory);
@@ -783,7 +1362,7 @@ public partial class MainWindow : Window
     }
 
     private async Task QueueLocalDirectoryAsync(string sourceRoot, FtpRemoteSession destination,
-        string destinationRoot, TransferDirection direction)
+        string destinationRoot, TransferDirection direction, bool startImmediately = true)
     {
         try
         {
@@ -799,12 +1378,17 @@ public partial class MainWindow : Window
                 {
                     var name = Path.GetFileName(child);
                     var target = NormalizeRemotePath($"{folder.Destination}/{name}");
-                    if (Directory.Exists(child)) pending.Push((child, target));
+                    if (Directory.Exists(child))
+                    {
+                        if (!ShouldSkip(name, true)) pending.Push((child, target));
+                    }
                     else if (!ShouldSkip(name)) files.Add((new FileInfo(child), target));
                 }
             }
-            foreach (var file in files.OrderBy(file => PriorityRank(file.File.Name)).ThenBy(file => file.File.Name, StringComparer.OrdinalIgnoreCase))
-                Schedule(AddQueue(file.File.Name, file.File.FullName, file.Destination, direction, file.File.Length));
+            if (startImmediately) await WarmWorkersForDirectionAsync(direction, files.Count, timeout.Token);
+            var queuedEntries = files.OrderBy(file => PriorityRank(file.File.Name)).ThenBy(file => file.File.Name, NaturalNameComparer.Instance)
+                .Select(file => AddQueue(file.File.Name, file.File.FullName, file.Destination, direction, file.File.Length, persist: false)).ToList();
+            if (startImmediately) ScheduleBatch(queuedEntries); else { SaveQueue(); UpdateQueueStatus(); }
             LogText.AppendText($"{Environment.NewLine}Queued local folder {sourceRoot}: {files.Count} files.");
         }
         catch (Exception exception)
@@ -823,11 +1407,8 @@ public partial class MainWindow : Window
         return patterns.Length;
     }
 
-    private bool ShouldSkip(string name)
-    {
-        var patterns = _settings.SkipPatterns.Split(['\r', '\n', ',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        return patterns.Any(pattern => System.IO.Enumeration.FileSystemName.MatchesSimpleExpression(pattern, name, true));
-    }
+    private bool ShouldSkip(string name, bool isDirectory = false) =>
+        SkipRuleMatcher.ShouldSkip(_settings, name, isDirectory, "Transfer");
 
     private static async Task EnsureRemoteDirectoryAsync(FtpRemoteSession session, string path, CancellationToken token)
     {
@@ -839,10 +1420,35 @@ public partial class MainWindow : Window
         }
     }
 
-    private void QueueLeft_Click(object sender, RoutedEventArgs e) => Upload_Click(sender, e);
-    private void QueueRight_Click(object sender, RoutedEventArgs e) => Download_Click(sender, e);
+    private async void QueueLeft_Click(object sender, RoutedEventArgs e) => await TransferLeftAsync(false);
+    private async void QueueRight_Click(object sender, RoutedEventArgs e) => await TransferRightAsync(false);
 
-    private void FileList_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e) => _dragStart = e.GetPosition(this);
+    private void FileList_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        _dragStart = e.GetPosition(this);
+        _dragStarted = false;
+        _preservedDragItem = null;
+        if (sender is ListView list && list.SelectedItems.Count > 1 && Keyboard.Modifiers == ModifierKeys.None &&
+            ItemsControl.ContainerFromElement(list, e.OriginalSource as DependencyObject) is ListViewItem { IsSelected: true } item)
+        {
+            // WPF normally collapses an extended selection to the item under the
+            // mouse before MouseMove starts. Preserve it until we know whether
+            // this is a click or a multi-item drag.
+            _preservedDragItem = item;
+            e.Handled = true;
+        }
+    }
+
+    private void FileList_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_preservedDragItem is not null && !_dragStarted && sender is ListView list)
+        {
+            list.SelectedItems.Clear();
+            _preservedDragItem.IsSelected = true;
+        }
+        _preservedDragItem = null;
+        _dragStarted = false;
+    }
     private void FileList_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (sender is ListView list && ItemsControl.ContainerFromElement(list, e.OriginalSource as DependencyObject) is ListViewItem item)
@@ -855,31 +1461,174 @@ public partial class MainWindow : Window
     {
         if (e.LeftButton == MouseButtonState.Pressed && LocalList.SelectedItem is not null &&
             (e.GetPosition(this) - _dragStart).Length > SystemParameters.MinimumHorizontalDragDistance)
+        {
+            _dragStarted = true;
             DragDrop.DoDragDrop(LocalList, "ioftp-left", DragDropEffects.Copy);
+            _preservedDragItem = null;
+        }
     }
     private void RemoteList_MouseMove(object sender, MouseEventArgs e)
     {
         if (e.LeftButton == MouseButtonState.Pressed && RemoteList.SelectedItem is not null &&
             (e.GetPosition(this) - _dragStart).Length > SystemParameters.MinimumHorizontalDragDistance)
+        {
+            _dragStarted = true;
             DragDrop.DoDragDrop(RemoteList, "ioftp-right", DragDropEffects.Copy);
+            _preservedDragItem = null;
+        }
     }
-    private void LocalList_Drop(object sender, DragEventArgs e) { if (e.Data.GetData(DataFormats.Text) as string == "ioftp-right") Download_Click(sender, e); }
-    private void RemoteList_Drop(object sender, DragEventArgs e) { if (e.Data.GetData(DataFormats.Text) as string == "ioftp-left") Upload_Click(sender, e); }
-
-    private QueueEntryView AddQueue(string name, string source, string destination, TransferDirection direction, long totalBytes = 0, Guid? sourceProfileId = null, Guid? destinationProfileId = null)
+    private void FileList_DragOver(object sender, DragEventArgs e)
     {
-        var entry = new QueueEntryView(name, source, destination, direction, totalBytes: totalBytes) { SourceProfileId = sourceProfileId, DestinationProfileId = destinationProfileId, QueuedAt = DateTimeOffset.Now }; _queue.Add(entry); SaveQueue(); UpdateQueueStatus(); return entry;
+        e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) || e.Data.GetDataPresent(DataFormats.Text)
+            ? DragDropEffects.Copy
+            : DragDropEffects.None;
+        e.Handled = true;
     }
 
-    private void Schedule(QueueEntryView entry)
+    private async void LocalList_Drop(object sender, DragEventArgs e)
     {
-        var (sourceSite, destinationSite) = SitesFor(entry.Direction);
-        sourceSite ??= entry.SourceProfileId;
-        destinationSite ??= entry.DestinationProfileId;
-        entry.State = "Queued";
-        entry.QueuedAt ??= DateTimeOffset.Now;
-        _engine.Enqueue([new TransferWorkItem(entry.Id, entry.Id, entry.Name, sourceSite, destinationSite,
-            entry.Source, entry.Destination, entry.TotalBytes, QueuedAt: DateTimeOffset.UtcNow)]);
+        if (e.Data.GetDataPresent(DataFormats.FileDrop) && e.Data.GetData(DataFormats.FileDrop) is string[] paths)
+            await HandleWindowsDropAsync(true, paths);
+        else if (e.Data.GetData(DataFormats.Text) as string == "ioftp-right")
+            Download_Click(sender, e);
+    }
+
+    private async void RemoteList_Drop(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetDataPresent(DataFormats.FileDrop) && e.Data.GetData(DataFormats.FileDrop) is string[] paths)
+            await HandleWindowsDropAsync(false, paths);
+        else if (e.Data.GetData(DataFormats.Text) as string == "ioftp-left")
+            Upload_Click(sender, e);
+    }
+
+    private async Task HandleWindowsDropAsync(bool left, IReadOnlyList<string> paths)
+    {
+        if ((left ? LeftMode.SelectedIndex : RightMode.SelectedIndex) == 0)
+        {
+            await CopyLocalPathsAsync(paths, left ? _localDirectory : _rightLocalDirectory);
+            if (left) LoadLocalDirectory(_localDirectory); else LoadRightLocalDirectory(_rightLocalDirectory);
+            return;
+        }
+
+        var session = left ? _leftRemoteSession : _remoteSession;
+        if (session?.IsConnected != true)
+        {
+            MessageBox.Show("Connect the target Remote pane first.", "Drag and drop", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var remoteDirectory = left ? _leftRemoteDirectory : _remoteDirectory;
+        var direction = left ? TransferDirection.UploadToLeft : TransferDirection.Upload;
+        foreach (var path in paths.Where(path => File.Exists(path) || Directory.Exists(path)))
+        {
+            var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(path));
+            var destination = NormalizeRemotePath($"{remoteDirectory}/{name}");
+            if (Directory.Exists(path)) await QueueLocalDirectoryAsync(path, session, destination, direction);
+            else Schedule(AddQueue(name, path, destination, direction, new FileInfo(path).Length));
+        }
+    }
+
+    private async Task CopyLocalPathsAsync(IEnumerable<string> sourcePaths, string destinationDirectory)
+    {
+        var paths = sourcePaths.Where(path => File.Exists(path) || Directory.Exists(path)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (paths.Count == 0) return;
+        Directory.CreateDirectory(destinationDirectory);
+
+        var approved = new List<(string Source, string Destination, bool Directory)>();
+        foreach (var source in paths)
+        {
+            var destination = Path.Combine(destinationDirectory, Path.GetFileName(Path.TrimEndingDirectorySeparator(source)));
+            if (Path.GetFullPath(source).Equals(Path.GetFullPath(destination), StringComparison.OrdinalIgnoreCase)) continue;
+            var isDirectory = Directory.Exists(source);
+            if ((isDirectory && Directory.Exists(destination)) || (!isDirectory && File.Exists(destination)))
+            {
+                var action = isDirectory ? "Merge and overwrite files in" : "Replace";
+                if (MessageBox.Show($"{action} '{destination}'?", "Local copy", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                    continue;
+            }
+            approved.Add((source, destination, isDirectory));
+        }
+
+        try
+        {
+            await Task.Run(() =>
+            {
+                foreach (var item in approved)
+                {
+                    if (!item.Directory) { File.Copy(item.Source, item.Destination, true); continue; }
+                    CopyDirectoryTree(item.Source, item.Destination);
+                }
+            });
+            LogText.AppendText($"{Environment.NewLine}Local copy completed: {approved.Count} item(s) to {destinationDirectory}");
+            LogText.ScrollToEnd();
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(FriendlyMessage(exception), "Local copy", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void QueueLocalCopyPaths(IEnumerable<string> sourcePaths, string destinationDirectory)
+    {
+        foreach (var source in sourcePaths.Where(path => File.Exists(path) || Directory.Exists(path)).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (File.Exists(source))
+            {
+                var destination = Path.Combine(destinationDirectory, Path.GetFileName(source));
+                AddQueue(Path.GetFileName(source), source, destination, TransferDirection.LocalCopy, new FileInfo(source).Length);
+                continue;
+            }
+
+            var rootDestination = Path.Combine(destinationDirectory, Path.GetFileName(Path.TrimEndingDirectorySeparator(source)));
+            foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+            {
+                var destination = Path.Combine(rootDestination, Path.GetRelativePath(source, file));
+                AddQueue(Path.GetFileName(file), file, destination, TransferDirection.LocalCopy, new FileInfo(file).Length);
+            }
+        }
+        LogText.AppendText($"{Environment.NewLine}Added local items to queue. Press Start queue to begin.");
+        LogText.ScrollToEnd();
+    }
+
+    private static void CopyDirectoryTree(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (var directory in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
+            Directory.CreateDirectory(Path.Combine(destination, Path.GetRelativePath(source, directory)));
+        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        {
+            var target = Path.Combine(destination, Path.GetRelativePath(source, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target, true);
+        }
+    }
+
+    private QueueEntryView AddQueue(string name, string source, string destination, TransferDirection direction, long totalBytes = 0, Guid? sourceProfileId = null, Guid? destinationProfileId = null, bool persist = true)
+    {
+        var entry = new QueueEntryView(name, source, destination, direction, totalBytes: totalBytes) { SourceProfileId = sourceProfileId, DestinationProfileId = destinationProfileId, QueuedAt = DateTimeOffset.Now };
+        _queue.Add(entry);
+        TrackRaceEntry(entry);
+        if (persist) { SaveQueue(); UpdateQueueStatus(); }
+        return entry;
+    }
+
+    private void Schedule(QueueEntryView entry) => ScheduleBatch([entry]);
+
+    private void ScheduleBatch(IEnumerable<QueueEntryView> entries)
+    {
+        var work = new List<TransferWorkItem>();
+        foreach (var entry in entries)
+        {
+            var (sourceSite, destinationSite) = SitesFor(entry.Direction);
+            sourceSite ??= entry.SourceProfileId;
+            destinationSite ??= entry.DestinationProfileId;
+            entry.State = "Queued";
+            entry.QueuedAt ??= DateTimeOffset.Now;
+            work.Add(new TransferWorkItem(entry.Id, entry.Id, entry.Name, sourceSite, destinationSite,
+                entry.Source, entry.Destination, entry.TotalBytes,
+                QueuedAt: entry.QueuedAt.Value.ToUniversalTime(), FilePriorityRank: PriorityRank(entry.Name)));
+        }
+        if (work.Count > 0) _engine.Enqueue(work);
         SaveQueue(); UpdateQueueStatus();
     }
 
@@ -912,30 +1661,82 @@ public partial class MainWindow : Window
         var apiProfile = entry.Direction == TransferDirection.ApiDownload ? profiles.FirstOrDefault(profile => profile.Id == entry.SourceProfileId) : null;
         var apiFxpSource = entry.Direction == TransferDirection.ApiFxp ? profiles.FirstOrDefault(profile => profile.Id == entry.SourceProfileId) : null;
         var apiFxpDestination = entry.Direction == TransferDirection.ApiFxp ? profiles.FirstOrDefault(profile => profile.Id == entry.DestinationProfileId) : null;
+        if (apiProfile is not null) apiProfile = ApplyGlobalProxy(apiProfile);
+        if (apiFxpSource is not null) apiFxpSource = ApplyGlobalProxy(apiFxpSource);
+        if (apiFxpDestination is not null) apiFxpDestination = ApplyGlobalProxy(apiFxpDestination);
         if ((needsLeft && leftProfile is null) || (needsRight && rightProfile is null) || (entry.Direction == TransferDirection.ApiDownload && apiProfile is null) ||
             (entry.Direction == TransferDirection.ApiFxp && (apiFxpSource is null || apiFxpDestination is null)))
             throw new InvalidOperationException("A required site is not connected.");
         FtpRemoteSession? leftWorker = null; FtpRemoteSession? rightWorker = null;
         FtpRemoteSession? apiWorker = null;
         FtpRemoteSession? apiFxpSourceWorker = null; FtpRemoteSession? apiFxpDestinationWorker = null;
+        var reuseWorkers = false;
         try
         {
+            var ruleDestination = entry.Direction switch
+            {
+                TransferDirection.Upload or TransferDirection.RelayLeftToRight => rightProfile,
+                TransferDirection.UploadToLeft or TransferDirection.RelayRightToLeft => leftProfile,
+                TransferDirection.ApiFxp => apiFxpDestination,
+                _ => null
+            };
+            if (ruleDestination is not null)
+            {
+                var ruleResult = new SiteRuleStore().EvaluateDestination(ruleDestination.Name, entry.Destination, entry.RuleSection, entry.RuleRelease);
+                if (!ruleResult.Accepted) throw new InvalidOperationException($"Site rules blocked transfer: {ruleResult.Message}");
+            }
             entry.State = "Transferring";
             entry.StartedAt ??= DateTimeOffset.Now;
             SaveQueue();
             await RunScriptsAsync("BeforeTransfer", TransferScriptVariables(entry, "Starting"), false);
-            if (needsLeft) leftWorker = await CreateWorkerAsync(leftProfile!, cancellationToken);
-            if (needsRight) rightWorker = await CreateWorkerAsync(rightProfile!, cancellationToken);
-            if (apiProfile is not null) apiWorker = await CreateWorkerAsync(ApplyGlobalProxy(apiProfile), cancellationToken);
-            if (apiFxpSource is not null) apiFxpSourceWorker = await CreateWorkerAsync(ApplyGlobalProxy(apiFxpSource), cancellationToken);
-            if (apiFxpDestination is not null) apiFxpDestinationWorker = await CreateWorkerAsync(ApplyGlobalProxy(apiFxpDestination), cancellationToken);
-            var progress = new Progress<long>(bytes =>
+            if (needsLeft) leftWorker = await RentWorkerAsync(leftProfile!, cancellationToken);
+            if (needsRight) rightWorker = await RentWorkerAsync(rightProfile!, cancellationToken);
+            if (apiProfile is not null) apiWorker = await RentWorkerAsync(apiProfile, cancellationToken);
+            if (apiFxpSource is not null) apiFxpSourceWorker = await RentWorkerAsync(apiFxpSource, cancellationToken);
+            if (apiFxpDestination is not null) apiFxpDestinationWorker = await RentWorkerAsync(apiFxpDestination, cancellationToken);
+            var speedTimer = Stopwatch.StartNew();
+            var speedSampleAt = TimeSpan.Zero;
+            long speedSampleBytes = 0;
+            var hasSpeedSample = false;
+            void ReportProgress(long bytes)
             {
                 entry.BytesTransferred = bytes;
+                var now = speedTimer.Elapsed;
+                if (!hasSpeedSample)
+                {
+                    speedSampleBytes = bytes;
+                    speedSampleAt = now;
+                    hasSpeedSample = true;
+                }
+                else if (now - speedSampleAt >= TimeSpan.FromMilliseconds(250))
+                {
+                    var elapsedSeconds = (now - speedSampleAt).TotalSeconds;
+                    entry.SpeedBytesPerSecond = Math.Max(0, (long)((bytes - speedSampleBytes) / elapsedSeconds));
+                    speedSampleBytes = bytes;
+                    speedSampleAt = now;
+                }
                 if (DateTime.UtcNow - entry.LastPersistedAt >= TimeSpan.FromSeconds(1))
                 { entry.LastPersistedAt = DateTime.UtcNow; SaveQueue(); }
+            }
+            var progress = new Progress<long>(bytes =>
+            {
+                ReportProgress(bytes);
             });
-            if (entry.Direction is TransferDirection.Download or TransferDirection.DownloadFromLeft or TransferDirection.ApiDownload)
+            if (entry.Direction == TransferDirection.LocalCopy)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(entry.Destination)!);
+                await using var input = new FileStream(entry.Source, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, true);
+                await using var output = new FileStream(entry.Destination, FileMode.Create, FileAccess.Write, FileShare.None, 64 * 1024, true);
+                var buffer = new byte[64 * 1024];
+                int read;
+                while ((read = await input.ReadAsync(buffer, cancellationToken)) > 0)
+                {
+                    await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                    ReportProgress(entry.BytesTransferred + read);
+                }
+                await output.FlushAsync(cancellationToken);
+            }
+            else if (entry.Direction is TransferDirection.Download or TransferDirection.DownloadFromLeft or TransferDirection.ApiDownload)
             {
                 var session = entry.Direction == TransferDirection.ApiDownload ? apiWorker! : entry.Direction == TransferDirection.Download ? rightWorker! : leftWorker!;
                 var partial = entry.Destination + ".ioftp-part";
@@ -944,7 +1745,8 @@ public partial class MainWindow : Window
                 {
                     output.Seek(0, SeekOrigin.End);
                     entry.BytesTransferred = output.Length;
-                    await session.DownloadAsync(entry.Source, output, output.Length, progress, cancellationToken);
+                await session.DownloadAsync(entry.Source, output, output.Length, progress, cancellationToken);
+                    AppendTransferIntegrityNotices(entry, ("source", session));
                     await output.FlushAsync(cancellationToken);
                 }
                 File.Move(partial, entry.Destination, true);
@@ -956,17 +1758,28 @@ public partial class MainWindow : Window
                 await using var input = new FileStream(entry.Source, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, true);
                 var offset = Math.Min(entry.BytesTransferred, input.Length); input.Seek(offset, SeekOrigin.Begin);
                 await session.UploadAsync(entry.Destination, input, offset, progress, cancellationToken);
+                AppendTransferIntegrityNotices(entry, ("destination", session));
             }
             else
             {
                 var sourceSession = entry.Direction == TransferDirection.ApiFxp ? apiFxpSourceWorker! : entry.Direction == TransferDirection.RelayLeftToRight ? leftWorker! : rightWorker!;
                 var destinationSession = entry.Direction == TransferDirection.ApiFxp ? apiFxpDestinationWorker! : entry.Direction == TransferDirection.RelayLeftToRight ? rightWorker! : leftWorker!;
+                var sourceProfile = entry.Direction == TransferDirection.ApiFxp ? apiFxpSource! :
+                    entry.Direction == TransferDirection.RelayLeftToRight ? leftProfile! : rightProfile!;
+                var destinationProfile = entry.Direction == TransferDirection.ApiFxp ? apiFxpDestination! :
+                    entry.Direction == TransferDirection.RelayLeftToRight ? rightProfile! : leftProfile!;
                 await EnsureRemoteDirectoryAsync(destinationSession, RemoteParent(entry.Destination), cancellationToken);
                 var clearFxp = !sourceSession.UsesTlsControl || !destinationSession.UsesTlsControl ||
                     sourceSession.FxpProtection == FxpProtectionMode.Clear ||
                     destinationSession.FxpProtection == FxpProtectionMode.Clear;
-                var directFxpAvailable = clearFxp || destinationSession.Capabilities.Contains("CPSV") ||
-                    (sourceSession.Capabilities.Contains("SSCN") && destinationSession.Capabilities.Contains("SSCN"));
+                var directFxpAvailable = sourceProfile.Protocol != TransferProtocol.Sftp &&
+                    destinationProfile.Protocol != TransferProtocol.Sftp &&
+                    (clearFxp || destinationSession.Capabilities.Contains("CPSV") ||
+                    (sourceSession.Capabilities.Contains("SSCN") && destinationSession.Capabilities.Contains("SSCN")));
+                var pair = (Source: sourceProfile.Id, Destination: destinationProfile.Id);
+                var configuredReverse = PreferredReverseFxp(sourceProfile, destinationProfile);
+                var learnedReverse = configuredReverse is null && _reverseFxpPairs.Contains(pair);
+                var useReverse = clearFxp && (configuredReverse ?? learnedReverse);
                 if (directFxpAvailable)
                 {
                     try
@@ -974,9 +1787,29 @@ public partial class MainWindow : Window
                         LogText.AppendText($"{Environment.NewLine}Attempting direct {(clearFxp ? "clear" : "secure")} FXP: {entry.Name}");
                         var fxpStartedAt = DateTime.UtcNow;
                         using var monitorCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                        var destinationProfile = entry.Direction == TransferDirection.ApiFxp ? apiFxpDestination! : entry.Direction == TransferDirection.RelayLeftToRight ? rightProfile! : leftProfile!;
-                        var monitor = MonitorFxpAsync(destinationProfile, entry, monitorCancellation.Token);
-                        try { await sourceSession.FxpToAsync(destinationSession, entry.Source, entry.Destination, cancellationToken); }
+                        var monitor = MonitorFxpAsync(sourceProfile, destinationProfile, entry, monitorCancellation.Token);
+                        try
+                        {
+                            if (useReverse)
+                            {
+                                var routeSource = configuredReverse == true ? "configured" : "learned";
+                                LogText.AppendText($"{Environment.NewLine}Using {routeSource} PASV/PORT route for {sourceProfile.Name} → {destinationProfile.Name}: {entry.Name}");
+                                await sourceSession.FxpToAsync(destinationSession, entry.Source, entry.Destination,
+                                    cancellationToken, reverseDataConnection: true);
+                            }
+                            else
+                            {
+                                try { await sourceSession.FxpToAsync(destinationSession, entry.Source, entry.Destination, cancellationToken); }
+                                catch (FtpCommandException exception) when (clearFxp && exception.StatusCode == 425)
+                                {
+                                    LogText.AppendText($"{Environment.NewLine}Standard clear FXP timed out; retrying with source PASV and destination PORT: {entry.Name}");
+                                    await sourceSession.RetryFxpWithReversedTopologyAsync(
+                                        destinationSession, entry.Source, entry.Destination, cancellationToken);
+                                    if (_reverseFxpPairs.Add(pair)) _fxpRouteStore.SaveReverseRoutes(_reverseFxpPairs);
+                                    LogText.AppendText($"{Environment.NewLine}Remembered reverse FXP route permanently for {sourceProfile.Name} → {destinationProfile.Name}.");
+                                }
+                            }
+                        }
                         finally
                         {
                             monitorCancellation.Cancel();
@@ -990,9 +1823,12 @@ public partial class MainWindow : Window
                         var elapsed = Math.Max((DateTime.UtcNow - fxpStartedAt).TotalSeconds, 0.001);
                         if (entry.SpeedBytesPerSecond <= 0 && entry.TotalBytes > 0)
                             entry.SpeedBytesPerSecond = (long)(entry.TotalBytes / elapsed);
+                        AppendFxpTimings(sourceSession);
+                        AppendTransferIntegrityNotices(entry, ("source", sourceSession), ("destination", destinationSession));
                         LogText.AppendText($"{Environment.NewLine}Direct FXP completed via {sourceSession.LastFxpNegotiation}: {entry.Name}");
                         entry.State = "Completed";
                         await RunScriptsAsync("AfterTransfer", TransferScriptVariables(entry, "Completed"), true);
+                        reuseWorkers = true;
                         return;
                     }
                     catch (FtpCommandException exception) when (exception.StatusCode == 553 && DestinationUsesXdupe(entry))
@@ -1001,13 +1837,22 @@ public partial class MainWindow : Window
                     }
                     catch (Exception fxpException)
                     {
+                        if (learnedReverse && (fxpException is OperationCanceledException or FtpCommandException { StatusCode: 425 }) &&
+                            _reverseFxpPairs.Remove(pair))
+                        {
+                            _fxpRouteStore.SaveReverseRoutes(_reverseFxpPairs);
+                            LogText.AppendText($"{Environment.NewLine}Removed stale learned reverse route for {sourceProfile.Name} → {destinationProfile.Name}.");
+                        }
+                        AppendFxpTimings(sourceSession);
+                        AppendFxpFailureDiagnostic(entry, sourceProfile, destinationProfile, sourceSession,
+                            destinationSession, clearFxp, PreferredReverseFxp(sourceProfile, destinationProfile));
                         LogText.AppendText($"{Environment.NewLine}Direct FXP rejected ({FriendlyMessage(fxpException)}). Reconnecting for client relay…");
                         if (entry.Direction == TransferDirection.ApiFxp)
                         {
                             if (apiFxpSourceWorker is not null) await apiFxpSourceWorker.DisposeAsync();
                             if (apiFxpDestinationWorker is not null) await apiFxpDestinationWorker.DisposeAsync();
-                            apiFxpSourceWorker = await CreateWorkerAsync(ApplyGlobalProxy(apiFxpSource!), cancellationToken);
-                            apiFxpDestinationWorker = await CreateWorkerAsync(ApplyGlobalProxy(apiFxpDestination!), cancellationToken);
+                            apiFxpSourceWorker = await CreateWorkerAsync(apiFxpSource!, cancellationToken);
+                            apiFxpDestinationWorker = await CreateWorkerAsync(apiFxpDestination!, cancellationToken);
                             sourceSession = apiFxpSourceWorker; destinationSession = apiFxpDestinationWorker;
                         }
                         else
@@ -1028,23 +1873,28 @@ public partial class MainWindow : Window
                 {
                     await using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024, true))
                         await sourceSession.DownloadAsync(entry.Source, file, 0, progress, cancellationToken);
+                    AppendTransferIntegrityNotices(entry, ("source", sourceSession));
                     await using var fileInput = new FileStream(temporary, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, true);
                     entry.BytesTransferred = 0;
                     await destinationSession.UploadAsync(entry.Destination, fileInput, 0, progress, cancellationToken);
+                    AppendTransferIntegrityNotices(entry, ("destination", destinationSession));
                 }
                 finally { if (File.Exists(temporary)) File.Delete(temporary); }
             }
             entry.State = "Completed";
             LogText.AppendText($"{Environment.NewLine}Transfer completed: {entry.Name}");
             await RunScriptsAsync("AfterTransfer", TransferScriptVariables(entry, "Completed"), true);
+            reuseWorkers = true;
         }
         catch (FtpCommandException exception) when (exception.StatusCode == 553 && DestinationUsesXdupe(entry))
         {
+            _raceLog.Write("SKIP", $"{entry.Id} {entry.Name}: XDUPE, file already exists");
             ApplyXdupeReply(entry, exception.Message);
             entry.BytesTransferred = entry.TotalBytes;
             entry.State = "Completed";
             LogText.AppendText($"{Environment.NewLine}XDUPE skipped existing remote file: {entry.Name}");
             await RunScriptsAsync("AfterTransfer", TransferScriptVariables(entry, "XDUPE skipped"), true);
+            reuseWorkers = true;
             return;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1056,19 +1906,74 @@ public partial class MainWindow : Window
         catch (Exception exception)
         {
             entry.State = "Failed";
+            _raceLog.Write("ERROR", $"{entry.Id} {entry.Name}: {exception.GetType().Name}" + (exception is FtpCommandException ftpError ? $" (FTP {ftpError.StatusCode})" : ""));
             LogText.AppendText($"{Environment.NewLine}Transfer failed ({entry.Name}): {FriendlyMessage(exception)}");
             await RunScriptsAsync("TransferFailed", TransferScriptVariables(entry, FriendlyMessage(exception)), true);
             throw;
         }
         finally
         {
-            if (leftWorker is not null) await leftWorker.DisposeAsync();
-            if (rightWorker is not null) await rightWorker.DisposeAsync();
-            if (apiWorker is not null) await apiWorker.DisposeAsync();
-            if (apiFxpSourceWorker is not null) await apiFxpSourceWorker.DisposeAsync();
-            if (apiFxpDestinationWorker is not null) await apiFxpDestinationWorker.DisposeAsync();
+            await ReleaseWorkerAsync(leftProfile, leftWorker, reuseWorkers);
+            await ReleaseWorkerAsync(rightProfile, rightWorker, reuseWorkers);
+            await ReleaseWorkerAsync(apiProfile, apiWorker, reuseWorkers);
+            await ReleaseWorkerAsync(apiFxpSource, apiFxpSourceWorker, reuseWorkers);
+            await ReleaseWorkerAsync(apiFxpDestination, apiFxpDestinationWorker, reuseWorkers);
             SaveQueue(); UpdateQueueStatus(); LogText.ScrollToEnd();
         }
+    }
+
+    private void AppendFxpTimings(FtpRemoteSession session)
+    {
+        if (session.LastFxpStageTimings.Count == 0) return;
+        var values = session.LastFxpStageTimings.Select(stage =>
+            $"{stage.Name} {(stage.Elapsed.TotalSeconds >= 1 ? $"{stage.Elapsed.TotalSeconds:0.00}s" : $"{stage.Elapsed.TotalMilliseconds:0}ms")}");
+        LogText.AppendText($"{Environment.NewLine}FXP timings: {string.Join(" | ", values)}");
+    }
+
+    private void AppendTransferIntegrityNotices(QueueEntryView entry,
+        params (string Role, FtpRemoteSession Session)[] sessions)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (role, session) in sessions)
+        foreach (var rawLine in session.LastTransferCompletion.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (!rawLine.Contains("0SIZE", StringComparison.OrdinalIgnoreCase) &&
+                !rawLine.Contains("BADCRC", StringComparison.OrdinalIgnoreCase)) continue;
+            var line = Regex.Replace(rawLine, "\\x1B\\[[0-9;?]*[ -/]*[@-~]", "").Trim();
+            if (line.Length == 0 || !seen.Add(line)) continue;
+            var marker = line.Contains("BADCRC", StringComparison.OrdinalIgnoreCase) ? "BADCRC" : "0SIZE";
+            LogText.AppendText($"{Environment.NewLine}Transfer integrity [{marker}] ({role}, {entry.Name}): {line}");
+        }
+    }
+
+    private void AppendFxpFailureDiagnostic(QueueEntryView entry, ConnectionProfile sourceProfile,
+        ConnectionProfile destinationProfile, FtpRemoteSession sourceSession, FtpRemoteSession destinationSession,
+        bool clearFxp, bool? configuredReverse)
+    {
+        var route = configuredReverse == true ? "source PASV / destination PORT"
+            : configuredReverse == false ? "destination PASV / source PORT"
+            : sourceSession.LastFxpNegotiation == "None" ? "Auto (negotiation did not complete)"
+            : sourceSession.LastFxpNegotiation;
+        LogText.AppendText(
+            $"{Environment.NewLine}FXP diagnostic:" +
+            $"{Environment.NewLine}  Source: {sourceProfile.Name} ({sourceSession.ConnectedHost}:{sourceSession.ConnectedPort})" +
+            $"{Environment.NewLine}  > CWD {RemoteParent(entry.Source)}" +
+            $"{Environment.NewLine}  > RETR {RemoteLeaf(entry.Source)}" +
+            $"{Environment.NewLine}  Destination: {destinationProfile.Name} ({destinationSession.ConnectedHost}:{destinationSession.ConnectedPort})" +
+            $"{Environment.NewLine}  > CWD {RemoteParent(entry.Destination)}" +
+            $"{Environment.NewLine}  > STOR {RemoteLeaf(entry.Destination)}" +
+            $"{Environment.NewLine}  Destination parent: {RemoteParent(entry.Destination)}" +
+            $"{Environment.NewLine}  Data protection: {(clearFxp ? "Clear" : "TLS")}; route: {route}" +
+            $"{Environment.NewLine}  PRET: source {(sourceProfile.EffectiveOptions.NeedsPret ? "on" : "off")}, destination {(destinationProfile.EffectiveOptions.NeedsPret ? "on" : "off")}");
+    }
+
+    private static bool? PreferredReverseFxp(ConnectionProfile source, ConnectionProfile destination)
+    {
+        var reverse = source.EffectiveOptions.FxpDataRole == FxpDataRole.Passive ||
+            destination.EffectiveOptions.FxpDataRole == FxpDataRole.Active;
+        var standard = source.EffectiveOptions.FxpDataRole == FxpDataRole.Active ||
+            destination.EffectiveOptions.FxpDataRole == FxpDataRole.Passive;
+        return reverse == standard ? null : reverse;
     }
 
     private bool DestinationUsesXdupe(QueueEntryView entry)
@@ -1132,64 +2037,200 @@ public partial class MainWindow : Window
         }
     }
 
-    private static async Task MonitorFxpAsync(ConnectionProfile destinationProfile, QueueEntryView entry, CancellationToken cancellationToken)
+    private static async Task MonitorFxpAsync(ConnectionProfile sourceProfile, ConnectionProfile destinationProfile,
+        QueueEntryView entry, CancellationToken cancellationToken)
     {
         await using var monitor = await CreateWorkerAsync(destinationProfile, cancellationToken);
+        FtpRemoteSession? sourceMonitor = null;
         long previousBytes = 0;
         var previousAt = DateTime.UtcNow;
         var hasSizeBaseline = false;
         bool? ioGuiExtAvailable = null;
-        while (true)
+        var destinationMisses = 0;
+        var lastActivityAt = DateTime.UtcNow;
+
+        void ApplyActivitySample(long transferred, long speed)
         {
-            await Task.Delay(250, cancellationToken);
-            // ioFTPD commonly preallocates the complete destination file, so SIZE
-            // cannot reveal live FXP progress. ioGuiExt exposes the same transfer
-            // counter and speed that ioGUI uses; prefer it when available.
-            try
+            var now = DateTime.UtcNow;
+            var elapsed = Math.Clamp((now - lastActivityAt).TotalSeconds, 0, 2);
+            lastActivityAt = now;
+            if (transferred > entry.BytesTransferred)
+                entry.BytesTransferred = entry.TotalBytes > 0 ? Math.Min(transferred, entry.TotalBytes) : transferred;
+            else if (speed > 0 && elapsed > 0)
             {
-                var activity = await monitor.ExecuteCommandAsync("SITE ioGuiExt who", cancellationToken);
-                ioGuiExtAvailable = activity.StatusCode is >= 200 and < 300;
-                if (ioGuiExtAvailable == true)
+                var estimated = entry.BytesTransferred + (long)(speed * elapsed);
+                entry.BytesTransferred = entry.TotalBytes > 0 ? Math.Min(estimated, entry.TotalBytes) : estimated;
+            }
+            if (speed > 0) entry.SpeedBytesPerSecond = speed;
+        }
+
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(400, cancellationToken);
+                // FluxTelemetry keeps one persistent ioFTPD session and exposes the
+                // live client-who snapshot locally. Prefer it so concurrent FXP jobs
+                // do not each consume another FTP slot merely to sample progress.
+                try
                 {
-                    if (TryReadIoFtpdTransfer(activity.Message, entry, out var transferred, out var speed))
+                    if (await TryReadTelemetryTransferAsync(entry, cancellationToken) is { } telemetry)
                     {
-                        if (transferred >= 0) entry.BytesTransferred = transferred;
-                        // ioFTPD briefly reports zero while changing internal state.
-                        // Retain the latest valid sample rather than flashing 0 B/s.
-                        if (speed > 0) entry.SpeedBytesPerSecond = speed;
+                        ApplyActivitySample(telemetry.Transferred, telemetry.Speed);
+                        destinationMisses = 0;
+                        continue;
                     }
+                }
+                catch (Exception) when (!cancellationToken.IsCancellationRequested)
+                {
+                    // Optional bridge unavailable or stale: retain the existing
+                    // ioGuiExt and SIZE paths for ioFTPD and all other FTP servers.
+                }
+
+                // ioFTPD commonly preallocates the complete destination file, so SIZE
+                // cannot reveal live FXP progress. ioGuiExt exposes the same transfer
+                // counter and speed that ioGUI uses; prefer it when available.
+                var activityMatched = false;
+                try
+                {
+                    var activity = await monitor.ExecuteCommandAsync("SITE ioGuiExt who", cancellationToken);
+                    ioGuiExtAvailable = activity.StatusCode is >= 200 and < 300;
+                    if (ioGuiExtAvailable == true &&
+                        TryReadIoFtpdTransfer(activity.Message, entry, expectUpload: true, out var transferred, out var speed))
+                    {
+                        // ioFTPD can leave TRANSFERSIZE at zero while still reporting
+                        // a valid speed. Integrate that speed until a better counter
+                        // arrives so the aggregate progress bar keeps moving.
+                        ApplyActivitySample(transferred, speed);
+                        activityMatched = true;
+                    }
+                }
+                catch (Exception) when (!cancellationToken.IsCancellationRequested)
+                {
+                    ioGuiExtAvailable = false;
+                }
+
+                if (activityMatched)
+                {
+                    destinationMisses = 0;
                     continue;
                 }
-            }
-            catch (Exception) when (!cancellationToken.IsCancellationRequested)
-            {
-                // Not every FTP server has ioGuiExt; fall through to SIZE polling.
-            }
 
-            var bytes = await monitor.GetSizeAsync(entry.Destination, cancellationToken);
-            if (bytes is null) continue;
-            var now = DateTime.UtcNow;
-            if (!hasSizeBaseline)
-            {
+                // DrFTPD exposes live FXP speed through SITE WHO. Its default
+                // theme identifies uploads/downloads and includes the active
+                // filename, which lets us match concurrent jobs safely.
+                try
+                {
+                    var who = await monitor.ExecuteCommandAsync("SITE WHO", cancellationToken);
+                    if (who.StatusCode is >= 200 and < 300 &&
+                        TryReadDrFtpdTransfer(who.Message, entry, expectUpload: true, out var speed))
+                    {
+                        ApplyActivitySample(-1, speed);
+                        destinationMisses = 0;
+                        continue;
+                    }
+                }
+                catch (Exception) when (!cancellationToken.IsCancellationRequested) { }
+
+                destinationMisses++;
+                if (sourceMonitor is null && destinationMisses >= 3)
+                {
+                    try { sourceMonitor = await CreateWorkerAsync(sourceProfile, cancellationToken); }
+                    catch (Exception) when (!cancellationToken.IsCancellationRequested) { }
+                }
+                if (sourceMonitor is not null)
+                {
+                    try
+                    {
+                        var sourceActivity = await sourceMonitor.ExecuteCommandAsync("SITE ioGuiExt who", cancellationToken);
+                        if (sourceActivity.StatusCode is >= 200 and < 300 &&
+                            TryReadIoFtpdTransfer(sourceActivity.Message, entry, expectUpload: false, out var transferred, out var speed))
+                        {
+                            ApplyActivitySample(transferred, speed);
+                            continue;
+                        }
+
+                        var sourceWho = await sourceMonitor.ExecuteCommandAsync("SITE WHO", cancellationToken);
+                        if (sourceWho.StatusCode is >= 200 and < 300 &&
+                            TryReadDrFtpdTransfer(sourceWho.Message, entry, expectUpload: false, out speed))
+                        {
+                            ApplyActivitySample(-1, speed);
+                            continue;
+                        }
+                    }
+                    catch (Exception) when (!cancellationToken.IsCancellationRequested) { }
+                }
+
+                // If ioGuiExt answered but did not contain a matching row, SIZE is
+                // still worth trying. Previously this fallback was skipped entirely.
+                var bytes = await monitor.GetSizeAsync(entry.Destination, cancellationToken);
+                if (bytes is null) continue;
+                var now = DateTime.UtcNow;
+                if (!hasSizeBaseline)
+                {
+                    previousBytes = bytes.Value;
+                    previousAt = now;
+                    hasSizeBaseline = true;
+                    continue;
+                }
+                var seconds = Math.Max((now - previousAt).TotalSeconds, 0.001);
+                var measuredSpeed = Math.Max(0, (long)((bytes.Value - previousBytes) / seconds));
+                if (measuredSpeed > 0 || ioGuiExtAvailable == false) entry.SpeedBytesPerSecond = measuredSpeed;
+                entry.BytesTransferred = bytes.Value;
                 previousBytes = bytes.Value;
                 previousAt = now;
-                hasSizeBaseline = true;
-                continue;
             }
-            var seconds = Math.Max((now - previousAt).TotalSeconds, 0.001);
-            var measuredSpeed = Math.Max(0, (long)((bytes.Value - previousBytes) / seconds));
-            if (measuredSpeed > 0 || ioGuiExtAvailable == false) entry.SpeedBytesPerSecond = measuredSpeed;
-            entry.BytesTransferred = bytes.Value;
-            previousBytes = bytes.Value;
-            previousAt = now;
+        }
+        finally
+        {
+            if (sourceMonitor is not null) await sourceMonitor.DisposeAsync();
         }
     }
 
-    private static bool TryReadIoFtpdTransfer(string response, QueueEntryView entry, out long transferred, out long speed)
+    private static async Task<(long Transferred, long Speed)?> TryReadTelemetryTransferAsync(
+        QueueEntryView entry, CancellationToken cancellationToken)
+    {
+        using var response = await TelemetryClient.GetAsync("activity", cancellationToken);
+        if (!response.IsSuccessStatusCode) return null;
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        var snapshot = await JsonSerializer.DeserializeAsync<TelemetryActivitySnapshot>(stream,
+            TelemetryJsonOptions, cancellationToken);
+        if (snapshot?.Sessions is null) return null;
+
+        var source = NormalizeTelemetryPath(entry.Source);
+        var destination = NormalizeTelemetryPath(entry.Destination);
+        TelemetryActivitySession? fallback = null;
+        var candidates = 0;
+        foreach (var session in snapshot.Sessions)
+        {
+            var upload = session.Direction.Equals("upload", StringComparison.OrdinalIgnoreCase) ||
+                         session.Action.StartsWith("STOR ", StringComparison.OrdinalIgnoreCase);
+            var download = session.Direction.Equals("download", StringComparison.OrdinalIgnoreCase) ||
+                           session.Action.StartsWith("RETR ", StringComparison.OrdinalIgnoreCase);
+            if (!upload && !download) continue;
+            var identity = NormalizeTelemetryPath($"{session.Action} {session.VirtualPath} {session.DataPath}");
+            if (!identity.Contains(entry.Name, StringComparison.OrdinalIgnoreCase)) continue;
+            candidates++;
+            fallback = session;
+            var expectedPath = upload ? destination : source;
+            if (!string.IsNullOrWhiteSpace(expectedPath) && identity.Contains(expectedPath, StringComparison.OrdinalIgnoreCase))
+                return (session.TransferredBytes, session.SpeedBytesPerSecond);
+        }
+        return candidates == 1 && fallback is not null
+            ? (fallback.TransferredBytes, fallback.SpeedBytesPerSecond)
+            : null;
+    }
+
+    private static string NormalizeTelemetryPath(string value) => value.Replace('\\', '/').Trim().TrimEnd('/');
+
+    private static bool TryReadIoFtpdTransfer(string response, QueueEntryView entry, bool expectUpload,
+        out long transferred, out long speed)
     {
         transferred = -1;
         speed = 0;
         var fileName = entry.Name;
+        (long Transferred, long Speed)? fallback = null;
+        var activeCandidates = 0;
         foreach (var line in response.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
         {
             var payload = line.Length > 4 && char.IsDigit(line[0]) && char.IsDigit(line[1]) && char.IsDigit(line[2])
@@ -1197,16 +2238,32 @@ public partial class MainWindow : Window
                 : line.Trim();
             if (!payload.StartsWith("cid |", StringComparison.OrdinalIgnoreCase)) continue;
             var parts = payload.Split('|').Select(part => part.Trim()).ToArray();
-            if (parts.Length < 19 || parts[16] == "0") continue;
-            var identity = $"{parts[10]} {parts[12]} {parts[13]}";
-            if (!identity.Contains(fileName, StringComparison.OrdinalIgnoreCase)) continue;
+            if (parts.Length < 19) continue;
+            var action = $"{parts[10]} {parts[16]}";
+            var expectedAction = expectUpload
+                ? action.Contains("STOR", StringComparison.OrdinalIgnoreCase) || action.Contains("UPLOAD", StringComparison.OrdinalIgnoreCase)
+                : action.Contains("RETR", StringComparison.OrdinalIgnoreCase) || action.Contains("DOWNLOAD", StringComparison.OrdinalIgnoreCase);
+            if (!expectedAction) continue;
 
-            if (long.TryParse(parts[17], NumberStyles.Integer, CultureInfo.InvariantCulture, out var bytes))
+            var bytes = long.TryParse(parts[17], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedBytes)
+                ? parsedBytes
+                : -1;
+            var parsedSpeed = ParseIoFtpdSpeed(parts[18]);
+            var identity = $"{parts[10]} {parts[12]} {parts[13]}";
+            if (identity.Contains(fileName, StringComparison.OrdinalIgnoreCase))
+            {
                 transferred = bytes;
-            speed = ParseIoFtpdSpeed(parts[18]);
-            return true;
+                speed = parsedSpeed;
+                return true;
+            }
+
+            activeCandidates++;
+            fallback = (bytes, parsedSpeed);
         }
-        return false;
+        if (activeCandidates != 1 || fallback is null) return false;
+        transferred = fallback.Value.Transferred;
+        speed = fallback.Value.Speed;
+        return true;
     }
 
     private static long ParseIoFtpdSpeed(string value)
@@ -1223,6 +2280,48 @@ public partial class MainWindow : Window
         return Math.Max(0, (long)(amount * multiplier));
     }
 
+    private static bool TryReadDrFtpdTransfer(string response, QueueEntryView entry, bool expectUpload, out long speed)
+    {
+        speed = 0;
+        var direction = expectUpload ? "UP" : "DN";
+        (string File, long Speed)? fallback = null;
+        var candidates = 0;
+        foreach (var rawLine in response.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var line = Regex.Replace(rawLine, @"^\s*\d{3}[- ]\s*", "").Trim();
+            var match = Regex.Match(line,
+                $@"->\s*{direction}\s+(?<speed>[0-9]+(?:[.,][0-9]+)?\s*[KMGTPE]?i?B)/s\s+(?:to|from)\s+.+?\s+-\s+(?<file>.+)$",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (!match.Success) continue;
+            var parsedSpeed = ParseDrFtpdSpeed(match.Groups["speed"].Value);
+            if (parsedSpeed <= 0) continue;
+            var file = match.Groups["file"].Value.Trim();
+            if (file.Contains(entry.Name, StringComparison.OrdinalIgnoreCase))
+            {
+                speed = parsedSpeed;
+                return true;
+            }
+            candidates++;
+            fallback = (file, parsedSpeed);
+        }
+        if (candidates != 1 || fallback is null) return false;
+        speed = fallback.Value.Speed;
+        return true;
+    }
+
+    private static long ParseDrFtpdSpeed(string value)
+    {
+        var match = Regex.Match(value.Trim().Replace(',', '.'),
+            @"^(?<amount>[0-9]+(?:\.[0-9]+)?)\s*(?<prefix>[KMGTPE]?)(?<binary>I?)B$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!match.Success || !double.TryParse(match.Groups["amount"].Value,
+                NumberStyles.Float, CultureInfo.InvariantCulture, out var amount)) return 0;
+        var exponent = "KMGTPE".IndexOf(match.Groups["prefix"].Value.ToUpperInvariant(), StringComparison.Ordinal) + 1;
+        var basis = match.Groups["binary"].Value.Length > 0 ? 1024d : 1000d;
+        var multiplier = exponent <= 0 ? 1d : Math.Pow(basis, exponent);
+        return Math.Max(0, (long)(amount * multiplier));
+    }
+
     private static async Task<FtpRemoteSession> CreateWorkerAsync(ConnectionProfile profile, CancellationToken cancellationToken)
     {
         var session = new FtpRemoteSession();
@@ -1234,6 +2333,117 @@ public partial class MainWindow : Window
         }
         catch { await session.DisposeAsync(); throw; }
     }
+
+    private sealed record TelemetryActivitySnapshot(IReadOnlyList<TelemetryActivitySession> Sessions);
+    private sealed record TelemetryActivitySession(string Direction, long SpeedBytesPerSecond, long TransferredBytes,
+        string Action, string VirtualPath, string DataPath);
+
+    private async Task<FtpRemoteSession> RentWorkerAsync(ConnectionProfile profile, CancellationToken cancellationToken)
+    {
+        await DisposeStalePooledWorkersAsync(profile);
+        var pool = _workerPool.GetOrAdd(profile, _ => new ConcurrentBag<PooledWorker>());
+        while (pool.TryTake(out var pooled))
+        {
+            var session = pooled.Session;
+            if (!session.IsConnected) { await session.DisposeAsync(); continue; }
+            if (DateTimeOffset.UtcNow - pooled.ReturnedAt < WorkerHealthCheckInterval) return session;
+            try
+            {
+                var response = await session.ExecuteCommandAsync("NOOP", cancellationToken);
+                if (response.StatusCode is >= 200 and < 300) return session;
+            }
+            catch (Exception) when (!cancellationToken.IsCancellationRequested) { }
+            catch
+            {
+                await session.DisposeAsync();
+                throw;
+            }
+            await session.DisposeAsync();
+        }
+        return await CreateWorkerAsync(profile, cancellationToken);
+    }
+
+    private async Task WarmWorkersForDirectionAsync(TransferDirection direction, int fileCount, CancellationToken cancellationToken)
+    {
+        if (fileCount <= 0 || _workerPoolShuttingDown) return;
+        var profiles = new ProfileStore().Load();
+        var requested = new Dictionary<ConnectionProfile, int>();
+
+        void Add(Guid? profileId, bool download)
+        {
+            if (profileId is null) return;
+            var profile = profiles.FirstOrDefault(item => item.Id == profileId);
+            if (profile is null) return;
+            profile = ApplyGlobalProxy(profile);
+            var options = profile.EffectiveOptions;
+            var directional = download ? options.MaxDownloadSlots : options.MaxUploadSlots;
+            var desired = Math.Min(fileCount, Math.Min(options.MaxSlots, directional));
+            if (desired > 0) requested[profile] = Math.Max(requested.GetValueOrDefault(profile), desired);
+        }
+
+        var sites = SitesFor(direction);
+        Add(sites.Source, true);
+        Add(sites.Destination, false);
+        if (requested.Count == 0) return;
+
+        var started = DateTime.UtcNow;
+        await Task.WhenAll(requested.Select(async pair =>
+        {
+            await DisposeStalePooledWorkersAsync(pair.Key);
+            var pool = _workerPool.GetOrAdd(pair.Key, _ => new ConcurrentBag<PooledWorker>());
+            var missing = Math.Max(0, pair.Value - pool.Count);
+            if (missing == 0) return;
+            var sessions = await Task.WhenAll(Enumerable.Range(0, missing).Select(async _ =>
+            {
+                try { return await CreateWorkerAsync(pair.Key, cancellationToken); }
+                catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+                {
+                    LogText.Dispatcher.Invoke(() => LogText.AppendText(
+                        $"{Environment.NewLine}Could not prewarm a slot for {pair.Key.Name}: {FriendlyMessage(exception)}"));
+                    return null;
+                }
+            }));
+            foreach (var session in sessions)
+                if (session is not null) pool.Add(new PooledWorker(session, DateTimeOffset.UtcNow));
+        }));
+        var elapsed = DateTime.UtcNow - started;
+        LogText.AppendText($"{Environment.NewLine}Transfer slots ready in {elapsed.TotalSeconds:0.00}s.");
+    }
+
+    private async Task ReleaseWorkerAsync(ConnectionProfile? profile, FtpRemoteSession? session, bool reusable)
+    {
+        if (session is null) return;
+        if (!reusable || !session.IsConnected || _workerPoolShuttingDown || profile is null)
+        {
+            await session.DisposeAsync();
+            return;
+        }
+        _workerPool.GetOrAdd(profile, _ => new ConcurrentBag<PooledWorker>())
+            .Add(new PooledWorker(session, DateTimeOffset.UtcNow));
+    }
+
+    private async Task DisposePooledWorkersAsync(Guid? profileId = null)
+    {
+        var pools = _workerPool.Where(pair => profileId is null || pair.Key.Id == profileId).ToList();
+        foreach (var pair in pools)
+        {
+            if (!_workerPool.TryRemove(pair.Key, out var pool)) continue;
+            while (pool.TryTake(out var pooled)) await pooled.Session.DisposeAsync();
+        }
+    }
+
+    private async Task DisposeStalePooledWorkersAsync(ConnectionProfile currentProfile)
+    {
+        var staleProfiles = _workerPool.Keys
+            .Where(profile => profile.Id == currentProfile.Id && profile != currentProfile).ToList();
+        foreach (var profile in staleProfiles)
+        {
+            if (!_workerPool.TryRemove(profile, out var pool)) continue;
+            while (pool.TryTake(out var pooled)) await pooled.Session.DisposeAsync();
+        }
+    }
+
+    private sealed record PooledWorker(FtpRemoteSession Session, DateTimeOffset ReturnedAt);
 
     private void PauseTransfer_Click(object sender, RoutedEventArgs e)
     {
@@ -1269,6 +2479,7 @@ public partial class MainWindow : Window
 
     private void RemoveTransferJob(Guid id)
     {
+        _raceLog.Write("QUEUE", $"Removed job {id}");
         _engine.Remove(id);
         var entry = _queue.FirstOrDefault(item => item.Id == id);
         if (entry is not null) _queue.Remove(entry);
@@ -1277,6 +2488,7 @@ public partial class MainWindow : Window
 
     private void ClearTransferJobs()
     {
+        _raceLog.Write("QUEUE", "Queue cleared");
         _engine.Clear();
         _queue.Clear();
         SaveQueue(); UpdateQueueStatus();
@@ -1291,7 +2503,7 @@ public partial class MainWindow : Window
             var saved = JsonSerializer.Deserialize<List<QueueSnapshot>>(File.ReadAllText(source)) ?? [];
             foreach (var item in saved)
                 _queue.Add(new QueueEntryView(item.Name, item.Source, item.Destination, item.Direction, item.Id == Guid.Empty ? Guid.NewGuid() : item.Id)
-                { State = item.State is "Completed" ? "Completed" : "Paused", BytesTransferred = item.BytesTransferred, TotalBytes = item.TotalBytes, SourceProfileId = item.SourceProfileId, DestinationProfileId = item.DestinationProfileId, QueuedAt = item.QueuedAt, StartedAt = item.StartedAt });
+                { State = item.State is "Completed" ? "Completed" : "Paused", BytesTransferred = item.BytesTransferred, TotalBytes = item.TotalBytes, SourceProfileId = item.SourceProfileId, DestinationProfileId = item.DestinationProfileId, QueuedAt = item.QueuedAt, StartedAt = item.StartedAt, RuleSection = item.RuleSection, RuleRelease = item.RuleRelease });
             UpdateQueueStatus();
             if (source == _oldQueuePath) SaveQueue();
         }
@@ -1303,7 +2515,7 @@ public partial class MainWindow : Window
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_queuePath)!);
-            var snapshots = _queue.Select(item => new QueueSnapshot(item.Name, item.Source, item.Destination, item.Direction, item.State, item.BytesTransferred, item.TotalBytes, item.Id, item.SourceProfileId, item.DestinationProfileId, item.QueuedAt, item.StartedAt));
+            var snapshots = _queue.Select(item => new QueueSnapshot(item.Name, item.Source, item.Destination, item.Direction, item.State, item.BytesTransferred, item.TotalBytes, item.Id, item.SourceProfileId, item.DestinationProfileId, item.QueuedAt, item.StartedAt, item.RuleSection, item.RuleRelease));
             var temporary = _queuePath + ".tmp"; File.WriteAllText(temporary, JsonSerializer.Serialize(snapshots, new JsonSerializerOptions { WriteIndented = true }));
             File.Move(temporary, _queuePath, true);
         }
@@ -1316,9 +2528,10 @@ public partial class MainWindow : Window
     {
         Dispatcher.BeginInvoke(() =>
         {
+            var queueById = _queue.ToDictionary(item => item.Id);
             foreach (var status in _engine.Snapshot())
             {
-                var entry = _queue.FirstOrDefault(item => item.Id == status.Item.Id); if (entry is null) continue;
+                if (!queueById.TryGetValue(status.Item.Id, out var entry)) continue;
                 entry.State = status.State switch
                 {
                     TransferWorkState.Queued => "Queued", TransferWorkState.Running => "Transferring",
@@ -1358,13 +2571,60 @@ public partial class MainWindow : Window
     {
         SaveWindowLayout();
         _legendTimer.Stop();
+        _raceLogTimer.Stop();
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
         if (_apiServer is not null) await _apiServer.DisposeAsync();
+        if (_ircService is not null) await _ircService.DisposeAsync();
+        _workerPoolShuttingDown = true;
         await _engine.DisposeAsync();
+        await DisposePooledWorkersAsync();
         if (_remoteSession is not null) await _remoteSession.DisposeAsync();
         if (_leftRemoteSession is not null) await _leftRemoteSession.DisposeAsync();
+        _raceLog.Write("SESSION", "FluxFTP stopped");
         base.OnClosed(e);
+    }
+
+    private void RaceLog_Click(object sender, RoutedEventArgs e)
+    {
+        if (_raceLogWindow is not null) { _raceLogWindow.Activate(); return; }
+        _raceLog.Maintain();
+        _raceLogWindow = new RaceLogWindow(_raceLog) { Owner = this };
+        _raceLogWindow.Closed += (_, _) => _raceLogWindow = null;
+        _raceLogWindow.Show();
+    }
+
+    private void TrackRaceEntry(QueueEntryView entry)
+    {
+        var previous = entry.State;
+        string Site(Guid? id) => id is { } value ? _raceSiteNames.GetValueOrDefault(value, value.ToString()) : "Local";
+        void Record() => _raceLog.Write("TRANSFER", $"{entry.Id} {entry.State} {entry.Direction} {entry.Name} | {Site(entry.SourceProfileId)}:{entry.Source} -> {Site(entry.DestinationProfileId)}:{entry.Destination} | {entry.BytesTransferred}/{entry.TotalBytes} bytes");
+        Record();
+        entry.PropertyChanged += (_, change) =>
+        {
+            if (change.PropertyName != nameof(QueueEntryView.State) || entry.State == previous) return;
+            previous = entry.State;
+            Record();
+        };
+    }
+
+    private void StartQueue_Click(object sender, RoutedEventArgs e)
+    {
+        var snapshot = _engine.Snapshot().ToDictionary(status => status.Item.Id);
+        var candidates = _queue.Where(item => item.State is "Queued" or "Paused" or "Failed").ToList();
+        ScheduleBatch(candidates.Where(entry => !snapshot.ContainsKey(entry.Id)));
+        _engine.Resume(candidates.Where(entry => snapshot.TryGetValue(entry.Id, out var status) &&
+            status.State is TransferWorkState.Paused or TransferWorkState.Failed).Select(entry => entry.Id));
+        LogText.AppendText($"{Environment.NewLine}Transfer queue started.");
+        LogText.ScrollToEnd();
+    }
+
+    private void StopQueue_Click(object sender, RoutedEventArgs e)
+    {
+        foreach (var status in _engine.Snapshot().Where(status => status.State is TransferWorkState.Queued or TransferWorkState.Running))
+            _engine.Pause(status.Item.Id);
+        LogText.AppendText($"{Environment.NewLine}Transfer queue stopped. Active jobs are being paused.");
+        LogText.ScrollToEnd();
     }
 
     protected override void OnClosing(CancelEventArgs e)
@@ -1519,6 +2779,8 @@ public partial class MainWindow : Window
         var mode = _settings.LegendBarMode;
         LegendBar.Visibility = mode.Equals("Hidden", StringComparison.OrdinalIgnoreCase) ? Visibility.Collapsed : Visibility.Visible;
         if (LegendBar.Visibility != Visibility.Visible) return;
+        var scrolling = mode.Equals("Scrolling", StringComparison.OrdinalIgnoreCase);
+        ApplyLegendLayout(scrolling);
         var snapshot = GetMetricsSnapshot();
         var compact = $"Sites {snapshot.ConnectedSites}/{snapshot.ConfiguredSites}   Jobs {snapshot.ActiveJobs}/{_queue.Count}   Speed {snapshot.TotalSpeed}   Transferred {snapshot.Transferred}";
         LegendText.Text = mode switch
@@ -1528,26 +2790,82 @@ public partial class MainWindow : Window
             "Scrolling" => ScrollLegend(compact),
             _ => compact
         };
-        UpdateStatusProgress();
+        if (!scrolling) UpdateStatusProgress();
+    }
+
+    private void ApplyLegendLayout(bool scrolling)
+    {
+        Grid.SetColumnSpan(LegendText, scrolling ? 11 : 1);
+        Panel.SetZIndex(LegendText, scrolling ? 1 : 0);
+
+        var statusVisibility = scrolling ? Visibility.Collapsed : Visibility.Visible;
+        TransferBytesSeparator.Visibility = statusVisibility;
+        TransferBytesText.Visibility = statusVisibility;
+        ProgressSeparator.Visibility = statusVisibility;
+        StatusProgressPanel.Visibility = statusVisibility;
+        RemainingSeparator.Visibility = statusVisibility;
+        RemainingText.Visibility = statusVisibility;
+
+        var compact = LegendBar.ActualWidth < 1050;
+        var veryCompact = LegendBar.ActualWidth < 850;
+        ElapsedSeparator.Visibility = scrolling || compact ? Visibility.Collapsed : Visibility.Visible;
+        ElapsedText.Visibility = scrolling || compact ? Visibility.Collapsed : Visibility.Visible;
+        QueueTimeSeparator.Visibility = scrolling || veryCompact ? Visibility.Collapsed : Visibility.Visible;
+        QueueTimeText.Visibility = scrolling || veryCompact ? Visibility.Collapsed : Visibility.Visible;
     }
 
     private void UpdateStatusProgress()
     {
         var active = _queue.Where(item => item.State is "Queued" or "Transferring").ToList();
-        var known = active.Where(item => item.TotalBytes > 0).ToList();
         if (active.Count == 0)
         {
-            StatusProgressBar.IsIndeterminate = false; StatusProgressBar.Value = 0; StatusProgressText.Text = "Idle"; return;
+            StatusProgressBar.IsIndeterminate = false;
+            StatusProgressBar.Value = 0;
+            StatusProgressText.Text = "Idle";
+            TransferBytesText.Text = "—";
+            ElapsedText.Text = "Elapsed: —";
+            RemainingText.Text = "Remaining: —";
+            QueueTimeText.Text = "Queue: 00:00";
+            return;
         }
-        if (known.Count == 0)
+
+        var current = active.FirstOrDefault(item => item.State == "Transferring") ?? active[0];
+        var direction = current.Direction switch
         {
-            StatusProgressBar.IsIndeterminate = true; StatusProgressText.Text = $"{active.Count} active"; return;
-        }
-        var total = known.Sum(item => (double)item.TotalBytes);
-        var transferred = known.Sum(item => Math.Min((double)item.BytesTransferred, item.TotalBytes));
-        var percent = total <= 0 ? 0 : transferred * 100 / total;
-        StatusProgressBar.IsIndeterminate = false; StatusProgressBar.Value = percent;
-        StatusProgressText.Text = $"{percent:0}%  {known.Count}/{active.Count}";
+            TransferDirection.Download or TransferDirection.DownloadFromLeft or TransferDirection.ApiDownload => "Receiving",
+            TransferDirection.Upload or TransferDirection.UploadToLeft => "Sending",
+            _ => "Relaying"
+        };
+        LegendText.Text = $"{direction}: {current.Name}";
+
+        var percent = current.TotalBytes > 0
+            ? Math.Clamp(current.BytesTransferred * 100d / current.TotalBytes, 0, 100)
+            : 0;
+        StatusProgressBar.IsIndeterminate = current.State == "Transferring" && current.TotalBytes <= 0;
+        StatusProgressBar.Value = percent;
+        StatusProgressText.Text = current.TotalBytes > 0 ? $"{percent:0}%" : current.State;
+        TransferBytesText.Text = current.SpeedBytesPerSecond > 0
+            ? $"{FormatSize(current.BytesTransferred)} ({FormatSize(current.SpeedBytesPerSecond)}/s)"
+            : current.TotalBytes > 0
+                ? $"{FormatSize(current.BytesTransferred)} / {FormatSize(current.TotalBytes)}"
+                : FormatSize(current.BytesTransferred);
+
+        var elapsed = current.StartedAt is { } started
+            ? DateTimeOffset.Now - started.ToLocalTime()
+            : TimeSpan.Zero;
+        ElapsedText.Text = $"Elapsed: {FormatTransferTime(elapsed)}";
+        var remainingBytes = Math.Max(0, current.TotalBytes - current.BytesTransferred);
+        RemainingText.Text = current.SpeedBytesPerSecond > 0 && current.TotalBytes > 0
+            ? $"Remaining: {FormatTransferTime(TimeSpan.FromSeconds(remainingBytes / (double)current.SpeedBytesPerSecond))}"
+            : "Remaining: —";
+        var oldestQueued = active.Where(item => item.QueuedAt is not null).MinBy(item => item.QueuedAt)?.QueuedAt;
+        QueueTimeText.Text = $"Queue: {FormatTransferTime(oldestQueued is { } queued ? DateTimeOffset.Now - queued.ToLocalTime() : TimeSpan.Zero)}";
+    }
+
+    private static string FormatTransferTime(TimeSpan value)
+    {
+        if (value < TimeSpan.Zero || !double.IsFinite(value.TotalSeconds)) return "—";
+        return value.TotalHours >= 1 ? $"{(int)value.TotalHours}:{value.Minutes:00}:{value.Seconds:00}" : $"{value.Minutes:00}:{value.Seconds:00}";
     }
 
     private string ScrollLegend(string text)
@@ -1571,12 +2889,14 @@ public partial class MainWindow : Window
         var dialog = new GlobalSettingsWindow(_settings) { Owner = this };
         if (dialog.ShowDialog() == true && dialog.Settings is not null)
         {
-            _settings = dialog.Settings; _settingsStore.Save(_settings);
+            _settings = dialog.Settings;
+            ThemeManager.Apply(_settings.Theme);
             ConfigureTrayIcon();
             UpdateLegendBar();
             _engine.ConfigureLocalSlots(_settings.MaxLocalDownloadSlots, _settings.MaxLocalUploadSlots);
             LogText.AppendText($"{Environment.NewLine}Global settings updated.");
             await RestartApiServerAsync();
+            await RestartIrcAsync();
         }
     }
 
@@ -1610,13 +2930,16 @@ public partial class MainWindow : Window
     private void MainWindow_StateChanged(object? sender, EventArgs e)
     {
         if (WindowState != WindowState.Minimized || !_settings.MinimizeToTray) return;
-        HideToTray();
+        // Run after WPF has completed the minimize transition; otherwise Windows can
+        // briefly retain an active taskbar button for the hidden window.
+        Dispatcher.BeginInvoke(HideToTray, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
     }
 
     private void HideToTray()
     {
         ShowInTaskbar = false;
         Hide();
+        _trayIcon.Visible = true;
     }
 
     private void RequestExit()
@@ -1640,6 +2963,48 @@ public partial class MainWindow : Window
         ShowInTaskbar = true;
         WindowState = WindowState.Normal;
         Activate();
+        Topmost = true;
+        Topmost = false;
+        Focus();
+    }
+
+    private async Task RestartIrcAsync()
+    {
+        await _ircRestartGate.WaitAsync();
+        try
+        {
+        if (_ircService is not null) { await _ircService.DisposeAsync(); _ircService = null; }
+        if (_settings.Irc?.Enabled != true) return;
+        var routing = new IrcRoutingStore();
+        var rules = new SiteRuleStore();
+        var catcher = new IrcCatcher(site => rules.Load().Where(f => f.Site.Equals(site, StringComparison.OrdinalIgnoreCase)).SelectMany(f => f.Sections.Select(s => s.Name)).ToArray(),
+            entry => _raceLog.Write("ANNOUNCE", $"{entry.Site} {entry.Event} [{entry.Section}] {entry.Release} | {entry.Network}/{entry.Channel}"));
+        var setup = new IrcSetupCommands(() => new ProfileStore().Load(), profiles => new ProfileStore().Save(profiles), rules, _settings.Irc.AdminSiteId, routing, catcher, _settings.Irc.NetworkName);
+        _ircService = new IrcManager(_settings, message => Dispatcher.BeginInvoke(() =>
+        {
+            LogText.AppendText($"{Environment.NewLine}{message}");
+            LogText.ScrollToEnd();
+        }), setupCommand: async (command, stillAuthorized) => await Dispatcher.InvokeAsync(() =>
+        {
+            if (!stillAuthorized()) return "ERROR: IRC identity changed; command cancelled.";
+            var result = setup.Execute(command);
+            if (result.StartsWith("OK:", StringComparison.Ordinal))
+            {
+                try
+                {
+                    ReloadQuickSites(LeftQuickSites); ReloadQuickSites(RightQuickSites);
+                    foreach (var profile in new ProfileStore().Load())
+                    {
+                        var options = profile.EffectiveOptions;
+                        _engine.RegisterOrUpdateSite(new SitePolicy(profile.Id, profile.Name, options.MaxSlots, options.MaxDownloadSlots, options.MaxUploadSlots, options.Priority));
+                    }
+                }
+                catch { LogText.AppendText($"{Environment.NewLine}IRC settings saved; reopen the site selector to refresh the view."); }
+            }
+            return result;
+        }), routing: routing, catcher: catcher);
+        }
+        finally { _ircRestartGate.Release(); }
     }
 
     private async Task RestartApiServerAsync()
@@ -1655,8 +3020,14 @@ public partial class MainWindow : Window
                 {
                     LogText.AppendText($"{Environment.NewLine}{message}");
                     LogText.ScrollToEnd();
+                }), connectIrc: async request => await await Dispatcher.InvokeAsync(async () =>
+                {
+                    var updated = _settings with { Irc = request.Apply(_settings.Irc) };
+                    _settingsStore.Save(updated);
+                    _settings = updated;
+                    await RestartIrcAsync();
                 }));
-            LogText.AppendText($"{Environment.NewLine}HTTPS/JSON API and cbftp UDP listening on {(_settings.ApiLocalhostOnly ? "localhost" : "0.0.0.0")}:{_settings.HttpsApiPort}");
+            LogText.AppendText($"{Environment.NewLine}HTTPS/JSON API listening on {(_settings.ApiLocalhostOnly ? "localhost" : "0.0.0.0")}:{_settings.HttpsApiPort}");
         }
         catch (Exception exception)
         {
@@ -1695,6 +3066,8 @@ public partial class MainWindow : Window
         var sourceBase = NormalizeRemotePath(request.SrcSection is not null ? ResolveApiSection(request.SrcSite, request.SrcSection) : request.SrcPath ?? "/");
         var destinationBase = NormalizeRemotePath(request.DstSection is not null ? ResolveApiSection(request.DstSite, request.DstSection) : request.DstPath ?? "/");
         var source = NormalizeRemotePath($"{sourceBase}/{request.Name}"); var destination = NormalizeRemotePath($"{destinationBase}/{request.Name}");
+        var siteRules = new SiteRuleStore().EvaluateDestination(request.DstSite, destination, request.DstSection, request.Name);
+        if (!siteRules.Accepted) throw new InvalidOperationException($"Site rules blocked transfer: {siteRules.Message}");
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(5)); await using var sourceSession = new FtpRemoteSession();
         await sourceSession.ConnectAsync(ApplyGlobalProxy(sourceProfile), timeout.Token);
         var item = (await sourceSession.ListAsync(sourceBase, timeout.Token)).FirstOrDefault(entry => entry.Name.Equals(request.Name, StringComparison.OrdinalIgnoreCase))
@@ -1710,7 +3083,7 @@ public partial class MainWindow : Window
                 throw new InvalidOperationException($"Nuke detection blocked automated transfer: {sourceDirectory} ({nuke.Display}).");
             foreach (var child in children)
             {
-                if (child.Name is "." or ".." || ShouldSkip(child.Name)) continue;
+                if (child.Name is "." or ".." || ShouldSkip(child.Name, child.IsDirectory)) continue;
                 var childDestination = NormalizeRemotePath($"{destinationDirectory}/{child.Name}");
                 if (child.IsDirectory) await QueueDirectory(child.FullPath, childDestination);
                 else apiFiles.Add((child, childDestination));
@@ -1723,14 +3096,14 @@ public partial class MainWindow : Window
             if (nuke.IsNuked) throw new InvalidOperationException($"Nuke detection blocked automated transfer: {item.FullPath} ({nuke.Display}).");
             apiFiles.Add((item, destination));
         }
-        foreach (var file in apiFiles)
-        {
-            var queuedEntry = AddQueue(file.Entry.Name, file.Entry.FullPath, file.Destination, TransferDirection.ApiFxp,
-                file.Entry.Size ?? 0, sourceProfile.Id, destinationProfile.Id);
-            jobIds.Add(queuedEntry.Id);
-            Schedule(queuedEntry);
-            queued++;
-        }
+        var queuedEntries = apiFiles.OrderBy(file => PriorityRank(file.Entry.Name))
+            .ThenBy(file => file.Entry.Name, NaturalNameComparer.Instance)
+            .Select(file => AddQueue(file.Entry.Name, file.Entry.FullPath, file.Destination, TransferDirection.ApiFxp,
+                file.Entry.Size ?? 0, sourceProfile.Id, destinationProfile.Id, persist: false)).ToList();
+        jobIds.AddRange(queuedEntries.Select(entry => entry.Id));
+        foreach (var entry in queuedEntries) { entry.RuleSection = request.DstSection; entry.RuleRelease = request.Name; }
+        queued = queuedEntries.Count;
+        ScheduleBatch(queuedEntries);
         LogText.AppendText($"{Environment.NewLine}API queued FXP {request.Name}: {request.SrcSite} → {request.DstSite} ({queued} files)"); LogText.ScrollToEnd();
         return new ApiTransferStartResult(request.Name, "QUEUED", queued, request.SrcSite, request.DstSite, jobIds);
     });
@@ -1759,7 +3132,7 @@ public partial class MainWindow : Window
                 throw new InvalidOperationException($"Nuke detection blocked automated download: {sourceDirectory} ({nuke.Display}).");
             foreach (var child in children)
             {
-                if (child.Name is "." or ".." || ShouldSkip(child.Name)) continue;
+                if (child.Name is "." or ".." || ShouldSkip(child.Name, child.IsDirectory)) continue;
                 var destination = Path.Combine(destinationDirectory, child.Name);
                 if (child.IsDirectory) { if (request.Recursive) await QueueDirectory(child.FullPath, destination); }
                 else downloadFiles.Add((child, destination));
@@ -1776,18 +3149,21 @@ public partial class MainWindow : Window
             if (nuke.IsNuked) throw new InvalidOperationException($"Nuke detection blocked automated download: {selected.FullPath} ({nuke.Display}).");
             downloadFiles.Add((selected, Path.Combine(localRoot, selected.Name)));
         }
-        foreach (var file in downloadFiles)
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(file.Destination)!);
-            Schedule(AddQueue(file.Entry.Name, file.Entry.FullPath, file.Destination, TransferDirection.ApiDownload, file.Entry.Size ?? 0, profile.Id));
-            queued++;
-        }
+        foreach (var file in downloadFiles) Directory.CreateDirectory(Path.GetDirectoryName(file.Destination)!);
+        var queuedEntries = downloadFiles.OrderBy(file => PriorityRank(file.Entry.Name))
+            .ThenBy(file => file.Entry.Name, NaturalNameComparer.Instance)
+            .Select(file => AddQueue(file.Entry.Name, file.Entry.FullPath, file.Destination, TransferDirection.ApiDownload,
+                file.Entry.Size ?? 0, profile.Id, persist: false)).ToList();
+        queued = queuedEntries.Count;
+        ScheduleBatch(queuedEntries);
         LogText.AppendText($"{Environment.NewLine}API queued {queued} download(s) from {profile.Name}: {remote}"); LogText.ScrollToEnd();
         return new { site = profile.Name, description = profile.Description, remote_path = remote, local_path = localRoot, queued, status = "QUEUED" };
     });
 
     private static string ResolveApiSection(string site, string sectionName)
     {
+        var rulePath = new SiteRuleStore().ResolvePath(site, sectionName);
+        if (rulePath is not null) return rulePath;
         var section = new SectionStore().Load().FirstOrDefault(item => item.Name.Equals(sectionName, StringComparison.OrdinalIgnoreCase));
         return section?.SitePaths.FirstOrDefault(pair => pair.Key.Equals(site, StringComparison.OrdinalIgnoreCase)).Value
             ?? throw new KeyNotFoundException($"Section {sectionName} is not configured for {site}.");
@@ -1822,15 +3198,56 @@ public partial class MainWindow : Window
 
     private static string RemoteLeaf(string path) => path.TrimEnd('/').Split('/').LastOrDefault() ?? path;
 
-    private sealed record LocalEntryView(string Name, string Size, string Modified, string Attributes, string Status, bool IsNuked, string FullPath, bool IsDirectory);
-    private sealed record RemoteEntryView(string Name, string DisplaySize, string DisplayModified, string Attributes, string Status, bool IsNuked, string FullPath, bool IsDirectory);
+    private sealed record LocalEntryView(string Name, string Size, string Modified, string Attributes, string Status, bool IsNuked, string FullPath, bool IsDirectory, long SortSize, DateTime SortModified);
+    private sealed record RemoteEntryView(string Name, string DisplaySize, string DisplayModified, string Attributes, string Status, bool IsNuked, string FullPath, bool IsDirectory, long SortSize, DateTime SortModified);
 
-    private enum TransferDirection { Download, Upload, UploadToLeft, DownloadFromLeft, RelayLeftToRight, RelayRightToLeft, ApiDownload, ApiFxp }
+    private sealed class NaturalNameComparer : IComparer<string>
+    {
+        public static NaturalNameComparer Instance { get; } = new();
+
+        public int Compare(string? left, string? right)
+        {
+            if (ReferenceEquals(left, right)) return 0;
+            if (left is null) return -1;
+            if (right is null) return 1;
+            var leftIndex = 0;
+            var rightIndex = 0;
+            while (leftIndex < left.Length && rightIndex < right.Length)
+            {
+                var leftDigit = char.IsDigit(left[leftIndex]);
+                var rightDigit = char.IsDigit(right[rightIndex]);
+                if (leftDigit && rightDigit)
+                {
+                    var leftEnd = leftIndex;
+                    var rightEnd = rightIndex;
+                    while (leftEnd < left.Length && char.IsDigit(left[leftEnd])) leftEnd++;
+                    while (rightEnd < right.Length && char.IsDigit(right[rightEnd])) rightEnd++;
+                    var leftNumber = left.AsSpan(leftIndex, leftEnd - leftIndex).TrimStart('0');
+                    var rightNumber = right.AsSpan(rightIndex, rightEnd - rightIndex).TrimStart('0');
+                    var lengthComparison = leftNumber.Length.CompareTo(rightNumber.Length);
+                    if (lengthComparison != 0) return lengthComparison;
+                    var numberComparison = leftNumber.CompareTo(rightNumber, StringComparison.Ordinal);
+                    if (numberComparison != 0) return numberComparison;
+                    leftIndex = leftEnd;
+                    rightIndex = rightEnd;
+                    continue;
+                }
+
+                var characterComparison = char.ToUpperInvariant(left[leftIndex]).CompareTo(char.ToUpperInvariant(right[rightIndex]));
+                if (characterComparison != 0) return characterComparison;
+                leftIndex++;
+                rightIndex++;
+            }
+            return left.Length.CompareTo(right.Length);
+        }
+    }
+
+    private enum TransferDirection { Download, Upload, UploadToLeft, DownloadFromLeft, RelayLeftToRight, RelayRightToLeft, LocalCopy, ApiDownload, ApiFxp }
     private sealed record QuickSiteChoice(string Label, ConnectionProfile? Profile)
     {
         public override string ToString() => Label;
     }
-    private sealed record QueueSnapshot(string Name, string Source, string Destination, TransferDirection Direction, string State, long BytesTransferred, long TotalBytes = 0, Guid Id = default, Guid? SourceProfileId = null, Guid? DestinationProfileId = null, DateTimeOffset? QueuedAt = null, DateTimeOffset? StartedAt = null);
+    private sealed record QueueSnapshot(string Name, string Source, string Destination, TransferDirection Direction, string State, long BytesTransferred, long TotalBytes = 0, Guid Id = default, Guid? SourceProfileId = null, Guid? DestinationProfileId = null, DateTimeOffset? QueuedAt = null, DateTimeOffset? StartedAt = null, string? RuleSection = null, string? RuleRelease = null);
 
     private sealed class QueueEntryView(string name, string source, string destination, TransferDirection direction, Guid? id = null, long totalBytes = 0) : INotifyPropertyChanged
     {
@@ -1844,6 +3261,8 @@ public partial class MainWindow : Window
         public long SpeedBytesPerSecond { get => _speedBytesPerSecond; set { _speedBytesPerSecond = value; Changed(); } }
         public Guid? SourceProfileId { get; set; }
         public Guid? DestinationProfileId { get; set; }
+        public string? RuleSection { get; set; }
+        public string? RuleRelease { get; set; }
         public DateTimeOffset? QueuedAt { get; set; }
         public DateTimeOffset? StartedAt { get; set; }
         public DateTime LastPersistedAt { get; set; }

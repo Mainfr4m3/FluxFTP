@@ -2,6 +2,409 @@
 
 All notable FluxFTP changes are documented here.
 
+## 1.0.53 — 2026-09-29
+
+### Added
+
+- Built-in IRC/ZNC connection settings, FTP-admin verification and private setup commands.
+- Multiple announcement networks/channels, FiSH ECB/CBC support and configurable catch rules.
+- `!news` shows the latest published FluxFTP release; `!announces` shows caught site announcements.
+- Authenticated `POST /irc/connect` saves IRC/ZNC settings and starts the connection without opening Global Settings.
+- RACE-Log toolbar window records announcements and transfer events, rotating after 24 hours into the `logs` subfolder.
+- JSON site rules in `Rules/_site`, IRC setup examples and a site-rule viewer.
+- Bookmark CAPTION import, section import and transfer completion diagnostics included in the desktop build.
+
+### Fixed
+
+- Saved site fields remain readable in INI files. Manually entered FTP/proxy passwords are protected on load.
+- Global Settings writes changes before closing; validation and save errors remain visible.
+- RACE-Log follows the application theme.
+- IRC diagnostics distinguish registration failures, nickname conflicts and channel join failures.
+
+### Notes
+
+- IRC has an explicit option to accept invalid/self-signed certificates, enabled by default; previously saved choices are retained.
+- Automatic racing from IRC announcements is not implemented. Catch rules record news and log events.
+- Full slftp command compatibility is not implemented; see `docs/slftp-compatibility.md`.
+
+## 1.0.52 — 2026-09-17
+
+### Added
+
+- Manual and API-driven `SITE PRE` commands now classify server replies as success, dupe or failure.
+- The `/raw` API exposes duplicate PRE results separately while retaining them in `successes` for compatibility with existing RaceTrade and IRC integrations.
+
+### Fixed
+
+- Starting very large transfer queues now schedules work in a single batch instead of rewriting the complete queue file for every item.
+- RaceTrade/API FXP and download jobs now use the same batch scheduler, preventing large races from making the interface appear frozen before transfers begin.
+- Queue status synchronization now uses indexed lookups and batch resume operations, avoiding quadratic processing with thousands of files.
+
+## 1.0.51 — 2026-09-11
+
+### Added
+
+- Added a Commander-inspired LOCAL toolbar to both panes.
+- The selected local drive is shown as a single highlighted button with volume name, free space and total size in its tooltip.
+- Added quick LOCAL actions for creating folders, renaming, deleting and refreshing.
+
+### Changed
+
+- Local drive switching remains in the existing drive list, avoiding duplicate buttons for every available drive.
+- The LOCAL toolbar is hidden automatically whenever a pane is switched to Remote mode.
+
+## 1.0.50 — 2026-09-04
+
+### Fixed
+
+- FTP servers advertising RFC 2640 UTF-8 now receive pathname commands using UTF-8 after `OPTS UTF8 ON` negotiation.
+- Legacy servers such as ioFTPD that do not advertise UTF-8 now use Windows-1252 control-channel compatibility instead of replacing typographic characters with `?`.
+- Downloads, uploads and FXP transfers now preserve filenames containing typographic apostrophes and other non-ASCII characters supported by the server encoding.
+
+## 1.0.49 — 2026-08-29
+
+### Fixed
+
+- Priority List ranks are now carried into the transfer engine, so prioritized file patterns are selected before scoreboard size scoring.
+- Files within the same priority rank now retain queue order and use natural numeric name ordering, preventing file 8 from starting before file 2.
+- Normal FTP, FXP, downloads, uploads and local transfers now share the same deterministic priority scheduling.
+
+## 1.0.48 — 2026-08-28
+
+### Added
+
+- Added an `ioFTPD / IRC` command preset for sending `SITE IRC`.
+
+### Changed
+
+- Moved `Raw command` to the first position and made it the default selection in Server Commands.
+- Commands discovered through `SITE HELP` are appended after the built-in presets.
+
+## 1.0.47 — 2026-08-11
+
+### Added
+
+- Added batch PRE for multiple selected release folders, executed sequentially with one section selection.
+- Added sortable Size columns in both panes and sorting for every Transfer Queue column.
+- Added protection against accidentally PREing the section directory itself.
+
+### Fixed
+
+- Selected Name, Size or Modified sorting and its direction now persist while navigating between local or remote directories.
+- Size and modification sorting now use numeric byte counts and actual timestamps instead of formatted display text.
+- ioFTPD delayed CWD event replies such as `This looks like a PRE` no longer desynchronize subsequent FXP commands.
+- SITE PRE commands now allow up to ten minutes for large releases while ordinary commands retain their shorter timeout.
+
+## 1.0.46 — 2026-08-09
+
+### Removed
+
+- Removed the legacy cbftp UDP command listener. Automation now uses the authenticated HTTPS/JSON API exclusively.
+
+## 1.0.45 — 2026-08-09
+
+### Added
+
+- Added a Bookmarks window for each Local or Remote pane with site-specific filtering, editing, importing and direct navigation.
+- FTPRush imports now include bookmarks from both current JSON configurations and legacy `RushSite.xml` files using `CAPTION` and `REMOTE` attributes.
+- Added live DrFTPD FXP speed monitoring through the server's standard `SITE WHO` output.
+
+### Fixed
+
+- Standard EPSV replies now use the selected site or bouncer address instead of treating a complete multi-address field as one invalid FXP address.
+- EPSV data connections through SOCKS5 no longer mistake the proxy endpoint for the FTP server's passive-data address.
+- Secure glFTPD-to-glFTPD FXP can now complete through SSCN/EPSV when the passive reply only contains a port.
+
+## 1.0.44 — 2026-08-09
+
+### Added
+
+- Added a Themes tab to Global Settings with configurable interface colors, UI and monospace fonts, and font size.
+- Added live theme preview, default reset, and JSON theme import/export using `.flux-theme.json` files.
+- Added a Changelog button and an integrated release-history window.
+- Added a bundled OpenSSL compatibility backend for FTPS servers that cannot negotiate successfully with Windows Schannel.
+- Added a per-site option to use the OpenSSL TLS backend directly for glFTPD compatibility.
+
+### Fixed
+
+- Added automatic TLS fallback from Schannel TLS 1.2/1.3 to Schannel TLS 1.2 and then OpenSSL while keeping TLS 1.0/1.1 disabled.
+- Self-signed glFTPD and DrFTPD certificates can now be accepted through the existing per-site `Trust invalid TLS certificate` setting.
+- DrFTPD FTPS login now authenticates with `USER/PASS` before sending `PBSZ` and `PROT`, matching servers that reject data-protection commands before login.
+- Servers that reject `PROT P` can continue with an encrypted control channel and a clear `PROT C` data channel.
+- Failed TLS handshakes and certificate validation no longer leave plaintext control streams available to send an invalid unencrypted `QUIT` command.
+
+## 1.0.43 — 2026-08-08
+
+### Fixed
+
+- Regular FTPS, FTP and SFTP transfers now report live throughput in Metrics, Transfer Jobs and the main status bar.
+- Local file copies now use the same live throughput measurement as client-mediated transfers.
+
+## 1.0.42 — 2026-08-07
+
+### Added
+
+- Added optional FluxTelemetry support for live ioFTPD FXP progress, speed and transferred-byte monitoring through a shared loopback JSON API.
+- Added the standalone FluxTelemetry bridge with `/info`, `/health`, `/activity`, `/metrics` and Server-Sent Events endpoints.
+- Added the lightweight ioFTPD `SITE FLUXWHO` Tcl command based directly on `client who`.
+- Added automatic migration from the legacy local ioGUI `sites.ini` when FluxTelemetry has no configured credentials, followed by Windows DPAPI password protection.
+
+### Changed
+
+- FXP monitoring now prefers FluxTelemetry without consuming one monitoring FTP slot per transfer.
+- Existing `SITE ioGuiExt who` and `SIZE` monitoring remain available automatically as fallback for ioFTPD and other FTP server configurations.
+- FluxTelemetry filters its own polling session, normalizes decimal ioFTPD speeds to bytes per second and suppresses routine HTTP request logging.
+
+## 1.0.41 — 2026-08-06
+
+### Fixed
+
+- Passive client-relay connections now skip `EPSV` when the server does not advertise EPSV support and use `PASV` directly.
+- Direct secure FXP now drains delayed `200 SSCN:SERVER METHOD` acknowledgements before evaluating the STOR/RETR response.
+- FXP servers that omit the preliminary `125/150` reply and respond directly with `226/250` after transferring data are now recognized as successful.
+- Completed direct FXP transfers are no longer incorrectly marked failed and retried through client relay because of a delayed SSCN response.
+
+## 1.0.40 — 2026-08-06
+
+### Added
+
+- Added `Start queue` and `Stop queue` controls for manually starting or pausing the complete transfer queue.
+- Added separate `Pause selected` and `Resume selected` controls for individual jobs.
+- Added queued Local-to-Local file and recursive folder copies with progress reporting.
+
+### Changed
+
+- `Add to queue` now collects files and complete folders without starting them; `Transfer now` continues to begin immediately.
+- Stopping the queue pauses waiting jobs and safely cancels active jobs into a resumable paused state.
+- Worker slots are warmed only when queued transfers are actually started.
+
+## 1.0.39 — 2026-08-06
+
+### Added
+
+- Added single-instance protection so starting FluxFTP again restores the existing window instead of launching another process.
+
+### Fixed
+
+- Minimizing FluxFTP to the system tray now hides the active window from the Windows taskbar after the minimize transition has completed.
+- Restoring FluxFTP from the tray now reliably brings the existing window to the foreground and gives it focus.
+
+## 1.0.38 — 2026-08-05
+
+### Added
+
+- Added RushFTP-style Back, Forward, Up and Refresh navigation controls to both file panes.
+- Replaced the plain path fields with editable path-history dropdowns for fast navigation in both Local and Remote mode.
+- Local path dropdowns now include available drives, Desktop, Documents, Downloads and up to 20 recently visited folders.
+
+### Changed
+
+- Navigation history is maintained independently for the left and right panes and safely reset when switching between Local and Remote mode.
+
+## 1.0.37 — 2026-08-05
+
+### Added
+
+- Added per-site proxy settings under Site Manager with `Use global proxy`, explicit `No proxy`, SOCKS5, SOCKS4 and HTTP CONNECT modes.
+- Per-site proxy settings include host, port, credentials, proxy-side DNS resolution and optional proxying of passive FTP data connections.
+
+### Changed
+
+- Existing sites inherit Global Settings by default, while an explicit per-site proxy or direct-connection override takes precedence for browsing, transfers, worker slots, API jobs and reconnects.
+- Per-site proxy passwords are stored in `FluxFTP-sites.ini` using Windows DPAPI protection for the current user.
+
+## 1.0.36 — 2026-08-05
+
+### Fixed
+
+- Dark scrollbar tracks now bind correctly to the current value, maximum and viewport size, so dragging the thumb updates the list position accurately.
+- Vertical scrollbars now use the full available height instead of being incorrectly constrained to 13 pixels; horizontal scrollbars retain a compact 13-pixel height.
+
+## 1.0.35 — 2026-08-04
+
+### Added
+
+- Added a dark internal file viewer for local and remote files with automatic encoding detection, selectable UTF-8, Windows-1252, IBM437/DOS, ISO-8859-1, ASCII and UTF-16 encodings, plus optional word wrapping.
+- Added a separate `Open externally` action that downloads remote files to the preview cache and opens them through their Windows file association.
+- NFO files that are not valid UTF-8 now automatically use IBM437 so classic scene artwork is rendered correctly.
+
+### Changed
+
+- Reworked context menus to remove the standard white WPF icon gutter, prevent clipped labels and match the dark FluxFTP interface.
+- Added dark themed horizontal and vertical scrollbars throughout the desktop client.
+
+## 1.0.34 — 2026-08-03
+
+### Added
+
+- Connection Log now reports the negotiated TLS version, cipher suite and strength, certificate subject, issuer, validity period and validation result for the control connection and first protected data connection.
+
+### Fixed
+
+- Explicit and implicit FTPS now automatically reconnect with TLS 1.2 only when the initial TLS 1.2/1.3 negotiation returns an invalid or corrupted TLS frame, improving compatibility with affected glFTPd, OpenSSL and bouncer configurations.
+
+## 1.0.33 — 2026-08-03
+
+### Added
+
+- Explicit FTPS now falls back from `AUTH TLS` to the legacy `AUTH SSL` command for compatible older FTP daemons while retaining TLS 1.2/1.3 SChannel encryption.
+
+## 1.0.32 — 2026-08-03
+
+### Fixed
+
+- Secure FXP now falls back from an unsupported CEPR/EPSV command to CPSV when available, preserving the working ioFTPD TLS route before trying PASV/SSCN.
+- Clear reverse FXP now falls back from an unsupported EPSV command to regular PASV instead of abandoning the direct route immediately.
+- Dragging from an existing multi-selection now preserves every selected file and folder, allowing several remote folders to be queued through one drag-and-drop operation.
+
+## 1.0.31 — 2026-08-03
+
+### Added
+
+- Added local drive selectors to both panes in Local mode for direct navigation between available Windows drives.
+- Added drag-and-drop copying between two Local panes, including multiple files and recursive folders.
+- Added Windows Explorer drag-and-drop into Local panes for copying and into Remote panes for queued uploads.
+
+### Fixed
+
+- Local directory views now list the complete directory instead of stopping after 100 entries.
+- Drive-only paths such as `D:` now resolve to the drive root (`D:\`) consistently.
+- Local directory entries remain sorted with folders before files after changing drives.
+
+## 1.0.30 — 2026-08-03
+
+### Changed
+
+- Repositioned transfer progress, elapsed time, remaining time and queue duration at the right edge of the bottom status bar with responsive sizing for smaller windows.
+- Transfer Queue columns now adapt to the available width so job state, paths and progress remain visible.
+- Scrolling legend mode now uses the full width of the bottom bar instead of being limited to the left status field.
+
+## 1.0.29 — 2026-08-03
+
+### Changed
+
+- Reworked the bottom transfer status into a FlashFXP-inspired FluxFTP bar with direction and filename, transferred bytes and speed, percentage, elapsed time, estimated remaining time and queue duration.
+
+## 1.0.28 — 2026-08-03
+
+### Added
+
+- Desktop SFTP connections with password authentication, browsing, upload, download, resume and client-relay transfers.
+- SHA256 SSH host-key verification with an explicit trust prompt and persistent per-site fingerprints.
+- SFTP-backed create folder/file, rename, recursive delete, chmod, preview and queue operations.
+
+### Changed
+
+- Remote-to-remote transfers involving SFTP automatically use client relay because the FTP FXP protocol is not available over SSH.
+
+## 1.0.27 — 2026-08-03
+
+### Added
+
+- Expanded both file-list context menus with Open/View, add-to-queue wording, create-and-enter folder, create-empty-file, and copy FTP/file URL actions.
+- Expanded the connection log with timestamped raw FTP commands/server replies, automatic password masking, and Copy/Clear controls.
+
+### Fixed
+
+- UNIX symbolic links displayed as `name -> target` are now parsed with separate name and target metadata and can be navigated like directories.
+
+## 1.0.26 — 2026-07-30
+
+### Fixed
+
+- FXP monitoring now accepts the same ioGuiExt activity rows as ioGUI3 instead of incorrectly discarding active status rows.
+- A successful ioGuiExt command without an exact destination filename match no longer disables all fallback progress measurement.
+- FluxFTP can read RETR activity from the source site when the destination does not expose matching STOR activity, such as ProFTPD-to-ioFTPD routes.
+- The aggregate status progress bar estimates transferred bytes from live FXP speed when ioFTPD does not publish a usable `TRANSFERSIZE` value.
+
+### Changed
+
+- The main status bar now displays live FXP throughput next to the aggregate percentage.
+
+## 1.0.25 — 2026-07-30
+
+### Changed
+
+- Multi-file transfers prewarm the required source/download and destination/upload workers in parallel before queue execution begins.
+- Recently returned workers are reused immediately; `NOOP` health checks are now reserved for workers that have been idle for at least 30 seconds.
+- Worker prewarming respects each site's login and directional upload/download slot limits and reports its preparation time in the connection log.
+- Site Options now includes a cbftp-compatible `Broken PASV` checkbox that selects the site's PORT/active role immediately, without waiting for an initial `425` timeout; the setting is also exposed as `broken_pasv` through the API.
+
+## 1.0.24 — 2026-07-30
+
+### Added
+
+- Learned reverse PASV/PORT routes are persisted per source/destination site pair and restored after FluxFTP restarts.
+- Compact FXP phase timings now show CWD, PRET, PROT, PASV/EPSV/CPSV, PORT, SSCN, STOR/RETR acceptance and data-transfer duration.
+
+### Changed
+
+- Independent control commands on the source and destination sessions are issued concurrently where protocol ordering permits.
+- A persisted reverse route is removed automatically when it later fails with a timeout or FTP `425`.
+
+## 1.0.23 — 2026-07-30
+
+### Changed
+
+- Successful transfer sessions are retained as reusable site workers instead of logging out after every file.
+- Reused workers are health-checked with `NOOP`; disconnected, failed, cancelled or stale-profile sessions are discarded safely.
+- Idle worker pools are closed when a site disconnects, its profile changes or FluxFTP exits.
+
+## 1.0.22 — 2026-07-30
+
+### Fixed
+
+- Remote file transfers now change to the source and destination parent directories before issuing relative `RETR` and `STOR` commands, matching FlashFXP behavior and ioFTPD pre-command script expectations.
+- The relative-path command flow is used consistently for direct FXP, reversed PASV/PORT FXP, client relay, downloads and uploads.
+- FXP failure diagnostics now display the actual `CWD`, relative `RETR` and relative `STOR` command sequence.
+
+## 1.0.21 — 2026-07-29
+
+### Added
+
+- Failed direct FXP attempts now log the source and destination sites, actual connected endpoints, full `RETR` and `STOR` paths, destination parent, data protection, selected route and PRET state.
+- Transfer diagnostics deliberately exclude usernames, passwords and authentication commands.
+
+## 1.0.20 — 2026-07-29
+
+### Added
+
+- Optional Advanced Skiplist rules with wildcard or regex matching, File/Directory/Both selection, Allow/Deny actions, scope and ordered first-match evaluation.
+- A filled aggregate progress bar in the main status area.
+
+### Changed
+
+- The default main-window size is reduced to fit smaller laptop displays while saved window layouts continue to be restored.
+- About now reflects the current FTP, FTPS, FXP, automation, import and ioFTPD feature set.
+- The application icon now uses a text-free modern server-and-gear symbol that remains clear at small Windows icon sizes.
+
+### Fixed
+
+- The Close button in the modeless Server Commands window now closes the window correctly.
+
+## 1.0.19 — 2026-07-29
+
+### Fixed
+
+- Self-contained Windows releases once again include the native WPF libraries required before the main window can open.
+- `SITE PRE` now runs from the selected release's parent directory, matching ioFTPD's expected working directory.
+- Delayed ioFTPD CWD-script replies are skipped so the actual PRE result is displayed and the control channel remains synchronized.
+- IRC formatting and other invisible control characters are removed from commands before they are sent.
+- PRE script variables now use the release named in the command and its resolved release path.
+
+## 1.0.18 — 2026-07-29
+
+### Added
+
+- Per-site FXP data role selection: Auto, PASV or PORT.
+- The selected FXP data role is persisted in `FluxFTP-sites.ini` and exposed through the API as `fxp_data_role`.
+
+### Fixed
+
+- Clear FXP can retry with the reverse PASV/PORT topology when the standard route times out.
+- A successful reverse route is remembered for the remaining queued files, avoiding repeated timeout delays.
+- FXP starts RETR and STOR together for compatibility with servers that wait for the peer before sending a preliminary reply.
+
 ## 1.0.17 — 2026-07-28
 
 ### Added
