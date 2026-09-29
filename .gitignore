@@ -3,6 +3,7 @@
 **/obj/
 dist/
 artifacts/
+.android-sdk/
 
 # IDE and user state
 .vs/
@@ -41,3 +42,4 @@ ioFTP-spreadjobs.json
 Thumbs.db
 Desktop.ini
 .DS_Store
+FluxFTP-irc-routing.json

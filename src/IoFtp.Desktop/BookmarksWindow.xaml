@@ -11,7 +11,7 @@
         </StackPanel>
         <Grid DockPanel.Dock="Bottom" Margin="0,12,0,0">
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
-                <Button Content="Import FTPRush…" Click="Import_Click"/>
+                <Button Content="Import Bookmarks…" Click="Import_Click"/>
                 <Button Content="Add" Click="Add_Click"/><Button Content="Edit" Click="Edit_Click"/><Button Content="Remove" Click="Remove_Click"/>
             </StackPanel>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">

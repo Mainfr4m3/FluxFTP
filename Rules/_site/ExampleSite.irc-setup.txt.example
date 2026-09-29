@@ -1,0 +1,9 @@
+# Generic fictional example. Replace credentials and paths before use.
+# Send one line privately to FluxFTP and wait for OK/ERROR.
+!addsite ExampleSite FTPUSER FTPPASSWORD ftp.example.org:21 explicit
+!slots ExampleSite 3
+!maxupdn ExampleSite 2 2
+!setdir ExampleSite RELEASES /releases
+!ruleadd ExampleSite RELEASES if releasename =~ /\.tmp$/i then drop
+!setdir ExampleSite ARCHIVE /archive
+!siterules ExampleSite

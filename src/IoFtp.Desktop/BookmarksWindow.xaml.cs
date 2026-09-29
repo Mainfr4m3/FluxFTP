@@ -11,10 +11,12 @@ public partial class BookmarksWindow : Window
 {
     private readonly ObservableCollection<BookmarkRow> _items;
     private readonly IReadOnlyList<string> _siteNames;
+    private readonly string _initialSite;
 
     internal BookmarksWindow(string initialSite = "", string initialPath = "")
     {
         InitializeComponent();
+        _initialSite = initialSite;
         _siteNames = new ProfileStore().Load().Select(profile => profile.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         _items = new ObservableCollection<BookmarkRow>(new BookmarkStore().Load().Select(bookmark => new BookmarkRow(bookmark)));
         BookmarksGrid.ItemsSource = _items;
@@ -55,7 +57,7 @@ public partial class BookmarksWindow : Window
         var preferred = File.Exists(legacy) ? legacy : modern;
         var picker = new OpenFileDialog
         {
-            Title = "Import FTPRush bookmarks",
+            Title = "Import Bookmarks",
             Filter = "FTPRush sites and bookmarks (RushSite.xml;site.json)|RushSite.xml;site.json|XML files (*.xml)|*.xml|JSON files (*.json)|*.json",
             InitialDirectory = File.Exists(preferred) ? Path.GetDirectoryName(preferred) : documents,
             FileName = File.Exists(preferred) ? Path.GetFileName(preferred) : "RushSite.xml"
@@ -64,6 +66,8 @@ public partial class BookmarksWindow : Window
         try
         {
             var imported = FtpRushSiteImporter.ImportPackage(picker.FileName).Bookmarks;
+            if (imported.Count == 0 && Path.GetExtension(picker.FileName).Equals(".xml", StringComparison.OrdinalIgnoreCase))
+                imported = CaptionBookmarkImporter.Import(picker.FileName, _initialSite);
             var count = 0;
             foreach (var bookmark in imported)
             {

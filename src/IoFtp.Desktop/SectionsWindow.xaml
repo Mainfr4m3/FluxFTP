@@ -6,10 +6,10 @@
         Background="{DynamicResource WindowBrush}" Foreground="{DynamicResource TextBrush}">
     <DockPanel Margin="14" Background="{DynamicResource WindowBrush}">
         <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" Padding="12,8" Margin="0,0,0,8">
-            <Grid><TextBlock Text="SECTIONS" FontWeight="SemiBold" Foreground="{DynamicResource AccentBrush}"/><TextBlock Text="Default setup imported from ioFTPD" HorizontalAlignment="Right" Foreground="{DynamicResource MutedTextBrush}"/></Grid>
+            <Grid><TextBlock Text="SECTIONS" FontWeight="SemiBold" Foreground="{DynamicResource AccentBrush}"/><TextBlock Text="Editable site section mappings" HorizontalAlignment="Right" Foreground="{DynamicResource MutedTextBrush}"/></Grid>
         </Border>
         <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
-            <Button Content="Test precheck" Click="TestPrecheck_Click"/><Button Content="Add" Click="Add_Click"/><Button Content="Remove" Click="Remove_Click"/><Button Content="Save" Click="Save_Click"/><Button Content="Close" Click="Close_Click"/>
+            <Button Content="Site rules..." Click="SiteRules_Click"/><Button Content="Import Sections..." Click="ImportSections_Click"/><Button Content="Test precheck" Click="TestPrecheck_Click"/><Button Content="Add" Click="Add_Click"/><Button Content="Remove" Click="Remove_Click"/><Button Content="Save" Click="Save_Click"/><Button Content="Close" Click="Close_Click"/>
         </StackPanel>
         <DataGrid x:Name="SectionsGrid" AutoGenerateColumns="False" CanUserAddRows="False" SelectionMode="Single">
             <DataGrid.Columns>

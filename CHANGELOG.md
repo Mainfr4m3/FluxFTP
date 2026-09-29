@@ -2,6 +2,31 @@
 
 All notable FluxFTP changes are documented here.
 
+## 1.0.53 — 2026-09-29
+
+### Added
+
+- Built-in IRC/ZNC connection settings, FTP-admin verification and private setup commands.
+- Multiple announcement networks/channels, FiSH ECB/CBC support and configurable catch rules.
+- `!news` shows the latest published FluxFTP release; `!announces` shows caught site announcements.
+- Authenticated `POST /irc/connect` saves IRC/ZNC settings and starts the connection without opening Global Settings.
+- RACE-Log toolbar window records announcements and transfer events, rotating after 24 hours into the `logs` subfolder.
+- JSON site rules in `Rules/_site`, IRC setup examples and a site-rule viewer.
+- Bookmark CAPTION import, section import and transfer completion diagnostics included in the desktop build.
+
+### Fixed
+
+- Saved site fields remain readable in INI files. Manually entered FTP/proxy passwords are protected on load.
+- Global Settings writes changes before closing; validation and save errors remain visible.
+- RACE-Log follows the application theme.
+- IRC diagnostics distinguish registration failures, nickname conflicts and channel join failures.
+
+### Notes
+
+- IRC has an explicit option to accept invalid/self-signed certificates, enabled by default; previously saved choices are retained.
+- Automatic racing from IRC announcements is not implemented. Catch rules record news and log events.
+- Full slftp command compatibility is not implemented; see `docs/slftp-compatibility.md`.
+
 ## 1.0.52 — 2026-09-17
 
 ### Added

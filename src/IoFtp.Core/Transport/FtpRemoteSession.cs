@@ -37,6 +37,7 @@ public sealed class FtpRemoteSession : IRemoteSession
     public IReadOnlySet<string> Capabilities { get; private set; } = new HashSet<string>();
     public string LastFxpNegotiation { get; private set; } = "None";
     public IReadOnlyList<(string Name, TimeSpan Elapsed)> LastFxpStageTimings => _lastFxpStageTimings;
+    public string LastTransferCompletion { get; private set; } = "";
     public FxpProtectionMode FxpProtection => _profile?.EffectiveOptions.FxpProtection ?? FxpProtectionMode.AutoSecure;
     public bool UsesTlsControl => _profile?.Protocol is TransferProtocol.FtpsExplicit or TransferProtocol.FtpsImplicit;
 
@@ -245,6 +246,8 @@ public sealed class FtpRemoteSession : IRemoteSession
     public async Task FxpToAsync(FtpRemoteSession destination, string sourcePath, string destinationPath,
         CancellationToken cancellationToken, bool reverseDataConnection = false)
     {
+        LastTransferCompletion = "";
+        destination.LastTransferCompletion = "";
         EnsureConnected(); destination.EnsureConnected();
         if (_sftpSession is not null || destination._sftpSession is not null)
             throw new NotSupportedException("Direct FXP is unavailable for SFTP; use client relay instead.");
@@ -400,6 +403,8 @@ public sealed class FtpRemoteSession : IRemoteSession
         var completions = await MeasureFxpStageAsync("Data", async () => await Task.WhenAll(
             starts[1].Completed ? Task.FromResult(starts[1].Response) : ReadResponseAsync(cancellationToken),
             starts[0].Completed ? Task.FromResult(starts[0].Response) : destination.ReadResponseAsync(cancellationToken)));
+        LastTransferCompletion = completions[0].Message;
+        destination.LastTransferCompletion = completions[1].Message;
         EnsureSuccess(completions[0], 226, 250);
         EnsureSuccess(completions[1], 226, 250);
     }
@@ -690,6 +695,7 @@ public sealed class FtpRemoteSession : IRemoteSession
     private async Task TransferAsync(string command, long offset, Func<Stream, Task> transfer, CancellationToken cancellationToken)
     {
         EnsureConnected();
+        LastTransferCompletion = "";
         command = await PrepareRelativeTransferCommandAsync(command, cancellationToken);
         TcpClient? dataClient = null;
         try
@@ -720,6 +726,7 @@ public sealed class FtpRemoteSession : IRemoteSession
             catch (IOException exception) { dataError = exception; }
         }
         var completion = await ReadResponseAsync(cancellationToken);
+        LastTransferCompletion = completion.Message;
         EnsureSuccess(completion, 226, 250);
         // Some Windows FTPS stacks report WSAENETNAMEDELETED when the peer
         // closes TLS immediately after the last byte. A successful 226/250
@@ -761,7 +768,9 @@ public sealed class FtpRemoteSession : IRemoteSession
             using var client = await listener.AcceptTcpClientAsync(cancellationToken);
             await using var stream = await ProtectDataStreamAsync(client.GetStream(), client.Client, cancellationToken);
             await transfer(stream);
-            EnsureSuccess(await ReadResponseAsync(cancellationToken), 226, 250);
+            var completion = await ReadResponseAsync(cancellationToken);
+            LastTransferCompletion = completion.Message;
+            EnsureSuccess(completion, 226, 250);
         }
         finally { listener.Stop(); }
     }

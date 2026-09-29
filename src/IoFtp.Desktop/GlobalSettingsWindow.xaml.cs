@@ -33,10 +33,12 @@ public partial class GlobalSettingsWindow : Window
         CheckUpdatesBox.IsChecked=s.CheckForUpdatesAtStartup;
         UpdateStatusText.Text=$"Installed version: {UpdateCheckService.CurrentVersion}";
         LoadTheme(_originalTheme);
+        LoadIrc(s.Irc ?? new());
         Closing += RestoreThemeWhenCanceled;
     }
     private void Save_Click(object sender, RoutedEventArgs e)
     {
+        ErrorText.Text = "";
         var boxes = new[] { PortFromBox, PortToBox, ApiPortBox, ExpirationBox, StarterBox, RuntimeBox, JobHistoryBox, TransferHistoryBox, LogHistoryBox, SlotsBox, UploadsBox, DownloadsBox, DefaultIdleBox, LocalDownloadsBox, LocalUploadsBox, ProxyPortBox };
         if (boxes.Any(box => !int.TryParse(box.Text, out _))) { ErrorText.Text="All numeric settings must be whole numbers."; return; }
         int N(System.Windows.Controls.TextBox b)=>int.Parse(b.Text);
@@ -44,9 +46,60 @@ public partial class GlobalSettingsWindow : Window
         if (ApiEnabledBox.IsChecked == true && string.IsNullOrWhiteSpace(ApiPasswordBox.Password)) { ErrorText.Text="API password is required when the API is enabled."; return; }
         if ((ProxyType)(ProxyTypeBox.SelectedItem ?? ProxyType.None) != ProxyType.None && (string.IsNullOrWhiteSpace(ProxyHostBox.Text) || N(ProxyPortBox) is < 1 or > 65535)) { ErrorText.Text="Proxy host or port is invalid."; return; }
         var theme = ReadTheme();
+        var irc = ReadIrc();
+        if (irc is null) return;
         if (!ThemeManager.TryValidate(theme, out var themeError)) { ErrorText.Text = themeError; return; }
-        Settings = new GlobalSettings(BindBox.Text.Trim(),N(PortFromBox),N(PortToBox),ApiEnabledBox.IsChecked==true,N(ApiPortBox),ApiLocalBox.IsChecked==true,N(ExpirationBox),N(StarterBox),N(RuntimeBox),N(JobHistoryBox),N(TransferHistoryBox),N(LogHistoryBox),UsernameBox.Text.Trim(),N(SlotsBox),N(UploadsBox),N(DownloadsBox),((ProtocolChoice)ProtocolBox.SelectedItem).Protocol,N(DefaultIdleBox),LocalPathBox.Text.Trim(),N(LocalDownloadsBox),N(LocalUploadsBox),PriorityPatternsBox.Text.Trim(),SkipPatternsBox.Text.Trim(),ApiPasswordBox.Password,MinimizeToTrayBox.IsChecked==true,LegendModeBox.SelectedItem?.ToString() ?? "Compact",(ProxyType)(ProxyTypeBox.SelectedItem ?? ProxyType.None),ProxyHostBox.Text.Trim(),N(ProxyPortBox),ProxyUsernameBox.Text.Trim(),ProxyPasswordBox.Password,ProxyDnsBox.IsChecked==true,ProxyDataBox.IsChecked==true,CheckUpdatesBox.IsChecked==true, _advancedSkipRules.ToArray(), theme); ThemeManager.Apply(theme); DialogResult=true;
+        Settings = new GlobalSettings(BindBox.Text.Trim(),N(PortFromBox),N(PortToBox),ApiEnabledBox.IsChecked==true,N(ApiPortBox),ApiLocalBox.IsChecked==true,N(ExpirationBox),N(StarterBox),N(RuntimeBox),N(JobHistoryBox),N(TransferHistoryBox),N(LogHistoryBox),UsernameBox.Text.Trim(),N(SlotsBox),N(UploadsBox),N(DownloadsBox),((ProtocolChoice)ProtocolBox.SelectedItem).Protocol,N(DefaultIdleBox),LocalPathBox.Text.Trim(),N(LocalDownloadsBox),N(LocalUploadsBox),PriorityPatternsBox.Text.Trim(),SkipPatternsBox.Text.Trim(),ApiPasswordBox.Password,MinimizeToTrayBox.IsChecked==true,LegendModeBox.SelectedItem?.ToString() ?? "Compact",(ProxyType)(ProxyTypeBox.SelectedItem ?? ProxyType.None),ProxyHostBox.Text.Trim(),N(ProxyPortBox),ProxyUsernameBox.Text.Trim(),ProxyPasswordBox.Password,ProxyDnsBox.IsChecked==true,ProxyDataBox.IsChecked==true,CheckUpdatesBox.IsChecked==true, _advancedSkipRules.ToArray(), theme, irc);
+        try { new GlobalSettingsStore().Save(Settings); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException)
+        { Settings = null; ErrorText.Text = "Could not save settings to disk. Check write access and free space; your edits are still here. Please try Save again."; return; }
+        ThemeManager.Apply(theme); DialogResult = true;
     }
+    private void LoadIrc(IrcSettings irc)
+    {
+        IrcEnabledBox.IsChecked = irc.Enabled; IrcHostBox.Text = irc.Host; IrcPortBox.Text = irc.Port.ToString();
+        IrcTlsBox.IsChecked = irc.UseTls; IrcNickBox.Text = irc.Nick; IrcPasswordBox.Password = irc.Password;
+        IrcNetworkNameBox.Text = irc.NetworkName;
+        IrcAllowInvalidCertificateBox.IsChecked = irc.AllowInvalidCertificate;
+        IrcZncBox.IsChecked = irc.UseZnc; IrcZncUserBox.Text = irc.ZncUsername; IrcZncNetworkBox.Text = irc.ZncNetwork;
+        IrcChannelBox.Text = irc.Channel; IrcSiteBox.ItemsSource = new ProfileStore().Load(); IrcSiteBox.SelectedValue = irc.AdminSiteId;
+        IrcLoginBox.IsChecked = irc.AllowPrivateLogin; IrcNewsPathBox.Text = irc.NewsPath;
+        IrcLinksBox.Text = string.Join(Environment.NewLine, (irc.AccountLinks ?? []).Select(link => $"{link.Account}={link.FtpUser}"));
+    }
+
+    private IrcSettings? ReadIrc()
+    {
+        var links = new List<IrcAccountLink>();
+        foreach (var line in IrcLinksBox.Text.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        {
+            var pair = line.Split('=', 2, StringSplitOptions.TrimEntries);
+            if (pair.Length != 2 || !IrcProtocol.Account(pair[0]) || !IrcProtocol.FtpUser(pair[1]) || links.Any(link => link.Account.Equals(pair[0], StringComparison.OrdinalIgnoreCase)))
+            { ErrorText.Text = "IRC links must be unique IRC-account=FTP-user pairs."; return null; }
+            links.Add(new(pair[0], pair[1]));
+        }
+        if (!int.TryParse(IrcPortBox.Text, out var port) || port is < 1 or > 65535)
+        { ErrorText.Text = "IRC port must be between 1 and 65535."; return null; }
+        var irc = new IrcSettings(IrcEnabledBox.IsChecked == true, IrcHostBox.Text.Trim(), port, IrcTlsBox.IsChecked == true,
+            IrcNickBox.Text.Trim(), IrcPasswordBox.Password, IrcZncBox.IsChecked == true, IrcZncUserBox.Text.Trim(),
+            IrcZncNetworkBox.Text.Trim(), IrcChannelBox.Text.Trim(), (IrcSiteBox.SelectedItem as ConnectionProfile)?.Id,
+            IrcLoginBox.IsChecked == true, IrcNewsPathBox.Text.Trim(), links.ToArray(), IrcNetworkNameBox.Text.Trim(),
+            IrcAllowInvalidCertificateBox.IsChecked == true);
+        if (!IrcProtocol.Token(irc.NetworkName) || irc.NetworkName.Length > 32)
+        { ErrorText.Text = "Enter a network name of 1–32 characters without spaces."; return null; }
+        if (irc.Password.Any(char.IsControl) || System.Text.Encoding.UTF8.GetByteCount(irc.Password) > 250)
+        { ErrorText.Text = "IRC password is too long or contains control characters."; return null; }
+        if (!irc.Enabled) return irc;
+        if (string.IsNullOrWhiteSpace(irc.Host) || irc.Host.Any(char.IsWhiteSpace) || irc.Host.Any(char.IsControl) ||
+            !System.Text.RegularExpressions.Regex.IsMatch(irc.Nick, @"\A[A-Za-z_\[\]{}|`^][A-Za-z0-9_\[\]{}|`^\-]{0,29}\z") ||
+            !IrcProtocol.Token(irc.Channel) || !irc.Channel.StartsWith('#'))
+        { ErrorText.Text = "Enter an IRC host, valid nickname and one #channel."; return null; }
+        if (irc.UseZnc && (!IrcProtocol.Token(irc.ZncUsername) || !IrcProtocol.Token(irc.ZncNetwork) || irc.ZncUsername.Contains('/') || irc.ZncNetwork.Contains('/') || irc.Password.Length == 0))
+        { ErrorText.Text = "Enter a ZNC username, network and password."; return null; }
+        // Saving IRC connection details does not require an FTP authority site.
+        // IrcService still requires TLS for password login and verified FTPS for admin commands.
+        return irc;
+    }
+
     private ThemeSettings ReadTheme() => new(
         ThemeNameBox.Text.Trim(), ThemeWindowBox.Text.Trim(), ThemeSurfaceBox.Text.Trim(), ThemeRaisedBox.Text.Trim(), ThemeBorderBox.Text.Trim(),
         ThemeAccentBox.Text.Trim(), ThemeAccentStrongBox.Text.Trim(), ThemeTextBox.Text.Trim(), ThemeMutedTextBox.Text.Trim(), ThemeSelectionBox.Text.Trim(), ThemeHoverBox.Text.Trim(),

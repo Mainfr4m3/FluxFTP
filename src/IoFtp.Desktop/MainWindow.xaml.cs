@@ -44,6 +44,12 @@ public partial class MainWindow : Window
     private readonly GlobalSettingsStore _settingsStore = new();
     private readonly WindowLayoutStore _layoutStore = new();
     private ApiServer? _apiServer;
+    private IrcManager? _ircService;
+    private readonly SemaphoreSlim _ircRestartGate = new(1, 1);
+    private readonly RaceLogStore _raceLog = new();
+    private readonly ConcurrentDictionary<Guid, string> _raceSiteNames = new();
+    private RaceLogWindow? _raceLogWindow;
+    private readonly System.Windows.Threading.DispatcherTimer _raceLogTimer = new() { Interval = TimeSpan.FromMinutes(1) };
     private GlobalSettings _settings;
     private readonly string _queuePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FluxFTP", "queue.json");
     private readonly string _oldQueuePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ioFTP", "queue.json");
@@ -103,9 +109,17 @@ public partial class MainWindow : Window
         ReloadQuickSites(RightQuickSites);
         ReloadLocalDrives();
         LoadQueue();
+        foreach (var entry in _queue) TrackRaceEntry(entry);
+        _raceLog.Write("SESSION", "FluxFTP " + UpdateCheckService.CurrentVersion + " started");
+        _raceLogTimer.Tick += (_, _) =>
+        {
+            _raceLog.Maintain();
+            if (_raceLog.LastError is { } error) ConnectionStatus.Text = error;
+        };
+        _raceLogTimer.Start();
         if (!string.IsNullOrWhiteSpace(_settings.LocalDownloadPath) && Directory.Exists(_settings.LocalDownloadPath)) _localDirectory = _settings.LocalDownloadPath;
         if (LeftMode.SelectedIndex == 0) LoadLocalDirectory(_localDirectory);
-        Loaded += async (_, _) => { RestoreWindowLayout(); await RestartApiServerAsync(); if (_settings.CheckForUpdatesAtStartup) await CheckForUpdatesAsync(); };
+        Loaded += async (_, _) => { RestoreWindowLayout(); await RestartApiServerAsync(); await RestartIrcAsync(); if (_settings.CheckForUpdatesAtStartup) await CheckForUpdatesAsync(); };
         ConfigureTrayIcon();
         StateChanged += MainWindow_StateChanged;
         _legendTimer.Tick += (_, _) => UpdateLegendBar();
@@ -307,6 +321,7 @@ public partial class MainWindow : Window
         var selectedId = (combo.SelectedItem as QuickSiteChoice)?.Profile?.Id;
         var choices = new List<QuickSiteChoice> { new("Quick Connect…", null) };
         choices.AddRange(new ProfileStore().Load().Select(profile => new QuickSiteChoice(profile.Name, profile)));
+        foreach (var choice in choices) if (choice.Profile is { } profile) _raceSiteNames[profile.Id] = profile.Name;
         combo.ItemsSource = choices;
         combo.SelectedItem = choices.FirstOrDefault(choice => choice.Profile?.Id == selectedId) ?? choices[0];
         _reloadingQuickSites = false;
@@ -1592,6 +1607,7 @@ public partial class MainWindow : Window
     {
         var entry = new QueueEntryView(name, source, destination, direction, totalBytes: totalBytes) { SourceProfileId = sourceProfileId, DestinationProfileId = destinationProfileId, QueuedAt = DateTimeOffset.Now };
         _queue.Add(entry);
+        TrackRaceEntry(entry);
         if (persist) { SaveQueue(); UpdateQueueStatus(); }
         return entry;
     }
@@ -1657,6 +1673,18 @@ public partial class MainWindow : Window
         var reuseWorkers = false;
         try
         {
+            var ruleDestination = entry.Direction switch
+            {
+                TransferDirection.Upload or TransferDirection.RelayLeftToRight => rightProfile,
+                TransferDirection.UploadToLeft or TransferDirection.RelayRightToLeft => leftProfile,
+                TransferDirection.ApiFxp => apiFxpDestination,
+                _ => null
+            };
+            if (ruleDestination is not null)
+            {
+                var ruleResult = new SiteRuleStore().EvaluateDestination(ruleDestination.Name, entry.Destination, entry.RuleSection, entry.RuleRelease);
+                if (!ruleResult.Accepted) throw new InvalidOperationException($"Site rules blocked transfer: {ruleResult.Message}");
+            }
             entry.State = "Transferring";
             entry.StartedAt ??= DateTimeOffset.Now;
             SaveQueue();
@@ -1717,7 +1745,8 @@ public partial class MainWindow : Window
                 {
                     output.Seek(0, SeekOrigin.End);
                     entry.BytesTransferred = output.Length;
-                    await session.DownloadAsync(entry.Source, output, output.Length, progress, cancellationToken);
+                await session.DownloadAsync(entry.Source, output, output.Length, progress, cancellationToken);
+                    AppendTransferIntegrityNotices(entry, ("source", session));
                     await output.FlushAsync(cancellationToken);
                 }
                 File.Move(partial, entry.Destination, true);
@@ -1729,6 +1758,7 @@ public partial class MainWindow : Window
                 await using var input = new FileStream(entry.Source, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, true);
                 var offset = Math.Min(entry.BytesTransferred, input.Length); input.Seek(offset, SeekOrigin.Begin);
                 await session.UploadAsync(entry.Destination, input, offset, progress, cancellationToken);
+                AppendTransferIntegrityNotices(entry, ("destination", session));
             }
             else
             {
@@ -1794,6 +1824,7 @@ public partial class MainWindow : Window
                         if (entry.SpeedBytesPerSecond <= 0 && entry.TotalBytes > 0)
                             entry.SpeedBytesPerSecond = (long)(entry.TotalBytes / elapsed);
                         AppendFxpTimings(sourceSession);
+                        AppendTransferIntegrityNotices(entry, ("source", sourceSession), ("destination", destinationSession));
                         LogText.AppendText($"{Environment.NewLine}Direct FXP completed via {sourceSession.LastFxpNegotiation}: {entry.Name}");
                         entry.State = "Completed";
                         await RunScriptsAsync("AfterTransfer", TransferScriptVariables(entry, "Completed"), true);
@@ -1842,9 +1873,11 @@ public partial class MainWindow : Window
                 {
                     await using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024, true))
                         await sourceSession.DownloadAsync(entry.Source, file, 0, progress, cancellationToken);
+                    AppendTransferIntegrityNotices(entry, ("source", sourceSession));
                     await using var fileInput = new FileStream(temporary, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, true);
                     entry.BytesTransferred = 0;
                     await destinationSession.UploadAsync(entry.Destination, fileInput, 0, progress, cancellationToken);
+                    AppendTransferIntegrityNotices(entry, ("destination", destinationSession));
                 }
                 finally { if (File.Exists(temporary)) File.Delete(temporary); }
             }
@@ -1855,6 +1888,7 @@ public partial class MainWindow : Window
         }
         catch (FtpCommandException exception) when (exception.StatusCode == 553 && DestinationUsesXdupe(entry))
         {
+            _raceLog.Write("SKIP", $"{entry.Id} {entry.Name}: XDUPE, file already exists");
             ApplyXdupeReply(entry, exception.Message);
             entry.BytesTransferred = entry.TotalBytes;
             entry.State = "Completed";
@@ -1872,6 +1906,7 @@ public partial class MainWindow : Window
         catch (Exception exception)
         {
             entry.State = "Failed";
+            _raceLog.Write("ERROR", $"{entry.Id} {entry.Name}: {exception.GetType().Name}" + (exception is FtpCommandException ftpError ? $" (FTP {ftpError.StatusCode})" : ""));
             LogText.AppendText($"{Environment.NewLine}Transfer failed ({entry.Name}): {FriendlyMessage(exception)}");
             await RunScriptsAsync("TransferFailed", TransferScriptVariables(entry, FriendlyMessage(exception)), true);
             throw;
@@ -1893,6 +1928,22 @@ public partial class MainWindow : Window
         var values = session.LastFxpStageTimings.Select(stage =>
             $"{stage.Name} {(stage.Elapsed.TotalSeconds >= 1 ? $"{stage.Elapsed.TotalSeconds:0.00}s" : $"{stage.Elapsed.TotalMilliseconds:0}ms")}");
         LogText.AppendText($"{Environment.NewLine}FXP timings: {string.Join(" | ", values)}");
+    }
+
+    private void AppendTransferIntegrityNotices(QueueEntryView entry,
+        params (string Role, FtpRemoteSession Session)[] sessions)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (role, session) in sessions)
+        foreach (var rawLine in session.LastTransferCompletion.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (!rawLine.Contains("0SIZE", StringComparison.OrdinalIgnoreCase) &&
+                !rawLine.Contains("BADCRC", StringComparison.OrdinalIgnoreCase)) continue;
+            var line = Regex.Replace(rawLine, "\\x1B\\[[0-9;?]*[ -/]*[@-~]", "").Trim();
+            if (line.Length == 0 || !seen.Add(line)) continue;
+            var marker = line.Contains("BADCRC", StringComparison.OrdinalIgnoreCase) ? "BADCRC" : "0SIZE";
+            LogText.AppendText($"{Environment.NewLine}Transfer integrity [{marker}] ({role}, {entry.Name}): {line}");
+        }
     }
 
     private void AppendFxpFailureDiagnostic(QueueEntryView entry, ConnectionProfile sourceProfile,
@@ -2428,6 +2479,7 @@ public partial class MainWindow : Window
 
     private void RemoveTransferJob(Guid id)
     {
+        _raceLog.Write("QUEUE", $"Removed job {id}");
         _engine.Remove(id);
         var entry = _queue.FirstOrDefault(item => item.Id == id);
         if (entry is not null) _queue.Remove(entry);
@@ -2436,6 +2488,7 @@ public partial class MainWindow : Window
 
     private void ClearTransferJobs()
     {
+        _raceLog.Write("QUEUE", "Queue cleared");
         _engine.Clear();
         _queue.Clear();
         SaveQueue(); UpdateQueueStatus();
@@ -2450,7 +2503,7 @@ public partial class MainWindow : Window
             var saved = JsonSerializer.Deserialize<List<QueueSnapshot>>(File.ReadAllText(source)) ?? [];
             foreach (var item in saved)
                 _queue.Add(new QueueEntryView(item.Name, item.Source, item.Destination, item.Direction, item.Id == Guid.Empty ? Guid.NewGuid() : item.Id)
-                { State = item.State is "Completed" ? "Completed" : "Paused", BytesTransferred = item.BytesTransferred, TotalBytes = item.TotalBytes, SourceProfileId = item.SourceProfileId, DestinationProfileId = item.DestinationProfileId, QueuedAt = item.QueuedAt, StartedAt = item.StartedAt });
+                { State = item.State is "Completed" ? "Completed" : "Paused", BytesTransferred = item.BytesTransferred, TotalBytes = item.TotalBytes, SourceProfileId = item.SourceProfileId, DestinationProfileId = item.DestinationProfileId, QueuedAt = item.QueuedAt, StartedAt = item.StartedAt, RuleSection = item.RuleSection, RuleRelease = item.RuleRelease });
             UpdateQueueStatus();
             if (source == _oldQueuePath) SaveQueue();
         }
@@ -2462,7 +2515,7 @@ public partial class MainWindow : Window
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_queuePath)!);
-            var snapshots = _queue.Select(item => new QueueSnapshot(item.Name, item.Source, item.Destination, item.Direction, item.State, item.BytesTransferred, item.TotalBytes, item.Id, item.SourceProfileId, item.DestinationProfileId, item.QueuedAt, item.StartedAt));
+            var snapshots = _queue.Select(item => new QueueSnapshot(item.Name, item.Source, item.Destination, item.Direction, item.State, item.BytesTransferred, item.TotalBytes, item.Id, item.SourceProfileId, item.DestinationProfileId, item.QueuedAt, item.StartedAt, item.RuleSection, item.RuleRelease));
             var temporary = _queuePath + ".tmp"; File.WriteAllText(temporary, JsonSerializer.Serialize(snapshots, new JsonSerializerOptions { WriteIndented = true }));
             File.Move(temporary, _queuePath, true);
         }
@@ -2518,15 +2571,41 @@ public partial class MainWindow : Window
     {
         SaveWindowLayout();
         _legendTimer.Stop();
+        _raceLogTimer.Stop();
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
         if (_apiServer is not null) await _apiServer.DisposeAsync();
+        if (_ircService is not null) await _ircService.DisposeAsync();
         _workerPoolShuttingDown = true;
         await _engine.DisposeAsync();
         await DisposePooledWorkersAsync();
         if (_remoteSession is not null) await _remoteSession.DisposeAsync();
         if (_leftRemoteSession is not null) await _leftRemoteSession.DisposeAsync();
+        _raceLog.Write("SESSION", "FluxFTP stopped");
         base.OnClosed(e);
+    }
+
+    private void RaceLog_Click(object sender, RoutedEventArgs e)
+    {
+        if (_raceLogWindow is not null) { _raceLogWindow.Activate(); return; }
+        _raceLog.Maintain();
+        _raceLogWindow = new RaceLogWindow(_raceLog) { Owner = this };
+        _raceLogWindow.Closed += (_, _) => _raceLogWindow = null;
+        _raceLogWindow.Show();
+    }
+
+    private void TrackRaceEntry(QueueEntryView entry)
+    {
+        var previous = entry.State;
+        string Site(Guid? id) => id is { } value ? _raceSiteNames.GetValueOrDefault(value, value.ToString()) : "Local";
+        void Record() => _raceLog.Write("TRANSFER", $"{entry.Id} {entry.State} {entry.Direction} {entry.Name} | {Site(entry.SourceProfileId)}:{entry.Source} -> {Site(entry.DestinationProfileId)}:{entry.Destination} | {entry.BytesTransferred}/{entry.TotalBytes} bytes");
+        Record();
+        entry.PropertyChanged += (_, change) =>
+        {
+            if (change.PropertyName != nameof(QueueEntryView.State) || entry.State == previous) return;
+            previous = entry.State;
+            Record();
+        };
     }
 
     private void StartQueue_Click(object sender, RoutedEventArgs e)
@@ -2810,13 +2889,14 @@ public partial class MainWindow : Window
         var dialog = new GlobalSettingsWindow(_settings) { Owner = this };
         if (dialog.ShowDialog() == true && dialog.Settings is not null)
         {
-            _settings = dialog.Settings; _settingsStore.Save(_settings);
+            _settings = dialog.Settings;
             ThemeManager.Apply(_settings.Theme);
             ConfigureTrayIcon();
             UpdateLegendBar();
             _engine.ConfigureLocalSlots(_settings.MaxLocalDownloadSlots, _settings.MaxLocalUploadSlots);
             LogText.AppendText($"{Environment.NewLine}Global settings updated.");
             await RestartApiServerAsync();
+            await RestartIrcAsync();
         }
     }
 
@@ -2888,6 +2968,45 @@ public partial class MainWindow : Window
         Focus();
     }
 
+    private async Task RestartIrcAsync()
+    {
+        await _ircRestartGate.WaitAsync();
+        try
+        {
+        if (_ircService is not null) { await _ircService.DisposeAsync(); _ircService = null; }
+        if (_settings.Irc?.Enabled != true) return;
+        var routing = new IrcRoutingStore();
+        var rules = new SiteRuleStore();
+        var catcher = new IrcCatcher(site => rules.Load().Where(f => f.Site.Equals(site, StringComparison.OrdinalIgnoreCase)).SelectMany(f => f.Sections.Select(s => s.Name)).ToArray(),
+            entry => _raceLog.Write("ANNOUNCE", $"{entry.Site} {entry.Event} [{entry.Section}] {entry.Release} | {entry.Network}/{entry.Channel}"));
+        var setup = new IrcSetupCommands(() => new ProfileStore().Load(), profiles => new ProfileStore().Save(profiles), rules, _settings.Irc.AdminSiteId, routing, catcher, _settings.Irc.NetworkName);
+        _ircService = new IrcManager(_settings, message => Dispatcher.BeginInvoke(() =>
+        {
+            LogText.AppendText($"{Environment.NewLine}{message}");
+            LogText.ScrollToEnd();
+        }), setupCommand: async (command, stillAuthorized) => await Dispatcher.InvokeAsync(() =>
+        {
+            if (!stillAuthorized()) return "ERROR: IRC identity changed; command cancelled.";
+            var result = setup.Execute(command);
+            if (result.StartsWith("OK:", StringComparison.Ordinal))
+            {
+                try
+                {
+                    ReloadQuickSites(LeftQuickSites); ReloadQuickSites(RightQuickSites);
+                    foreach (var profile in new ProfileStore().Load())
+                    {
+                        var options = profile.EffectiveOptions;
+                        _engine.RegisterOrUpdateSite(new SitePolicy(profile.Id, profile.Name, options.MaxSlots, options.MaxDownloadSlots, options.MaxUploadSlots, options.Priority));
+                    }
+                }
+                catch { LogText.AppendText($"{Environment.NewLine}IRC settings saved; reopen the site selector to refresh the view."); }
+            }
+            return result;
+        }), routing: routing, catcher: catcher);
+        }
+        finally { _ircRestartGate.Release(); }
+    }
+
     private async Task RestartApiServerAsync()
     {
         if (_apiServer is not null) { await _apiServer.DisposeAsync(); _apiServer = null; }
@@ -2901,6 +3020,12 @@ public partial class MainWindow : Window
                 {
                     LogText.AppendText($"{Environment.NewLine}{message}");
                     LogText.ScrollToEnd();
+                }), connectIrc: async request => await await Dispatcher.InvokeAsync(async () =>
+                {
+                    var updated = _settings with { Irc = request.Apply(_settings.Irc) };
+                    _settingsStore.Save(updated);
+                    _settings = updated;
+                    await RestartIrcAsync();
                 }));
             LogText.AppendText($"{Environment.NewLine}HTTPS/JSON API listening on {(_settings.ApiLocalhostOnly ? "localhost" : "0.0.0.0")}:{_settings.HttpsApiPort}");
         }
@@ -2941,6 +3066,8 @@ public partial class MainWindow : Window
         var sourceBase = NormalizeRemotePath(request.SrcSection is not null ? ResolveApiSection(request.SrcSite, request.SrcSection) : request.SrcPath ?? "/");
         var destinationBase = NormalizeRemotePath(request.DstSection is not null ? ResolveApiSection(request.DstSite, request.DstSection) : request.DstPath ?? "/");
         var source = NormalizeRemotePath($"{sourceBase}/{request.Name}"); var destination = NormalizeRemotePath($"{destinationBase}/{request.Name}");
+        var siteRules = new SiteRuleStore().EvaluateDestination(request.DstSite, destination, request.DstSection, request.Name);
+        if (!siteRules.Accepted) throw new InvalidOperationException($"Site rules blocked transfer: {siteRules.Message}");
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(5)); await using var sourceSession = new FtpRemoteSession();
         await sourceSession.ConnectAsync(ApplyGlobalProxy(sourceProfile), timeout.Token);
         var item = (await sourceSession.ListAsync(sourceBase, timeout.Token)).FirstOrDefault(entry => entry.Name.Equals(request.Name, StringComparison.OrdinalIgnoreCase))
@@ -2974,6 +3101,7 @@ public partial class MainWindow : Window
             .Select(file => AddQueue(file.Entry.Name, file.Entry.FullPath, file.Destination, TransferDirection.ApiFxp,
                 file.Entry.Size ?? 0, sourceProfile.Id, destinationProfile.Id, persist: false)).ToList();
         jobIds.AddRange(queuedEntries.Select(entry => entry.Id));
+        foreach (var entry in queuedEntries) { entry.RuleSection = request.DstSection; entry.RuleRelease = request.Name; }
         queued = queuedEntries.Count;
         ScheduleBatch(queuedEntries);
         LogText.AppendText($"{Environment.NewLine}API queued FXP {request.Name}: {request.SrcSite} → {request.DstSite} ({queued} files)"); LogText.ScrollToEnd();
@@ -3034,6 +3162,8 @@ public partial class MainWindow : Window
 
     private static string ResolveApiSection(string site, string sectionName)
     {
+        var rulePath = new SiteRuleStore().ResolvePath(site, sectionName);
+        if (rulePath is not null) return rulePath;
         var section = new SectionStore().Load().FirstOrDefault(item => item.Name.Equals(sectionName, StringComparison.OrdinalIgnoreCase));
         return section?.SitePaths.FirstOrDefault(pair => pair.Key.Equals(site, StringComparison.OrdinalIgnoreCase)).Value
             ?? throw new KeyNotFoundException($"Section {sectionName} is not configured for {site}.");
@@ -3117,7 +3247,7 @@ public partial class MainWindow : Window
     {
         public override string ToString() => Label;
     }
-    private sealed record QueueSnapshot(string Name, string Source, string Destination, TransferDirection Direction, string State, long BytesTransferred, long TotalBytes = 0, Guid Id = default, Guid? SourceProfileId = null, Guid? DestinationProfileId = null, DateTimeOffset? QueuedAt = null, DateTimeOffset? StartedAt = null);
+    private sealed record QueueSnapshot(string Name, string Source, string Destination, TransferDirection Direction, string State, long BytesTransferred, long TotalBytes = 0, Guid Id = default, Guid? SourceProfileId = null, Guid? DestinationProfileId = null, DateTimeOffset? QueuedAt = null, DateTimeOffset? StartedAt = null, string? RuleSection = null, string? RuleRelease = null);
 
     private sealed class QueueEntryView(string name, string source, string destination, TransferDirection direction, Guid? id = null, long totalBytes = 0) : INotifyPropertyChanged
     {
@@ -3131,6 +3261,8 @@ public partial class MainWindow : Window
         public long SpeedBytesPerSecond { get => _speedBytesPerSecond; set { _speedBytesPerSecond = value; Changed(); } }
         public Guid? SourceProfileId { get; set; }
         public Guid? DestinationProfileId { get; set; }
+        public string? RuleSection { get; set; }
+        public string? RuleRelease { get; set; }
         public DateTimeOffset? QueuedAt { get; set; }
         public DateTimeOffset? StartedAt { get; set; }
         public DateTime LastPersistedAt { get; set; }

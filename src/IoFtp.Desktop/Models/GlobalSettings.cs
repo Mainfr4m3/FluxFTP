@@ -38,4 +38,5 @@ public sealed record GlobalSettings(
     bool ProxyDataConnections = true,
     bool CheckForUpdatesAtStartup = true,
     AdvancedSkipRule[]? AdvancedSkipRules = null,
-    ThemeSettings? Theme = null);
+    ThemeSettings? Theme = null,
+    IrcSettings? Irc = null);

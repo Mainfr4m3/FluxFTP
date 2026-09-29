@@ -9,7 +9,7 @@ internal sealed record UpdateCheckResult(string CurrentVersion, string LatestVer
 
 internal sealed class UpdateCheckService
 {
-    private const string LatestReleaseUrl = "https://api.github.com/repos/Khazaztroph/FluxFTP/releases/latest";
+    private const string LatestReleaseUrl = "https://api.github.com/repos/Mainfr4m3/FluxFTP/releases/latest";
     private static readonly TimeSpan CacheLifetime = TimeSpan.FromHours(24);
     private readonly string _cachePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FluxFTP", "update-check.json");
 
@@ -27,6 +27,7 @@ internal sealed class UpdateCheckService
     {
         var current = CurrentVersion;
         var cached = LoadCache();
+        if (cached is not null && !cached.ReleaseUrl.StartsWith("https://github.com/Mainfr4m3/FluxFTP/releases/", StringComparison.OrdinalIgnoreCase)) cached = null;
         if (!force && cached is not null && DateTimeOffset.UtcNow - cached.CheckedAt < CacheLifetime)
             return MakeResult(current, cached.LatestVersion, cached.ReleaseUrl, true);
 

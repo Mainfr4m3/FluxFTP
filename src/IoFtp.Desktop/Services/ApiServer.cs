@@ -21,13 +21,15 @@ namespace IoFtp.Desktop.Services;
 internal sealed class ApiServer : IAsyncDisposable
 {
     private WebApplication? _app;
+    private VisionaryPipeServer? _visionaryPipe;
     private readonly Dictionary<string, SpreadJobState> _spreadJobs = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _spreadJobsLock = new();
     private int _nextSpreadJobId;
 
     public async Task StartAsync(GlobalSettings settings, Func<IReadOnlyList<TransferJobInfo>> getJobs,
         Func<ApiTransferRequest, Task<object>> startTransfer, Func<ApiDownloadRequest, Task<object>> startDownload,
-        Action<Guid> removeJob, Action<Guid> resetJob, Action<string>? diagnosticLog = null)
+        Action<Guid> removeJob, Action<Guid> resetJob, Action<string>? diagnosticLog = null,
+        Func<IrcConnectRequest, Task>? connectIrc = null)
     {
         if (!settings.EnableHttpsApi) return;
         var certificate = LoadOrCreateCertificate();
@@ -62,6 +64,22 @@ internal sealed class ApiServer : IAsyncDisposable
         });
 
         _app.MapGet("/info", () => Results.Json(new { name = "FluxFTP", version = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "1.0.0", api = "cbftp-compatible", tls = true, udp = false }));
+        _app.MapPost("/irc/connect", async (HttpContext context) =>
+        {
+            if (connectIrc is null) return Results.StatusCode(503);
+            try
+            {
+                var request = await context.Request.ReadFromJsonAsync<IrcConnectRequest>(context.RequestAborted);
+                if (request is null) return Results.BadRequest(new { error = "JSON connection settings are required." });
+                request.Apply(null); // Validate before dispatching any mutation.
+                await connectIrc(request);
+                return Results.Json(new { status = "connecting", saved = true }, statusCode: 202);
+            }
+            catch (Exception ex) when (ex is ArgumentException or JsonException or BadHttpRequestException)
+            { return Results.BadRequest(new { error = "Invalid IRC settings. Supply host, port, nick, channel and ZNC credentials when enabled." }); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or CryptographicException)
+            { return Results.Json(new { error = "Could not save or restart IRC. Check local configuration access." }, statusCode: 500); }
+        });
         // Stock cbftp returns name arrays from the collection endpoints.  RaceTrade
         // subsequently requests the detail endpoint for every selected name.
         _app.MapGet("/sites", () => Results.Json(new ProfileStore().Load().Select(site => site.Name)));
@@ -281,10 +299,13 @@ internal sealed class ApiServer : IAsyncDisposable
         _app.MapPost("/transferjobs/{id:guid}/reset", (Guid id) => { resetJob(id); return Results.Ok(new { reset = id }); });
 
         await _app.StartAsync();
+        _visionaryPipe = new VisionaryPipeServer(startTransfer, diagnosticLog);
+        _visionaryPipe.Start();
     }
 
     public async ValueTask DisposeAsync()
     {
+        if (_visionaryPipe is not null) { await _visionaryPipe.DisposeAsync(); _visionaryPipe = null; }
         if (_app is null) return;
         await _app.StopAsync(); await _app.DisposeAsync(); _app = null;
     }
@@ -352,7 +373,7 @@ internal sealed class ApiServer : IAsyncDisposable
     private static string? SitePath(SectionDefinition section, string site) => section.SitePaths.FirstOrDefault(pair => pair.Key.Equals(site, StringComparison.OrdinalIgnoreCase)).Value;
     private static void SetSitePath(SectionDefinition section, string site, string path) { RemoveSitePath(section, site); section.SitePaths[site] = path; }
     private static bool RemoveSitePath(SectionDefinition section, string site) { var key = section.SitePaths.Keys.FirstOrDefault(key => key.Equals(site, StringComparison.OrdinalIgnoreCase)); return key is not null && section.SitePaths.Remove(key); }
-    private static string ResolvePath(string site, string path) => path.StartsWith('/') ? path : FindSection(path) is { } section && SitePath(section, site) is { } sectionPath ? sectionPath : path;
+    private static string ResolvePath(string site, string path) => path.StartsWith('/') ? path : new SiteRuleStore().ResolvePath(site, path) ?? (FindSection(path) is { } section && SitePath(section, site) is { } sectionPath ? sectionPath : path);
     private static object ToApiSection(SectionDefinition section) => new { name = section.Name, hotkey = section.Hotkey, num_jobs = 0,
         validation_mode = section.ValidationMode.ToString().ToUpperInvariant(), allow_patterns = SplitPatterns(section.AllowPatterns),
         deny_patterns = SplitPatterns(section.DenyPatterns),
@@ -484,7 +505,7 @@ internal sealed class ApiServer : IAsyncDisposable
                 await session.ConnectAsync(profile, cancellation.Token);
                 var rawPath = request.PathSection is not null ? ResolvePath(name, request.PathSection) : request.Path;
                 if (!string.IsNullOrWhiteSpace(rawPath)) await session.ExecuteCommandAsync($"CWD {rawPath}", cancellation.Token);
-                ValidateRawPre(request.Command);
+                ValidateRawPre(name, request.Command);
                 var response = await session.ExecuteCommandAsync(request.Command ?? "", cancellation.Token);
                 var result = StripAnsi(response.Message).Trim();
                 var outcome = PreCommandResultClassifier.Classify(request.Command, response.StatusCode, result);
@@ -505,13 +526,15 @@ internal sealed class ApiServer : IAsyncDisposable
     private static SectionValidationMode ParseValidationMode(string? value) =>
         Enum.TryParse<SectionValidationMode>(value, true, out var mode) ? mode : SectionValidationMode.Disabled;
 
-    private static void ValidateRawPre(string? command)
+    private static void ValidateRawPre(string site, string? command)
     {
         if (string.IsNullOrWhiteSpace(command)) return;
         var fields = command.Split(' ', 4, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (fields.Length < 4 || !fields[0].Equals("SITE", StringComparison.OrdinalIgnoreCase) ||
             !fields[1].Equals("PRE", StringComparison.OrdinalIgnoreCase)) return;
         var validation = SectionReleaseValidator.Validate(fields[2], fields[3]);
+        var siteRules = new SiteRuleStore().Evaluate(site, fields[2], fields[3]);
+        if (!siteRules.Accepted) throw new InvalidOperationException($"PRE blocked by site rules: {siteRules.Message}");
         if (!validation.Accepted && validation.Mode == SectionValidationMode.Block)
             throw new InvalidOperationException($"PRE blocked: {validation.Message}");
     }

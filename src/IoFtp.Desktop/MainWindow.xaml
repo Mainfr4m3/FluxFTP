@@ -23,6 +23,7 @@
                            VerticalAlignment="Center" HorizontalAlignment="Center" />
                 <StackPanel Grid.Column="2" Orientation="Horizontal">
                     <Button Content="Transfer Jobs" Click="TransferJobs_Click" />
+                    <Button Content="RACE-Log" Click="RaceLog_Click" />
                     <Button Content="Metrics" Click="Metrics_Click" />
                     <Button Content="Scripts" Click="Scripts_Click" />
                     <Button Content="Sections" Click="Sections_Click" />

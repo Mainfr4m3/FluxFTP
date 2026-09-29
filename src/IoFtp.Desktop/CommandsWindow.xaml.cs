@@ -108,6 +108,11 @@ public partial class CommandsWindow : Window
                 { if (_refreshDirectory is not null) await _refreshDirectory(); continue; }
                 var runInsideSelection = item.IsDirectory && command.StartsWith("SITE PRE ", StringComparison.OrdinalIgnoreCase);
                 var preParts = command.Split(' ', 4, StringSplitOptions.RemoveEmptyEntries);
+                if (preParts.Length == 4 && preParts[0].Equals("SITE", StringComparison.OrdinalIgnoreCase) && preParts[1].Equals("PRE", StringComparison.OrdinalIgnoreCase))
+                {
+                    var rules = new SiteRuleStore().Evaluate(_siteName, preParts[2], preParts[3]);
+                    if (!rules.Accepted) throw new InvalidOperationException($"PRE blocked by site rules: {rules.Message}");
+                }
                 var selectedName = Path.GetFileName(item.SelectedPath.TrimEnd('/'));
                 var releaseName = preParts.Length > 3 ? preParts[3].Trim().TrimEnd('/') : selectedName;
                 var selectedParent = item.SelectedPath[..Math.Max(1, item.SelectedPath.TrimEnd('/').LastIndexOf('/'))];
