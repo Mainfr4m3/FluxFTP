@@ -6,6 +6,10 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../../src/IoFtp.Desktop/Services/SpreadRaceCoordinator.cs" Link="SpreadRaceCoordinator.cs" />
+    <Compile Include="../../src/IoFtp.Desktop/Services/RaceDestinationLease.cs" Link="RaceDestinationLease.cs" />
+    <Compile Include="../../src/IoFtp.Desktop/Services/RaceDestinationVerifier.cs" Link="RaceDestinationVerifier.cs" />
+    <Compile Include="../../src/IoFtp.Desktop/Services/NukeDetector.cs" Link="NukeDetector.cs" />
     <FrameworkReference Include="Microsoft.WindowsDesktop.App.WPF" />
     <ProjectReference Include="../../src/IoFtp.Core/IoFtp.Core.csproj" />
     <Compile Include="../../src/IoFtp.Desktop/Models/GlobalSettings.cs" Link="GlobalSettings.cs" />
@@ -15,6 +19,16 @@
     <Compile Include="../../src/IoFtp.Desktop/Services/Irc*.cs" Link="%(Filename).cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/SiteRuleStore.cs" Link="SiteRuleStore.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/ProfileStore.cs" Link="ProfileStore.cs" />
+    <Compile Include="../../src/IoFtp.Desktop/Services/VisionaryConfiguration.cs" Link="VisionaryConfiguration.cs" />
+    <Compile Include="../../src/IoFtp.Desktop/Services/VisionaryRaceState.cs" Link="VisionaryRaceState.cs" />
+    <Compile Include="../../src/IoFtp.Desktop/Services/VisionaryTransferProfiles.cs" Link="VisionaryTransferProfiles.cs" />
+    <Compile Include="../../src/IoFtp.Desktop/Services/FtpRushSiteImporter.cs" Link="FtpRushSiteImporter.cs" />
+    <Compile Include="../../src/IoFtp.Desktop/Services/FtpRushSectionMigration.cs" Link="FtpRushSectionMigration.cs" />
+    <Compile Include="../../src/IoFtp.Desktop/Services/SectionStore.cs" Link="SectionStore.cs" />
+    <Compile Include="../../src/IoFtp.Desktop/Services/BookmarkStore.cs" Link="BookmarkStore.cs" />
+    <Compile Include="../../src/IoFtp.Desktop/Services/CaptionBookmarkImporter.cs" Link="CaptionBookmarkImporter.cs" />
+    <Compile Include="../../src/IoFtp.Desktop/Services/VisionaryImportInventory.cs" Link="VisionaryImportInventory.cs" />
+    <Compile Include="../../src/IoFtp.Desktop/Services/ImportBackup.cs" Link="ImportBackup.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/RaceLogStore.cs" Link="RaceLogStore.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/GlobalSettingsStore.cs" Link="GlobalSettingsStore.cs" />
   </ItemGroup>

@@ -8,6 +8,44 @@ using IoFtp.Desktop.Models;
 using IoFtp.Desktop.Services;
 
 var assertions = 0;
+if (args.FirstOrDefault() == "--race-flow-checks")
+{
+    await RaceFlowChecks.Run();
+    return;
+}
+if (args.FirstOrDefault() == "--rush-migration-checks")
+{
+    FtpRushMigrationChecks.Run();
+    foreach (var path in args.Skip(1))
+    {
+        var package = FtpRushSiteImporter.ImportPackage(path);
+        var rows = FtpRushSectionMigration.Preview(package.Bookmarks);
+        Console.WriteLine($"Read {Path.GetFileName(path)}: {package.Sites.Count} sites, {package.Bookmarks.Count} bookmarks, {rows.Count} section candidates; no files written.");
+    }
+    return;
+}
+if (args.FirstOrDefault() == "--visionary-checks")
+{
+    VisionaryConfigurationChecks.Run();
+    VisionaryRaceChecks.Run();
+    VisionaryPayloadChecks.Run();
+    foreach (var path in args.Skip(1))
+    {
+        var profiles = VisionaryTransferProfiles.Load(path);
+        Console.WriteLine($"Validated sample/covers profiles from {Path.GetFileName(path)}; original unchanged.");
+    }
+    return;
+}
+if (args.FirstOrDefault() == "--visionary-files")
+{
+    foreach (var path in args.Skip(1))
+    {
+        var file = new VisionaryConfiguration(path);
+        if (file.HasChanges) throw new Exception("Imported file incorrectly marked changed.");
+        Console.WriteLine($"Parsed {Path.GetFileName(path)}: {file.Entries.Count} entries; original unchanged.");
+    }
+    return;
+}
 if (!IrcConnectionError.RegistrationReply("464", "secret")!.Contains("password rejected") ||
     !IrcConnectionError.RegistrationReply("433", "secret")!.Contains("Nickname") ||
     IrcConnectionError.RegistrationReply("ERROR", "password secret")!.Contains("secret") ||
@@ -18,6 +56,10 @@ var projectLines = IrcProjectNews.Parse("""
 if (projectLines.Length != 1 || !projectLines[0].Contains("2026-09-29 12:00 UTC") || !projectLines[0].Contains("release v1.0.53") || !projectLines[0].EndsWith("Mainfr4m3/FluxFTP/releases/tag/v1.0.53")) throw new Exception("Project news parse failed");
 ProfileStoreChecks.Run();
 GlobalSettingsChecks.Run();
+VisionaryConfigurationChecks.Run();
+VisionaryRaceChecks.Run();
+VisionaryPayloadChecks.Run();
+FtpRushMigrationChecks.Run();
 var ircApiRequest = new IrcConnectRequest("leon.example.test", 29025, "FLUXFTP", "#FLUX",
     UseZnc: true, ZncUsername: "FLUX", ZncNetwork: "FreakNET", Password: "password:with:colons");
 var ircApiSettings = ircApiRequest.Apply(new IrcSettings(Host: "other.example.test", AccountLinks: [new("old", "admin")]));

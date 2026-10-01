@@ -3,31 +3,7 @@
 
 See [CHANGELOG.md](CHANGELOG.md) for release history.
 
-FluxFTP is a modern dual-pane FTP/FXP client prototype. The first milestone focuses
-on the desktop workflow, a persistent transfer queue boundary, and a theme system
-with ioGUI3 as the default visual identity.
-
-## Run the prototype
-
-From PowerShell inside the `C:\ioftp` directory:
-
-```powershell
-.\run.cmd
-```
-
-`run.cmd` can also be launched by double-clicking it. To use the PowerShell
-script explicitly, invoke it with the call operator so Windows does not use the
-`.ps1` file association:
-
-```powershell
-& 'C:\ioftp\run.ps1'
-```
-
-The equivalent direct command is:
-
-```powershell
-dotnet run --project .\src\IoFtp.Desktop\IoFtp.Desktop.csproj
-```
+FluxFTP is a modern dual-pane FTP/FXP client prototype.
 
 FluxFTP supports FTP/FTPS connections, dual remote sessions, resumable transfers,
 and secure FXP with automatic client-relay fallback.
@@ -79,6 +55,8 @@ enabled when mIRC and FluxFTP run on the same computer.
 d-tool's current line-oriented `/raw` parser also prints standalone JSON
 delimiters. The compatible parser fix is available in
 [scriptzteam/d-tool#1](https://github.com/scriptzteam/d-tool/pull/1).
+
+Standalone mIRC/AdiIRC control scripts and the VISIONARY bridge are included in [extras/irc](extras/irc/README.md). VISIONARY preserves explicit source/target chains through a current-user-only Windows named pipe.
 
 ## Screenshots
 

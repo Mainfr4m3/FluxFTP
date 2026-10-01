@@ -2,6 +2,36 @@
 
 All notable FluxFTP changes are documented here.
 
+## 1.0.55 — 2026-10-01
+
+### Added
+
+- Shared growing-release supervision for RaceTrade spread jobs and VISIONARY, including download-only targets, destination verification and overlapping-race protection.
+- VISIONARY configuration/import tools, sample/covers profiles and embedded mIRC bridge export.
+
+### Fixed
+
+- Server CRC/zero-byte rejection messages fail transfers even when returned with FTP 226.
+- Preserve DUPE, NUKE and SAMPLE rejections; avoid relay fallback for recognized server policy stops.
+- Keep multiline server error boxes readable and distinguish expected missing-directory probes from transfer failures.
+- White bottom status text for improved readability.
+- Removed queue jobs cannot cause a spread job to report DONE; final source state triggers rechecks of growing files.
+
+### Security
+
+- Upgrade SSH.NET from 2025.1.0 to 2026.0.0, including upstream SCP security fixes. FluxFTP uses SftpClient, not ScpClient.
+
+### Validation
+
+- Race verification checks and the existing desktop test suite passed.
+- NuGet vulnerability audit including transitive dependencies reported no vulnerable packages.
+- SFTP and an initial live race passed user testing in the racefix.5 candidate.
+
+### Downloads
+
+- Windows x64 single-file EXEs: framework-dependent (.NET 8 Desktop and ASP.NET Core runtimes required) and self-contained (runtimes included).
+- Separate bridge and rules/guides ZIPs, plus SHA-256 checksums.
+
 ## 1.0.53 — 2026-09-29
 
 ### Added

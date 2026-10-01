@@ -266,6 +266,7 @@ public partial class MainWindow : Window
 
     private void AttachProtocolLog(FtpRemoteSession session, string siteName)
     {
+        session.ProtocolDetailMessage += message => _raceLog.Write("FTP-DETAIL", $"[{siteName}] {message}");
         session.ProtocolMessage += message => Dispatcher.BeginInvoke(() =>
         {
             LogText.AppendText($"{Environment.NewLine}{DateTime.Now:HH:mm:ss} [{siteName}] {message}");
@@ -1410,15 +1411,8 @@ public partial class MainWindow : Window
     private bool ShouldSkip(string name, bool isDirectory = false) =>
         SkipRuleMatcher.ShouldSkip(_settings, name, isDirectory, "Transfer");
 
-    private static async Task EnsureRemoteDirectoryAsync(FtpRemoteSession session, string path, CancellationToken token)
-    {
-        var current = "";
-        foreach (var part in NormalizeRemotePath(path).Split('/', StringSplitOptions.RemoveEmptyEntries))
-        {
-            current += "/" + part;
-            try { await session.ExecuteCommandAsync($"MKD {current}", token); } catch { }
-        }
-    }
+    private static Task EnsureRemoteDirectoryAsync(FtpRemoteSession session, string path, CancellationToken token)
+        => TransferRejection.EnsureDirectoryAsync(NormalizeRemotePath(path), session.ExecuteDirectoryProbeAsync, token);
 
     private async void QueueLeft_Click(object sender, RoutedEventArgs e) => await TransferLeftAsync(false);
     private async void QueueRight_Click(object sender, RoutedEventArgs e) => await TransferRightAsync(false);
@@ -1831,7 +1825,9 @@ public partial class MainWindow : Window
                         reuseWorkers = true;
                         return;
                     }
-                    catch (FtpCommandException exception) when (exception.StatusCode == 553 && DestinationUsesXdupe(entry))
+                    catch (TransferVerificationException) { throw; }
+                    catch (Exception exception) when (TransferRejection.Category(exception.Message) is not null) { throw; }
+                    catch (FtpCommandException exception) when (exception.StatusCode == 553 && DestinationUsesXdupe(entry) && TransferRejection.Category(exception.Message) is null)
                     {
                         throw;
                     }
@@ -1886,7 +1882,7 @@ public partial class MainWindow : Window
             await RunScriptsAsync("AfterTransfer", TransferScriptVariables(entry, "Completed"), true);
             reuseWorkers = true;
         }
-        catch (FtpCommandException exception) when (exception.StatusCode == 553 && DestinationUsesXdupe(entry))
+        catch (FtpCommandException exception) when (exception.StatusCode == 553 && DestinationUsesXdupe(entry) && TransferRejection.Category(exception.Message) is null)
         {
             _raceLog.Write("SKIP", $"{entry.Id} {entry.Name}: XDUPE, file already exists");
             ApplyXdupeReply(entry, exception.Message);
@@ -1906,8 +1902,9 @@ public partial class MainWindow : Window
         catch (Exception exception)
         {
             entry.State = "Failed";
-            _raceLog.Write("ERROR", $"{entry.Id} {entry.Name}: {exception.GetType().Name}" + (exception is FtpCommandException ftpError ? $" (FTP {ftpError.StatusCode})" : ""));
-            LogText.AppendText($"{Environment.NewLine}Transfer failed ({entry.Name}): {FriendlyMessage(exception)}");
+            var rejection = TransferRejection.Category(exception.Message);
+            _raceLog.Write(rejection ?? "ERROR", $"{entry.Id} {entry.Name}: {exception.GetType().Name}" + (exception is FtpCommandException ftpError ? $" (FTP {ftpError.StatusCode})" : ""));
+            LogText.AppendText(Environment.NewLine + TransferRejection.FormatFailure(entry.Name, exception is FtpCommandException ? exception.Message : FriendlyMessage(exception)));
             await RunScriptsAsync("TransferFailed", TransferScriptVariables(entry, FriendlyMessage(exception)), true);
             throw;
         }
@@ -1978,6 +1975,8 @@ public partial class MainWindow : Window
 
     private bool DestinationUsesXdupe(QueueEntryView entry)
     {
+        // A duplicate response is not evidence that a growing race file is complete.
+        if (entry.VisionaryRace) return false;
         var profile = entry.Direction switch
         {
             TransferDirection.Upload or TransferDirection.RelayLeftToRight => _rightProfile,
@@ -1998,7 +1997,7 @@ public partial class MainWindow : Window
         if (duplicates.Count == 0) return;
 
         foreach (var queued in _queue.Where(item => item.Id != current.Id && item.State == "Queued" &&
-                     item.Direction == current.Direction && duplicates.Contains(item.Name)).ToList())
+                     !item.VisionaryRace && item.Direction == current.Direction && duplicates.Contains(item.Name)).ToList())
         {
             _engine.Remove(queued.Id);
             queued.BytesTransferred = queued.TotalBytes;
@@ -2515,7 +2514,8 @@ public partial class MainWindow : Window
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_queuePath)!);
-            var snapshots = _queue.Select(item => new QueueSnapshot(item.Name, item.Source, item.Destination, item.Direction, item.State, item.BytesTransferred, item.TotalBytes, item.Id, item.SourceProfileId, item.DestinationProfileId, item.QueuedAt, item.StartedAt, item.RuleSection, item.RuleRelease));
+            // A partial race transfer must not resume as a standalone completed-release job after restart.
+            var snapshots = _queue.Where(item => !item.VisionaryRace).Select(item => new QueueSnapshot(item.Name, item.Source, item.Destination, item.Direction, item.State, item.BytesTransferred, item.TotalBytes, item.Id, item.SourceProfileId, item.DestinationProfileId, item.QueuedAt, item.StartedAt, item.RuleSection, item.RuleRelease));
             var temporary = _queuePath + ".tmp"; File.WriteAllText(temporary, JsonSerializer.Serialize(snapshots, new JsonSerializerOptions { WriteIndented = true }));
             File.Move(temporary, _queuePath, true);
         }
@@ -2879,6 +2879,17 @@ public partial class MainWindow : Window
         new SectionsWindow { Owner = this }.Show();
     }
 
+    private void Visionary_Click(object sender, RoutedEventArgs e)
+    {
+        new VisionaryWindow(_settings.EnableVisionaryBridge, async enabled =>
+        {
+            _settings = _settings with { EnableVisionaryBridge = enabled };
+            new GlobalSettingsStore().Save(_settings);
+            await RestartApiServerAsync();
+        }) { Owner = this }.ShowDialog();
+        ReloadQuickSites(LeftQuickSites); ReloadQuickSites(RightQuickSites);
+    }
+
     private void SpreadJobs_Click(object sender, RoutedEventArgs e)
     {
         new SpreadJobsWindow { Owner = this }.Show();
@@ -3010,7 +3021,7 @@ public partial class MainWindow : Window
     private async Task RestartApiServerAsync()
     {
         if (_apiServer is not null) { await _apiServer.DisposeAsync(); _apiServer = null; }
-        if (!_settings.EnableHttpsApi) return;
+        if (!_settings.EnableHttpsApi && !_settings.EnableVisionaryBridge) return;
         try
         {
             _apiServer = new ApiServer();
@@ -3018,6 +3029,7 @@ public partial class MainWindow : Window
                 id => Dispatcher.Invoke(() => RemoveTransferJob(id)), id => Dispatcher.Invoke(() => ResetTransferJob(id)),
                 message => Dispatcher.BeginInvoke(() =>
                 {
+                    if (message.StartsWith("VISIONARY", StringComparison.OrdinalIgnoreCase)) _raceLog.Write("VISIONARY", message);
                     LogText.AppendText($"{Environment.NewLine}{message}");
                     LogText.ScrollToEnd();
                 }), connectIrc: async request => await await Dispatcher.InvokeAsync(async () =>
@@ -3026,8 +3038,9 @@ public partial class MainWindow : Window
                     _settingsStore.Save(updated);
                     _settings = updated;
                     await RestartIrcAsync();
-                }));
-            LogText.AppendText($"{Environment.NewLine}HTTPS/JSON API listening on {(_settings.ApiLocalhostOnly ? "localhost" : "0.0.0.0")}:{_settings.HttpsApiPort}");
+                }), visionaryStep: RunVisionaryStepAsync);
+            if (_settings.EnableHttpsApi)
+                LogText.AppendText($"{Environment.NewLine}HTTPS/JSON API listening on {(_settings.ApiLocalhostOnly ? "localhost" : "0.0.0.0")}:{_settings.HttpsApiPort}");
         }
         catch (Exception exception)
         {
@@ -3037,14 +3050,41 @@ public partial class MainWindow : Window
         LogText.ScrollToEnd();
     }
 
-    private async Task<object> StartApiTransferAsync(ApiTransferRequest request) => await await Dispatcher.InvokeAsync(async () =>
+    private Task<object> StartApiTransferAsync(ApiTransferRequest request) => StartApiTransferCoreAsync(request);
+
+    private async Task<bool> RunVisionaryStepAsync(ApiTransferRequest request, VisionaryRaceState race, CancellationToken token)
+    {
+        try
+        {
+            token.ThrowIfCancellationRequested();
+            RaceDestinationLease.Acquire(request.DstSite!, request.DstSection ?? request.DstPath ?? "/", request.Name!, race);
+            await StartApiTransferCoreAsync(request, race, token);
+            var finished = await Dispatcher.InvokeAsync(() => race.DestinationVerified && race.Finished(id => _queue.FirstOrDefault(item => item.Id == id)?.State));
+            if (finished || !race.SourceAvailable) RaceDestinationLease.Release(race);
+            return finished;
+        }
+        catch
+        {
+            RaceDestinationLease.Release(race);
+            await Dispatcher.InvokeAsync(() =>
+            {
+                foreach (var id in race.Jobs.ToArray())
+                    if (_queue.FirstOrDefault(item => item.Id == id) is { State: not "Completed" } entry)
+                        RemoveTransferJob(entry.Id);
+            });
+            throw;
+        }
+    }
+
+    private async Task<object> StartApiTransferCoreAsync(ApiTransferRequest request, VisionaryRaceState? race = null, CancellationToken cancellationToken = default) => await await Dispatcher.InvokeAsync(async () =>
     {
         if (string.IsNullOrWhiteSpace(request.SrcSite) || string.IsNullOrWhiteSpace(request.DstSite) || string.IsNullOrWhiteSpace(request.Name))
             throw new ArgumentException("src_site, dst_site and name are required for FXP jobs.");
+        var ruleRelease = race is not null ? VisionaryTransferProfiles.ReleasePath(request.Name).Split('/')[0] : request.Name;
         var validationSection = request.SrcSection ?? request.DstSection;
         if (!string.IsNullOrWhiteSpace(validationSection))
         {
-            var validation = SectionReleaseValidator.Validate(validationSection, request.Name);
+            var validation = SectionReleaseValidator.Validate(validationSection, ruleRelease);
             if (!validation.Accepted)
             {
                 LogText.AppendText($"{Environment.NewLine}Section precheck {validation.Mode}: {validation.Message}");
@@ -3058,6 +3098,8 @@ public partial class MainWindow : Window
             ?? throw new KeyNotFoundException($"Site {request.SrcSite} was not found.");
         var destinationProfile = profiles.FirstOrDefault(profile => profile.Name.Equals(request.DstSite, StringComparison.OrdinalIgnoreCase))
             ?? throw new KeyNotFoundException($"Site {request.DstSite} was not found.");
+        if (race is not null && sourceProfile.Id == destinationProfile.Id)
+            throw new ArgumentException("A VISIONARY race needs different source and destination sites.");
         foreach (var profile in new[] { sourceProfile, destinationProfile })
         {
             var options = profile.EffectiveOptions;
@@ -3066,12 +3108,30 @@ public partial class MainWindow : Window
         var sourceBase = NormalizeRemotePath(request.SrcSection is not null ? ResolveApiSection(request.SrcSite, request.SrcSection) : request.SrcPath ?? "/");
         var destinationBase = NormalizeRemotePath(request.DstSection is not null ? ResolveApiSection(request.DstSite, request.DstSection) : request.DstPath ?? "/");
         var source = NormalizeRemotePath($"{sourceBase}/{request.Name}"); var destination = NormalizeRemotePath($"{destinationBase}/{request.Name}");
-        var siteRules = new SiteRuleStore().EvaluateDestination(request.DstSite, destination, request.DstSection, request.Name);
+        var siteRules = new SiteRuleStore().EvaluateDestination(request.DstSite, destination, request.DstSection, ruleRelease);
         if (!siteRules.Accepted) throw new InvalidOperationException($"Site rules blocked transfer: {siteRules.Message}");
-        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(5)); await using var sourceSession = new FtpRemoteSession();
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromMinutes(5));
+        await using var sourceSession = new FtpRemoteSession();
         await sourceSession.ConnectAsync(ApplyGlobalProxy(sourceProfile), timeout.Token);
-        var item = (await sourceSession.ListAsync(sourceBase, timeout.Token)).FirstOrDefault(entry => entry.Name.Equals(request.Name, StringComparison.OrdinalIgnoreCase))
-            ?? throw new FileNotFoundException($"{request.Name} was not found on {request.SrcSite}.");
+        var itemParent = race is not null ? RemoteParent(source) : sourceBase;
+        var itemName = race is not null ? RemoteLeaf(source) : request.Name;
+        race?.BeginListing();
+        IReadOnlyList<RemoteEntry> parentEntries;
+        try { parentEntries = await sourceSession.ListAsync(itemParent, timeout.Token); }
+        catch (FtpCommandException exception) when (race is not null && request.Name.Contains('/') && exception.StatusCode == 550)
+        { return new ApiTransferStartResult(request.Name, "WAITING", 0, request.SrcSite, request.DstSite, []); }
+        if (race is not null && request.Name.Contains('/'))
+        {
+            var parentNuke = NukeDetector.DetectDirectory(RemoteLeaf(itemParent), parentEntries);
+            if (parentNuke.IsNuked) throw new InvalidOperationException("Nuke detection stopped the subdirectory race: " + parentNuke.Display);
+            race.InspectListing(parentEntries, false, itemParent);
+        }
+        var item = parentEntries.FirstOrDefault(entry => entry.Name.Equals(itemName, StringComparison.OrdinalIgnoreCase));
+        if (item is null && race is not null) return new ApiTransferStartResult(request.Name, "WAITING", 0, request.SrcSite, request.DstSite, []);
+        if (item is null) throw new FileNotFoundException($"{request.Name} was not found on {request.SrcSite}.");
+        if (race is not null) race.SourceAvailable = true;
+        if (race is not null && !item.IsDirectory) throw new InvalidOperationException("VISIONARY races require a release directory.");
         var queued = 0;
         var jobIds = new List<Guid>();
         var apiFiles = new List<(RemoteEntry Entry, string Destination)>();
@@ -3081,12 +3141,14 @@ public partial class MainWindow : Window
             var nuke = NukeDetector.DetectDirectory(RemoteLeaf(sourceDirectory), children);
             if (nuke.IsNuked)
                 throw new InvalidOperationException($"Nuke detection blocked automated transfer: {sourceDirectory} ({nuke.Display}).");
+            race?.InspectListing(children, sourceDirectory == source, sourceDirectory, child => !ShouldSkip(child.Name, child.IsDirectory));
             foreach (var child in children)
             {
                 if (child.Name is "." or ".." || ShouldSkip(child.Name, child.IsDirectory)) continue;
+                if (race is not null && (race.IsCompletionMarker(child) || VisionaryRaceState.IsVerificationMetadata(child))) continue;
                 var childDestination = NormalizeRemotePath($"{destinationDirectory}/{child.Name}");
                 if (child.IsDirectory) await QueueDirectory(child.FullPath, childDestination);
-                else apiFiles.Add((child, childDestination));
+                else if (race?.AllowsFile(child) != false) apiFiles.Add((child, childDestination));
             }
         }
         if (item.IsDirectory) await QueueDirectory(source, destination);
@@ -3096,15 +3158,45 @@ public partial class MainWindow : Window
             if (nuke.IsNuked) throw new InvalidOperationException($"Nuke detection blocked automated transfer: {item.FullPath} ({nuke.Display}).");
             apiFiles.Add((item, destination));
         }
-        var queuedEntries = apiFiles.OrderBy(file => PriorityRank(file.Entry.Name))
+        timeout.Token.ThrowIfCancellationRequested();
+        race?.EndListing();
+        var selectedFiles = apiFiles.Where(file => race is null || race.NeedsTransfer(file.Entry.FullPath, file.Entry.Size,
+            file.Entry.ModifiedAt, id => _queue.FirstOrDefault(entry => entry.Id == id)?.State)).ToList();
+        var queuedEntries = selectedFiles.OrderBy(file => PriorityRank(file.Entry.Name))
             .ThenBy(file => file.Entry.Name, NaturalNameComparer.Instance)
             .Select(file => AddQueue(file.Entry.Name, file.Entry.FullPath, file.Destination, TransferDirection.ApiFxp,
                 file.Entry.Size ?? 0, sourceProfile.Id, destinationProfile.Id, persist: false)).ToList();
         jobIds.AddRange(queuedEntries.Select(entry => entry.Id));
-        foreach (var entry in queuedEntries) { entry.RuleSection = request.DstSection; entry.RuleRelease = request.Name; }
+        foreach (var entry in queuedEntries)
+        {
+            entry.RuleSection = request.DstSection; entry.RuleRelease = ruleRelease;
+            if (race is not null)
+            {
+                var original = selectedFiles.First(file => file.Entry.FullPath == entry.Source).Entry;
+                race.Track(entry.Source, original.Size, original.ModifiedAt, entry.Id);
+                entry.VisionaryRace = true;
+            }
+        }
         queued = queuedEntries.Count;
         ScheduleBatch(queuedEntries);
-        LogText.AppendText($"{Environment.NewLine}API queued FXP {request.Name}: {request.SrcSite} → {request.DstSite} ({queued} files)"); LogText.ScrollToEnd();
+        if (race is not null && race.Finished(id => _queue.FirstOrDefault(entry => entry.Id == id)?.State))
+        {
+            await using var targetSession = new FtpRemoteSession();
+            await targetSession.ConnectAsync(ApplyGlobalProxy(destinationProfile), timeout.Token);
+            var verified = true;
+            foreach (var directory in apiFiles.GroupBy(file => RemoteParent(file.Destination)))
+            {
+                try
+                {
+                    var listing = await targetSession.ListAsync(directory.Key, timeout.Token);
+                    if (!RaceDestinationVerifier.Accepts(directory.Select(file => file.Entry).ToArray(), listing, race)) verified = false;
+                }
+                catch (FtpCommandException exception) when (exception.StatusCode == 550) { verified = false; }
+            }
+            race.DestinationVerified = verified;
+        }
+        if (race is null || queued > 0)
+        { LogText.AppendText($"{Environment.NewLine}{(race is null ? "API" : "VISIONARY")} queued FXP {request.Name}: {request.SrcSite} → {request.DstSite} ({queued} files)"); LogText.ScrollToEnd(); }
         return new ApiTransferStartResult(request.Name, "QUEUED", queued, request.SrcSite, request.DstSite, jobIds);
     });
 
@@ -3260,6 +3352,7 @@ public partial class MainWindow : Window
         private long _speedBytesPerSecond;
         public long SpeedBytesPerSecond { get => _speedBytesPerSecond; set { _speedBytesPerSecond = value; Changed(); } }
         public Guid? SourceProfileId { get; set; }
+        public bool VisionaryRace { get; set; }
         public Guid? DestinationProfileId { get; set; }
         public string? RuleSection { get; set; }
         public string? RuleRelease { get; set; }

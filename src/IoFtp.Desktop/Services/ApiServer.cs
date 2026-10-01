@@ -25,12 +25,21 @@ internal sealed class ApiServer : IAsyncDisposable
     private readonly Dictionary<string, SpreadJobState> _spreadJobs = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _spreadJobsLock = new();
     private int _nextSpreadJobId;
+    private readonly CancellationTokenSource _spreadLifetime = new();
+    private readonly List<Task> _spreadTasks = new();
 
     public async Task StartAsync(GlobalSettings settings, Func<IReadOnlyList<TransferJobInfo>> getJobs,
         Func<ApiTransferRequest, Task<object>> startTransfer, Func<ApiDownloadRequest, Task<object>> startDownload,
         Action<Guid> removeJob, Action<Guid> resetJob, Action<string>? diagnosticLog = null,
-        Func<IrcConnectRequest, Task>? connectIrc = null)
+        Func<IrcConnectRequest, Task>? connectIrc = null,
+        Func<ApiTransferRequest, VisionaryRaceState, CancellationToken, Task<bool>>? visionaryStep = null)
     {
+        if (settings.EnableVisionaryBridge)
+        {
+            _visionaryPipe = new VisionaryPipeServer(startTransfer, diagnosticLog, visionaryStep);
+            _visionaryPipe.Start();
+            diagnosticLog?.Invoke("VISIONARY local bridge started.");
+        }
         if (!settings.EnableHttpsApi) return;
         var certificate = LoadOrCreateCertificate();
         var builder = WebApplication.CreateSlimBuilder();
@@ -251,47 +260,37 @@ internal sealed class ApiServer : IAsyncDisposable
                 item.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
             return job is null ? Results.NotFound(new { error = "Spreadjob not found" }) : Results.Json(job);
         });
-        _app.MapPost("/spreadjobs", async (SpreadJobRequest request) =>
+        _app.MapPost("/spreadjobs", (SpreadJobRequest request) =>
         {
-            if (string.IsNullOrWhiteSpace(request.Section) || string.IsNullOrWhiteSpace(request.Name) ||
-                request.Sites is not { Count: >= 2 })
+            if (string.IsNullOrWhiteSpace(request.Section) || string.IsNullOrWhiteSpace(request.Name) || request.Sites is not { Count: >= 2 })
                 return Results.BadRequest(new { error = "section, name and at least two sites are required" });
-
-            var sites = request.Sites.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-            var transferIds = new List<Guid>();
-            var errors = new List<string>();
-            foreach (var target in sites)
+            if (visionaryStep is null) return Results.StatusCode(503);
+            try
             {
-                var sources = sites.Where(site => !site.Equals(target, StringComparison.OrdinalIgnoreCase))
-                    .OrderBy(site => request.SitesDlonly?.Contains(site, StringComparer.OrdinalIgnoreCase) == true)
-                    .ToList();
-                foreach (var source in sources)
+                VisionaryTransferProfiles.ReleasePath(request.Name);
+                var sites = request.Sites.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                var coordinator = new SpreadRaceCoordinator(sites, request.SitesDlonly ?? []);
+                var options = VisionaryRaceOptions.Load();
+                options.Validate();
+                lock (_spreadJobsLock)
                 {
-                    try
+                    if (_spreadJobs.TryGetValue(request.Name, out var active) && active.Coordinator.Status == "RUNNING")
+                        return Results.Conflict(new { error = "Release already has an active spread job" });
+                    if (_spreadJobs.Values.Count(job => job.Coordinator.Status == "RUNNING") >= 32)
+                        return Results.StatusCode(429);
+                    var state = new SpreadJobState(Interlocked.Increment(ref _nextSpreadJobId), request.Name, request.Section, sites, coordinator, DateTimeOffset.UtcNow);
+                    _spreadJobs[request.Name] = state;
+                    _spreadTasks.RemoveAll(task => task.IsCompleted);
+                    _spreadTasks.Add(Task.Run(async () =>
                     {
-                        var result = await startTransfer(new(source, null, request.Section, target, null, request.Section, request.Name));
-                        if (result is ApiTransferStartResult started) transferIds.AddRange(started.JobIds);
-                        break;
-                    }
-                    catch (FileNotFoundException)
-                    {
-                        // During a race only the announcing site may have the release.
-                        // Try every permitted peer before giving up on this target.
-                    }
-                    catch (Exception exception)
-                    {
-                        errors.Add($"{source} -> {target}: {exception.Message}");
-                    }
+                        await coordinator.RunAsync((source, target, race, token) => visionaryStep(
+                            new(source, null, request.Section, target, null, request.Section, request.Name), race, token), options, _spreadLifetime.Token);
+                        diagnosticLog?.Invoke($"RACETRADE {request.Name}: {coordinator.Status} {coordinator.Error}");
+                    }));
+                    return Results.Json(new { id = state.Id, state = "STARTED", name = state.Name, sites = state.Sites });
                 }
             }
-            if (transferIds.Count == 0)
-                return Results.BadRequest(new { error = "No source site contains the release", details = errors });
-
-            var state = new SpreadJobState(
-                Interlocked.Increment(ref _nextSpreadJobId), request.Name, request.Section,
-                sites, transferIds, DateTimeOffset.UtcNow);
-            lock (_spreadJobsLock) _spreadJobs[request.Name] = state;
-            return Results.Json(new { id = state.Id, state = "STARTED", name = state.Name, sites = state.Sites });
+            catch (ArgumentException exception) { return Results.BadRequest(new { error = exception.Message }); }
         });
         _app.MapPost("/transferjobs", async (ApiTransferRequest request) => Results.Json(await startTransfer(request)));
         _app.MapPost("/downloads", async (ApiDownloadRequest request) => Results.Json(await startDownload(request)));
@@ -299,12 +298,13 @@ internal sealed class ApiServer : IAsyncDisposable
         _app.MapPost("/transferjobs/{id:guid}/reset", (Guid id) => { resetJob(id); return Results.Ok(new { reset = id }); });
 
         await _app.StartAsync();
-        _visionaryPipe = new VisionaryPipeServer(startTransfer, diagnosticLog);
-        _visionaryPipe.Start();
     }
 
     public async ValueTask DisposeAsync()
     {
+        _spreadLifetime.Cancel();
+        Task[] spreadTasks; lock (_spreadJobsLock) spreadTasks = _spreadTasks.ToArray();
+        await Task.WhenAll(spreadTasks);
         if (_visionaryPipe is not null) { await _visionaryPipe.DisposeAsync(); _visionaryPipe = null; }
         if (_app is null) return;
         await _app.StopAsync(); await _app.DisposeAsync(); _app = null;
@@ -350,24 +350,10 @@ internal sealed class ApiServer : IAsyncDisposable
     {
         List<SpreadJobState> states;
         lock (_spreadJobsLock) states = _spreadJobs.Values.ToList();
-        var transfers = getJobs().ToDictionary(job => job.Id);
-        return states.Select(state =>
-        {
-            var children = state.TransferIds.Where(transfers.ContainsKey).Select(id => transfers[id]).ToList();
-            var status = children.Count == 0 || children.All(job => job.State.Equals("Completed", StringComparison.OrdinalIgnoreCase))
-                ? "DONE"
-                : children.Any(job => job.State.Equals("Failed", StringComparison.OrdinalIgnoreCase))
-                    ? "FAILED"
-                    : children.Any(job => job.State.Equals("Paused", StringComparison.OrdinalIgnoreCase))
-                        ? "ABORTED"
-                        : "RUNNING";
-            var incomplete = status == "DONE" ? Array.Empty<string>() : state.Sites.Skip(1).ToArray();
-            var elapsed = Math.Max(0, (long)(DateTimeOffset.UtcNow - state.CreatedAt).TotalSeconds);
-            return new SpreadJobResponse(state.Id, state.Name, state.Section, status, state.Sites,
-                incomplete, 0, elapsed);
-        }).ToList();
+        return states.Select(state => new SpreadJobResponse(state.Id, state.Name, state.Section,
+            state.Coordinator.Status, state.Sites, state.Coordinator.Incomplete, 0,
+            Math.Max(0, (long)(DateTimeOffset.UtcNow - state.CreatedAt).TotalSeconds), state.Coordinator.Error)).ToList();
     }
-
     private static ConnectionProfile? FindSite(string name) => new ProfileStore().Load().FirstOrDefault(site => site.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
     private static SectionDefinition? FindSection(string name) => new SectionStore().Load().FirstOrDefault(section => section.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
     private static string? SitePath(SectionDefinition section, string site) => section.SitePaths.FirstOrDefault(pair => pair.Key.Equals(site, StringComparison.OrdinalIgnoreCase)).Value;
@@ -587,12 +573,12 @@ internal sealed class ApiServer : IAsyncDisposable
         List<string>? Sites = null, string? Profile = null,
         [property: JsonPropertyName("sites_dlonly")] List<string>? SitesDlonly = null);
     private sealed record SpreadJobState(int Id, string Name, string Section,
-        IReadOnlyList<string> Sites, IReadOnlyList<Guid> TransferIds, DateTimeOffset CreatedAt);
+        IReadOnlyList<string> Sites, SpreadRaceCoordinator Coordinator, DateTimeOffset CreatedAt);
     private sealed record SpreadJobResponse(int Id, string Name, string Section, string Status,
         IReadOnlyList<string> Sites,
         [property: JsonPropertyName("sites_incomplete")] IReadOnlyList<string> SitesIncomplete,
         [property: JsonPropertyName("size_estimated_bytes")] long SizeEstimatedBytes,
-        [property: JsonPropertyName("time_spent_seconds")] long TimeSpentSeconds);
+        [property: JsonPropertyName("time_spent_seconds")] long TimeSpentSeconds, string Error);
 }
 
 internal sealed record RawRequest(string? Command = null, string[]? Sites = null,

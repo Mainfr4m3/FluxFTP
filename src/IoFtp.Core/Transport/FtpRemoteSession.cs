@@ -30,6 +30,8 @@ public sealed class FtpRemoteSession : IRemoteSession
 
     /// <summary>Raw FTP control-channel traffic. PASS arguments are always masked.</summary>
     public event Action<string>? ProtocolMessage;
+    public event Action<string>? ProtocolDetailMessage;
+    private string? _directoryProbePath;
 
     public bool IsConnected { get; private set; }
     public string ConnectedHost { get; private set; } = "";
@@ -405,6 +407,8 @@ public sealed class FtpRemoteSession : IRemoteSession
             starts[0].Completed ? Task.FromResult(starts[0].Response) : destination.ReadResponseAsync(cancellationToken)));
         LastTransferCompletion = completions[0].Message;
         destination.LastTransferCompletion = completions[1].Message;
+        TransferVerification.EnsureAccepted(completions[0].Message);
+        TransferVerification.EnsureAccepted(completions[1].Message);
         EnsureSuccess(completions[0], 226, 250);
         EnsureSuccess(completions[1], 226, 250);
     }
@@ -609,6 +613,7 @@ public sealed class FtpRemoteSession : IRemoteSession
         {
             var completion = await ReadResponseAsync(cancellationToken);
             EnsureSuccess(completion, 226, 250);
+        TransferVerification.EnsureAccepted(completion.Message);
         }
         catch (IOException exception)
         {
@@ -646,7 +651,13 @@ public sealed class FtpRemoteSession : IRemoteSession
             await data.FlushAsync(cancellationToken);
         }, cancellationToken);
 
-    public async Task<RemoteCommandResult> ExecuteCommandAsync(string command, CancellationToken cancellationToken)
+    public Task<RemoteCommandResult> ExecuteCommandAsync(string command, CancellationToken cancellationToken)
+        => ExecuteCommandCoreAsync(command, cancellationToken, false);
+
+    public Task<RemoteCommandResult> ExecuteDirectoryProbeAsync(string command, CancellationToken cancellationToken)
+        => ExecuteCommandCoreAsync(command, cancellationToken, true);
+
+    private async Task<RemoteCommandResult> ExecuteCommandCoreAsync(string command, CancellationToken cancellationToken, bool directoryProbe)
     {
         if (_sftpSession is not null) return await _sftpSession.ExecuteCommandAsync(command, cancellationToken);
         await _operationGate.WaitAsync(cancellationToken);
@@ -662,6 +673,7 @@ public sealed class FtpRemoteSession : IRemoteSession
         var verb = normalized.Split(' ', 2)[0];
         if (verb.Equals("PASS", StringComparison.OrdinalIgnoreCase) || verb.Equals("USER", StringComparison.OrdinalIgnoreCase) || verb.Equals("ACCT", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Credential commands are blocked in the command console.");
+        _directoryProbePath = directoryProbe && normalized.StartsWith("CWD ", StringComparison.OrdinalIgnoreCase) ? normalized[4..] : null;
         var response = await CommandAsync(normalized, cancellationToken);
         // ioFTPD CWD event scripts can emit an additional 250 reply after the
         // normal CWD completion. If it arrives just after SITE PRE is sent,
@@ -676,7 +688,7 @@ public sealed class FtpRemoteSession : IRemoteSession
         }
         return new RemoteCommandResult(response.Code, response.Message);
         }
-        finally { _operationGate.Release(); }
+        finally { _directoryProbePath = null; _operationGate.Release(); }
     }
 
     private static bool LooksLikeDelayedCwdReply(string message) =>
@@ -728,6 +740,7 @@ public sealed class FtpRemoteSession : IRemoteSession
         var completion = await ReadResponseAsync(cancellationToken);
         LastTransferCompletion = completion.Message;
         EnsureSuccess(completion, 226, 250);
+        TransferVerification.EnsureAccepted(completion.Message);
         // Some Windows FTPS stacks report WSAENETNAMEDELETED when the peer
         // closes TLS immediately after the last byte. A successful 226/250
         // control reply confirms that the transfer itself completed.
@@ -771,6 +784,7 @@ public sealed class FtpRemoteSession : IRemoteSession
             var completion = await ReadResponseAsync(cancellationToken);
             LastTransferCompletion = completion.Message;
             EnsureSuccess(completion, 226, 250);
+        TransferVerification.EnsureAccepted(completion.Message);
         }
         finally { listener.Stop(); }
     }
@@ -800,6 +814,7 @@ public sealed class FtpRemoteSession : IRemoteSession
             finally { await DisposeDataStreamSafelyAsync(dataStream); }
             var completion = await ReadResponseAsync(cancellationToken);
             EnsureSuccess(completion, 226, 250);
+        TransferVerification.EnsureAccepted(completion.Message);
             return parser(path, listing);
         }
         finally { listener.Stop(); }
@@ -1156,7 +1171,7 @@ public sealed class FtpRemoteSession : IRemoteSession
     private async Task<FtpResponse> ReadResponseAsync(CancellationToken cancellationToken)
     {
         var first = await _reader!.ReadLineAsync(cancellationToken) ?? throw new IOException("FTP server closed the connection.");
-        ProtocolMessage?.Invoke($"< {first}");
+        EmitReply($"< {first}");
         if (first.Length < 3 || !int.TryParse(first[..3], out var code)) throw new IOException($"Invalid FTP response: {first}");
         var lines = new List<string> { first };
         if (first.Length > 3 && first[3] == '-')
@@ -1167,11 +1182,18 @@ public sealed class FtpRemoteSession : IRemoteSession
             {
                 line = await _reader.ReadLineAsync(cancellationToken) ?? throw new IOException("FTP server closed the connection.");
                 lines.Add(line);
-                ProtocolMessage?.Invoke($"< {line}");
+                EmitReply($"< {line}");
             }
             while (!line.StartsWith(terminator, StringComparison.Ordinal));
         }
         return new FtpResponse(code, string.Join(Environment.NewLine, lines));
+    }
+
+    private void EmitReply(string message)
+    {
+        var display = TransferRejection.FormatDirectoryProbeReply(_directoryProbePath, message);
+        if (display != message) ProtocolDetailMessage?.Invoke(message);
+        ProtocolMessage?.Invoke(display);
     }
 
     private static void EnsureSuccess(FtpResponse response, params int[] allowed)
