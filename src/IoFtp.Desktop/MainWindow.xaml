@@ -10,8 +10,8 @@
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
                 <StackPanel Orientation="Horizontal">
                     <TextBlock Text="Flux" Foreground="{DynamicResource AccentBrush}" FontSize="22" FontWeight="Bold" />
@@ -21,18 +21,19 @@
                 </StackPanel>
                 <TextBlock x:Name="ConnectionStatus" Grid.Column="1" Text="Offline workspace" Foreground="{DynamicResource MutedTextBrush}"
                            VerticalAlignment="Center" HorizontalAlignment="Center" />
-                <StackPanel Grid.Column="2" Orientation="Horizontal">
+                <WrapPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right">
                     <Button Content="Transfer Jobs" Click="TransferJobs_Click" />
                     <Button Content="RACE-Log" Click="RaceLog_Click" />
                     <Button Content="Metrics" Click="Metrics_Click" />
                     <Button Content="Scripts" Click="Scripts_Click" />
                     <Button Content="Sections" Click="Sections_Click" />
+                    <Button Content="VISIONARY" Click="Visionary_Click" />
                     <Button Content="Spread Jobs" Click="SpreadJobs_Click" />
                     <Button x:Name="ToggleQueueButton" Content="Show Queue" Click="ToggleQueue_Click" />
                     <Button x:Name="ToggleLogButton" Content="Hide Log" Click="ToggleLog_Click" />
                     <Button Content="Global Settings" Click="GlobalSettings_Click" />
                     <Button Content="About" Click="About_Click" />
-                </StackPanel>
+                </WrapPanel>
             </Grid>
         </Border>
 
@@ -49,23 +50,23 @@
                     <ColumnDefinition Width="1"/><ColumnDefinition x:Name="RemainingColumn" Width="145"/>
                     <ColumnDefinition Width="1"/><ColumnDefinition x:Name="QueueTimeColumn" Width="115"/>
                 </Grid.ColumnDefinitions>
-                <TextBlock x:Name="LegendText" Text="FluxFTP ready" VerticalAlignment="Center" Margin="6,0"
+                <TextBlock x:Name="LegendText" Foreground="White" Text="FluxFTP ready" VerticalAlignment="Center" Margin="6,0"
                            TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
                 <Border x:Name="TransferBytesSeparator" Grid.Column="1" Background="{DynamicResource BorderBrush}" Margin="0,3"/>
-                <TextBlock x:Name="TransferBytesText" Grid.Column="2" Text="—" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                <TextBlock x:Name="TransferBytesText" Foreground="White" Grid.Column="2" Text="—" VerticalAlignment="Center" HorizontalAlignment="Center"/>
                 <Border x:Name="ProgressSeparator" Grid.Column="3" Background="{DynamicResource BorderBrush}" Margin="0,3"/>
                 <Grid x:Name="StatusProgressPanel" Grid.Column="4" Margin="7,4">
                     <ProgressBar x:Name="StatusProgressBar" Style="{StaticResource FilledProgressBar}" Height="18" Minimum="0" Maximum="100"/>
                     <TextBlock x:Name="StatusProgressText" Text="Idle" HorizontalAlignment="Center" VerticalAlignment="Center"
-                               FontWeight="SemiBold" Foreground="{DynamicResource TextBrush}"/>
+                               FontWeight="SemiBold" Foreground="White"/>
                 </Grid>
                 <Border x:Name="ElapsedSeparator" Grid.Column="5" Background="{DynamicResource BorderBrush}" Margin="0,3"/>
-                <TextBlock x:Name="ElapsedText" Grid.Column="6" Text="Elapsed: —" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                <TextBlock x:Name="ElapsedText" Foreground="White" Grid.Column="6" Text="Elapsed: —" VerticalAlignment="Center" HorizontalAlignment="Center"/>
                 <Border x:Name="RemainingSeparator" Grid.Column="7" Background="{DynamicResource BorderBrush}" Margin="0,3"/>
-                <TextBlock x:Name="RemainingText" Grid.Column="8" Text="Remaining: —" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                <TextBlock x:Name="RemainingText" Foreground="White" Grid.Column="8" Text="Remaining: —" VerticalAlignment="Center" HorizontalAlignment="Center"/>
                 <Border x:Name="QueueTimeSeparator" Grid.Column="9" Background="{DynamicResource BorderBrush}" Margin="0,3"/>
-                <TextBlock x:Name="QueueTimeText" Grid.Column="10" Text="Queue: 00:00" VerticalAlignment="Center" HorizontalAlignment="Center"/>
-                <TextBlock x:Name="QueueStatus" Text="0 queued" Visibility="Collapsed"/>
+                <TextBlock x:Name="QueueTimeText" Foreground="White" Grid.Column="10" Text="Queue: 00:00" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                <TextBlock x:Name="QueueStatus" Foreground="White" Text="0 queued" Visibility="Collapsed"/>
             </Grid>
         </Border>
 

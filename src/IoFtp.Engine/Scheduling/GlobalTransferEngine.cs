@@ -11,15 +11,16 @@ public sealed class GlobalTransferEngine : IAsyncDisposable
     private readonly Dictionary<Guid, WorkRuntime> _work = [];
     private readonly CancellationTokenSource _shutdown = new();
     private bool _pumpScheduled;
+    private bool _serializeLocalTransfers = true;
     private int _maxLocalDownloads = 1, _maxLocalUploads = 1, _activeLocalDownloads, _activeLocalUploads;
 
     public GlobalTransferEngine(ITransferExecutor executor) => _executor = executor;
     public event EventHandler? StateChanged;
 
-    public void ConfigureLocalSlots(int maxDownloads, int maxUploads)
+    public void ConfigureLocalSlots(int maxDownloads, int maxUploads, bool serialize = true)
     {
         if (maxDownloads < 0 || maxUploads < 0) throw new ArgumentOutOfRangeException();
-        lock (_gate) { _maxLocalDownloads = maxDownloads; _maxLocalUploads = maxUploads; }
+        lock (_gate) { _maxLocalDownloads = maxDownloads; _maxLocalUploads = maxUploads; _serializeLocalTransfers = serialize; }
         RequestPump();
     }
 
@@ -188,6 +189,9 @@ public sealed class GlobalTransferEngine : IAsyncDisposable
     }
 
     private bool CanReserve(TransferWorkItem item) =>
+        // A local copy reserves both counters, but is still one file. Keep all
+        // disk-backed transfers serial while FXP retains its independent slots.
+        (!_serializeLocalTransfers || item.SourceSiteId is not null && item.DestinationSiteId is not null || _activeLocalUploads + _activeLocalDownloads == 0) &&
         (item.SourceSiteId is { } source ? _sites[source].CanDownload : _activeLocalUploads < _maxLocalUploads) &&
         (item.DestinationSiteId is { } destination ? _sites[destination].CanUpload : _activeLocalDownloads < _maxLocalDownloads);
 

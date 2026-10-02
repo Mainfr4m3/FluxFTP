@@ -80,6 +80,15 @@ d-tool's current line-oriented `/raw` parser also prints standalone JSON
 delimiters. The compatible parser fix is available in
 [scriptzteam/d-tool#1](https://github.com/scriptzteam/d-tool/pull/1).
 
+A standalone remote-control script for both mIRC and AdiIRC is included in
+[`extras/irc`](extras/irc/README.md). It provides `/fluxftp` (or `/flux`) commands
+for raw FTP commands, FXP, races and downloads without requiring d-tool.
+
+Visionary autotrader integration is available in
+[`extras/irc/visionary`](extras/irc/visionary/README.md). It preserves Visionary's
+explicit source/target chains and submits them through a current-user-only Windows
+named pipe, without UDP or another listening network port.
+
 ## Screenshots
 
 ### Dual-pane workspace
@@ -128,7 +137,30 @@ The Commands window currently includes presets for:
 
 - `IoFtp.Core`: protocol-neutral connection, browsing and transfer contracts.
 - `IoFtp.Desktop`: Windows desktop shell and theme resources.
+- `IoFtp.Mobile`: Android MVP built with .NET MAUI and the shared `IoFtp.Core`.
 - `docs`: product scope and architecture decisions.
+
+## Android MVP
+
+The Android app currently provides a Site Manager, Android Secure Storage for
+passwords, FTP/explicit FTPS/implicit FTPS/SFTP browsing, SAF multi-file selection,
+upload and download progress, and a compact dual-pane workspace. Downloaded
+files are handed to Android's system share/save sheet. SFTP validates the
+server's SHA256 host-key fingerprint and asks before trusting a new key.
+The mobile panes support multi-selection. Android SAF folders are uploaded
+recursively while preserving their directory tree, and selected remote folders
+are downloaded recursively as a ZIP that can be saved through Android's share sheet.
+
+Build the debug APK from PowerShell:
+
+```powershell
+dotnet build .\src\IoFtp.Mobile\IoFtp.Mobile.csproj -c Debug -f net8.0-android `
+  -p:AndroidSdkDirectory=C:\ioftp\.android-sdk `
+  -p:JavaSdkDirectory="C:\Program Files\Microsoft\jdk-21.0.11.10-hotspot"
+```
+
+The signed APK is written to
+`src\IoFtp.Mobile\bin\Debug\net8.0-android\se.fluxftp.mobile-Signed.apk`.
 
 ## Initial milestones
 

@@ -38,7 +38,7 @@ public sealed record ProxyConfiguration(ProxyType Type = ProxyType.None, string 
     string Username = "", string Password = "", bool ProxyDns = true, bool UseForData = true);
 
 public sealed record SiteOptions(
-    int MaxSlots = 2,
+    int MaxSlots = 4,
     int MaxUploadSlots = 2,
     int MaxDownloadSlots = 2,
     int Priority = 0,
@@ -58,7 +58,10 @@ public sealed record SiteOptions(
     string Affils = "",
     FxpProtectionMode FxpProtection = FxpProtectionMode.AutoSecure,
     FxpDataRole FxpDataRole = FxpDataRole.Auto,
-    bool UseOpenSslTls = false);
+    bool UseOpenSslTls = false,
+    string ImportedSkipRules = "",
+    string ImportedPriorityRules = "",
+    string VisionaryRules = "");
 
 public sealed record ConnectionProfile(
     Guid Id,

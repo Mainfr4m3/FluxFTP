@@ -48,6 +48,18 @@ internal sealed class SectionStore
     {
         if (Path.GetExtension(path).Equals(".xml", StringComparison.OrdinalIgnoreCase))
         {
+            var package = FtpRushSiteImporter.ImportPackage(path);
+            if (package.Sites.Count > 0)
+            {
+                if (package.Sites.GroupBy(site => site.Profile.Name, StringComparer.OrdinalIgnoreCase).Any(group => group.Count() > 1))
+                    throw new InvalidDataException("Rush sites must have unique names before importing their section paths.");
+                var rows = FtpRushSectionMigration.Preview(package.Bookmarks);
+                if (rows.Count == 0) throw new InvalidDataException("No remote bookmarks were found in the Rush sites file.");
+                if (rows.Any(row => !row.Selected))
+                    throw new InvalidDataException("Some Rush bookmark paths need review. Use Site Manager > Import FTPRush > Sections and paths to resolve them.");
+                var names = package.Sites.ToDictionary(site => site.Profile.Name, site => site.Profile.Name, StringComparer.OrdinalIgnoreCase);
+                return FtpRushSectionMigration.Merge([], rows, names, false);
+            }
             var bookmarks = CaptionBookmarkImporter.Import(path, "ioFTPD");
             if (bookmarks.Count == 0)
                 throw new InvalidDataException("No CAPTION/REMOTE section entries were found in the XML file.");

@@ -12,10 +12,13 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
     private readonly Action<string>? _log;
     private readonly CancellationTokenSource _cancellation = new();
     private Task? _listener;
+    private readonly Func<ApiTransferRequest, VisionaryRaceState, CancellationToken, Task<bool>>? _raceStep;
+    private readonly Dictionary<string, Task> _races = new(StringComparer.OrdinalIgnoreCase);
 
-    public VisionaryPipeServer(Func<ApiTransferRequest, Task<object>> startTransfer, Action<string>? log = null)
+    public VisionaryPipeServer(Func<ApiTransferRequest, Task<object>> startTransfer, Action<string>? log = null,
+        Func<ApiTransferRequest, VisionaryRaceState, CancellationToken, Task<bool>>? raceStep = null)
     {
-        _startTransfer = startTransfer; _log = log;
+        _startTransfer = startTransfer; _log = log; _raceStep = raceStep;
     }
 
     public void Start() => _listener = ListenAsync(_cancellation.Token);
@@ -44,6 +47,26 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
         { await writer.WriteLineAsync("ERROR Expected TRANSFER<TAB>section<TAB>release<TAB>source<TAB>target"); return; }
         try
         {
+            if (_raceStep is not null)
+            {
+                if (new[] { fields[1], fields[3], fields[4] }.Any(value => value is "." or ".." || value.Contains('/') || value.Contains('\\') || value.Any(char.IsControl)))
+                    throw new ArgumentException("Invalid section, release or site name.");
+                VisionaryTransferProfiles.ReleasePath(fields[2]);
+                // One writer per destination release, including when several sources announce it.
+                var key = string.Join('\t', fields[1], fields[2], fields[4]);
+                if (_races.TryGetValue(key, out var active) && !active.IsCompleted)
+                { await writer.WriteLineAsync("OK ALREADY WATCHING " + fields[2]); return; }
+                if (_races.Any(pair => !pair.Value.IsCompleted && Overlapping(pair.Key, key)))
+                    throw new InvalidOperationException("An overlapping release/subdirectory race already writes this destination. Use the existing watch.");
+                foreach (var completed in _races.Where(pair => pair.Value.IsCompleted).Select(pair => pair.Key).ToArray()) _races.Remove(completed);
+                if (_races.Count >= 32) throw new InvalidOperationException("32 races are already active.");
+                var options = VisionaryRaceOptions.Load();
+                var state = new VisionaryRaceState(options);
+                var request = new ApiTransferRequest(fields[3], null, fields[1], fields[4], null, fields[1], fields[2]);
+                _races[key] = WatchAsync(request, state, options, cancellationToken);
+                await writer.WriteLineAsync("OK WATCHING " + fields[2] + " — progress and errors are in the FluxFTP log");
+                return;
+            }
             var response = await _startTransfer(new(fields[3], null, fields[1], fields[4], null, fields[1], fields[2]));
             await writer.WriteLineAsync($"OK {fields[3]} -> {fields[4]} {fields[2]} {JsonSerializer.Serialize(response)}");
             _log?.Invoke($"Visionary queued {fields[1]} {fields[2]}: {fields[3]} -> {fields[4]}");
@@ -51,10 +74,40 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
         catch (Exception exception) { await writer.WriteLineAsync($"ERROR {exception.Message.Replace('\r', ' ').Replace('\n', ' ')}"); }
     }
 
+    private static bool Overlapping(string left, string right)
+    {
+        var a = left.Split('\t'); var b = right.Split('\t');
+        return a[0].Equals(b[0], StringComparison.OrdinalIgnoreCase) && a[2].Equals(b[2], StringComparison.OrdinalIgnoreCase) &&
+            (a[1].StartsWith(b[1] + "/", StringComparison.OrdinalIgnoreCase) || b[1].StartsWith(a[1] + "/", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private async Task WatchAsync(ApiTransferRequest request, VisionaryRaceState state, VisionaryRaceOptions options, CancellationToken token)
+    {
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
+        lifetime.CancelAfter(TimeSpan.FromMinutes(options.TimeoutMinutes));
+        var label = $"VISIONARY {request.Name}: {request.SrcSite} -> {request.DstSite}";
+        _log?.Invoke(label + " watching source");
+        try
+        {
+            while (!await _raceStep!(request, state, lifetime.Token))
+                await Task.Delay(TimeSpan.FromSeconds(options.RefreshSeconds), lifetime.Token);
+            _log?.Invoke(label + " COMPLETE: final transfers finished");
+        }
+        catch (OperationCanceledException) { _log?.Invoke(label + " stopped (cancelled, removed job, or timeout)"); }
+        catch (Exception ex) { _log?.Invoke(label + " FAILED: " + ex.Message); }
+        finally
+        {
+            // Let the UI cancel this race's pending jobs even when cancellation occurred during the delay.
+            lifetime.Cancel();
+            try { await _raceStep!(request, state, lifetime.Token); } catch (Exception) { }
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         _cancellation.Cancel();
         if (_listener is not null) try { await _listener; } catch (OperationCanceledException) { }
+        await Task.WhenAll(_races.Values);
         _cancellation.Dispose();
     }
 }

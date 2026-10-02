@@ -47,7 +47,10 @@
                 </Grid></TabItem>
                 <TabItem Header="Local"><Grid Margin="16"><Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                     <TextBlock Text="Local download path"/><TextBox x:Name="LocalPathBox" Grid.Column="1" Margin="0,4"/><TextBlock Grid.Row="1" Text="Local download slots"/><TextBox x:Name="LocalDownloadsBox" Grid.Row="1" Grid.Column="1" Width="100" HorizontalAlignment="Left" Margin="0,4"/><TextBlock Grid.Row="2" Text="Local upload slots"/><TextBox x:Name="LocalUploadsBox" Grid.Row="2" Grid.Column="1" Width="100" HorizontalAlignment="Left" Margin="0,4"/>
-                    <CheckBox x:Name="MinimizeToTrayBox" Grid.Row="3" Grid.ColumnSpan="2" Content="Minimize and close FluxFTP to the system tray" Margin="0,14,0,4"/>
+                    <StackPanel Grid.Row="3" Grid.ColumnSpan="2">
+                        <CheckBox x:Name="SerializeLocalBox" Content="One local transfer at a time (uploads, downloads and disk copies)" Margin="0,14,0,4"/>
+                        <CheckBox x:Name="MinimizeToTrayBox" Content="Minimize and close FluxFTP to the system tray" Margin="0,8,0,4"/>
+                    </StackPanel>
                 </Grid></TabItem>
                 <TabItem Header="Skiplist"><Grid Margin="16"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                     <Grid><TextBlock Text="Files skipped during folder / PRE transfers" FontWeight="SemiBold" VerticalAlignment="Center"/>

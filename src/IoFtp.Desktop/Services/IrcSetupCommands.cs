@@ -49,7 +49,7 @@ internal sealed class IrcSetupCommands(Func<IReadOnlyList<ConnectionProfile>> lo
             if (!SiteEndpoint.TryParse(args[4], 21, out var endpoint) || Uri.CheckHostName(endpoint.Host) == UriHostNameType.Unknown)
                 throw new SetupException("Invalid FTP host/port.");
             var protocol = args.Count == 6 ? Protocol(args[5]) : TransferProtocol.FtpsExplicit;
-            profiles.Add(new(Guid.NewGuid(), name, endpoint.Host, endpoint.Port, args[2], protocol, args[3], Options: new(MaxSlots: 3, MaxUploadSlots: 3, MaxDownloadSlots: 2)));
+            profiles.Add(new(Guid.NewGuid(), name, endpoint.Host, endpoint.Port, args[2], protocol, args[3], Options: new(MaxSlots: 4, MaxUploadSlots: 2, MaxDownloadSlots: 2)));
             saveProfiles(profiles);
             return $"OK: Site {name} created ({TransferProtocolNames.Display(protocol)}). Password saved with Windows protection; no connection started.";
         }

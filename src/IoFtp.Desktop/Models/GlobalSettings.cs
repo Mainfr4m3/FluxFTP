@@ -16,8 +16,8 @@ public sealed record GlobalSettings(
     int TransferHistory = 10000,
     int LogBufferHistory = 4096,
     string DefaultUsername = "anonymous",
-    int DefaultSlots = 3,
-    int DefaultUploadSlots = 3,
+    int DefaultSlots = 4,
+    int DefaultUploadSlots = 2,
     int DefaultDownloadSlots = 2,
     TransferProtocol DefaultProtocol = TransferProtocol.FtpsExplicit,
     int DefaultIdleSeconds = 60,
@@ -39,4 +39,6 @@ public sealed record GlobalSettings(
     bool CheckForUpdatesAtStartup = true,
     AdvancedSkipRule[]? AdvancedSkipRules = null,
     ThemeSettings? Theme = null,
-    IrcSettings? Irc = null);
+    IrcSettings? Irc = null,
+    bool EnableVisionaryBridge = false,
+    bool SerializeLocalTransfers = true);

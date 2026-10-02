@@ -81,6 +81,9 @@ internal sealed class ProfileStore
             Write(text, "CeprSupported", options.CeprSupported);
             Write(text, "UseXdupe", options.UseXdupe);
             Write(text, "Affils", options.Affils);
+            Write(text, "ImportedSkipRules", options.ImportedSkipRules);
+            Write(text, "ImportedPriorityRules", options.ImportedPriorityRules);
+            Write(text, "VisionaryRules", options.VisionaryRules);
             Write(text, "FxpProtection", options.FxpProtection);
             Write(text, "FxpDataRole", options.FxpDataRole);
             Write(text, "UseOpenSslTls", options.UseOpenSslTls);
@@ -115,14 +118,14 @@ internal sealed class ProfileStore
         {
             if (values is null || id == Guid.Empty) return;
             var options = new SiteOptions(
-                Int(values, "MaxSlots", 2), Int(values, "MaxUploadSlots", 2), Int(values, "MaxDownloadSlots", 2),
+                Int(values, "MaxSlots", 4), Int(values, "MaxUploadSlots", 2), Int(values, "MaxDownloadSlots", 2),
                 Int(values, "Priority"), Bool(values, "AllowUpload", true), Bool(values, "AllowDownload", true),
                 Bool(values, "StayLoggedIn"), Get(values, "BasePath", "/"), Bool(values, "PreferTlsTransfers", true),
                 Bool(values, "ForceBinaryMode", true), Int(values, "MaxIdleSeconds", 60),
                 Get(values, "BlockTransfersFrom"), Get(values, "BlockTransfersTo"), Bool(values, "SecureFileListings", true), Bool(values, "NeedsPret"), Bool(values, "CeprSupported"), Bool(values, "UseXdupe"), Get(values, "Affils"),
                 EnumValue(values, "FxpProtection", FxpProtectionMode.AutoSecure),
                 EnumValue(values, "FxpDataRole", FxpDataRole.Auto),
-                Bool(values, "UseOpenSslTls"));
+                Bool(values, "UseOpenSslTls"), Get(values, "ImportedSkipRules"), Get(values, "ImportedPriorityRules"), Get(values, "VisionaryRules"));
             var proxyMode = Get(values, "ProxyMode", "Inherit");
             ProxyConfiguration? proxy = proxyMode.Equals("Inherit", StringComparison.OrdinalIgnoreCase) ? null
                 : proxyMode.Equals("None", StringComparison.OrdinalIgnoreCase) ? new ProxyConfiguration(ProxyType.None)

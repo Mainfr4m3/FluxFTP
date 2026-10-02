@@ -6,7 +6,7 @@
     <Grid Margin="16" Background="{DynamicResource WindowBrush}">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
         <TextBlock Text="Saved sites" FontSize="22" FontWeight="SemiBold" Margin="0,0,0,12"/>
-        <ListView x:Name="SitesList" Grid.Row="1" MouseDoubleClick="Edit_Click">
+        <ListView x:Name="SitesList" Grid.Row="1" MouseDoubleClick="Edit_Click" GridViewColumnHeader.Click="SortSites_Click">
             <ListView.View><GridView>
                 <GridViewColumn Header="Name" DisplayMemberBinding="{Binding Name}" Width="180"/>
                 <GridViewColumn Header="Description" DisplayMemberBinding="{Binding Description}" Width="180"/>

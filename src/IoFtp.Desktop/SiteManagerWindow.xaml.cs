@@ -1,6 +1,9 @@
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Data;
+using System.ComponentModel;
 using IoFtp.Core.Models;
 using IoFtp.Desktop.Services;
 using Microsoft.Win32;
@@ -12,7 +15,15 @@ public partial class SiteManagerWindow : Window
     private readonly ProfileStore _store = new();
     private readonly ObservableCollection<ConnectionProfile> _profiles;
     public ConnectionProfile? SelectedProfile { get; private set; }
-
+    private void SortSites_Click(object sender, RoutedEventArgs e)
+    {
+        if (e.OriginalSource is not GridViewColumnHeader header || header.Column?.DisplayMemberBinding is not Binding binding) return;
+        var view = CollectionViewSource.GetDefaultView(SitesList.ItemsSource);
+        var property = binding.Path.Path;
+        var direction = view.SortDescriptions.FirstOrDefault() is var current && current.PropertyName == property &&
+            current.Direction == ListSortDirection.Ascending ? ListSortDirection.Descending : ListSortDirection.Ascending;
+        view.SortDescriptions.Clear(); view.SortDescriptions.Add(new SortDescription(property, direction));
+    }
     public SiteManagerWindow()
     {
         InitializeComponent();
@@ -78,6 +89,9 @@ public partial class SiteManagerWindow : Window
     }
 
     private void ImportFtpRush_Click(object sender, RoutedEventArgs e)
+        => ImportFtpRush();
+
+    internal void ImportFtpRush()
     {
         var documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
         var defaultFile = Path.Combine(documents, "FTPRush", "site.json");
@@ -97,24 +111,33 @@ public partial class SiteManagerWindow : Window
             var dialog = new FtpRushImportWindow("FTPRush", imported.Sites, _profiles, imported.Bookmarks) { Owner = this };
             if (dialog.ShowDialog() != true) return;
             var importedSites = 0;
+            var plannedProfiles = _profiles.ToList();
+            var siteNames = _profiles.ToDictionary(profile => profile.Name, profile => profile.Name, StringComparer.OrdinalIgnoreCase);
             foreach (var profile in dialog.SelectedProfiles)
             {
-                var index = _profiles.Select((existing, position) => (existing, position))
+                var index = plannedProfiles.Select((existing, position) => (existing, position))
                     .Where(item => IsSameSite(item.existing, profile))
                     .Select(item => item.position).DefaultIfEmpty(-1).First();
                 if (index >= 0)
                 {
-                    if (!dialog.ReplaceExisting) continue;
-                    _profiles[index] = profile with { Id = _profiles[index].Id };
+                    siteNames[profile.Name] = plannedProfiles[index].Name;
+                    plannedProfiles[index] = FtpRushSiteImporter.MergeProfile(plannedProfiles[index], profile,
+                        dialog.ReplaceExisting, dialog.PasswordUpdates.Contains(profile.Name));
+                    if (!dialog.ReplaceExisting)
+                    {
+                        if (dialog.PasswordUpdates.Contains(profile.Name)) importedSites++;
+                        continue;
+                    }
                 }
-                else _profiles.Add(profile);
+                else { plannedProfiles.Add(profile); siteNames[profile.Name] = profile.Name; }
                 importedSites++;
             }
             var bookmarkStore = new BookmarkStore();
             var bookmarks = bookmarkStore.Load();
             var importedBookmarks = 0;
-            foreach (var bookmark in dialog.SelectedBookmarks)
+            foreach (var sourceBookmark in dialog.SelectedBookmarks)
             {
+                var bookmark = sourceBookmark with { SiteName = siteNames.GetValueOrDefault(sourceBookmark.SiteName, sourceBookmark.SiteName) };
                 var index = bookmarks.FindIndex(existing =>
                     existing.SiteName.Equals(bookmark.SiteName, StringComparison.OrdinalIgnoreCase) &&
                     existing.Name.Equals(bookmark.Name, StringComparison.OrdinalIgnoreCase));
@@ -126,9 +149,22 @@ public partial class SiteManagerWindow : Window
                 else bookmarks.Add(bookmark);
                 importedBookmarks++;
             }
-            Save();
-            bookmarkStore.Save(bookmarks);
-            MessageBox.Show($"Imported {importedSites} FTPRush site(s) and {importedBookmarks} bookmark(s). Passwords are now protected with Windows DPAPI.",
+            var sectionStore = new SectionStore();
+            var sections = FtpRushSectionMigration.Merge(sectionStore.Load(), dialog.SelectedSections, siteNames, dialog.ReplaceExisting);
+            foreach (var path in dialog.SelectedVisionaryFiles) _ = new VisionaryConfiguration(path);
+            if (dialog.SelectedVisionaryFiles.Count > 0) _ = VisionaryImportInventory.Load();
+            var backup = ImportBackup.Commit(AppContext.BaseDirectory,
+                ["FluxFTP-sites.ini", "FluxFTP-bookmarks.json", "FluxFTP-sections.json", "FluxFTP-visionary-files.json"], () =>
+                {
+                    _store.Save(plannedProfiles);
+                    bookmarkStore.Save(bookmarks);
+                    if (dialog.SelectedSections.Count > 0) sectionStore.Save(sections);
+                    if (dialog.SelectedVisionaryFiles.Count > 0) VisionaryImportInventory.Link(dialog.SelectedVisionaryFiles);
+                });
+            _profiles.Clear(); foreach (var profile in plannedProfiles) _profiles.Add(profile);
+            MessageBox.Show($"Imported {importedSites} FTPRush site(s), {importedBookmarks} bookmark(s).\n" +
+                $"Processed {dialog.SelectedSections.Count} section path(s) with {(dialog.ReplaceExisting ? "replace" : "skip existing")} policy; linked {dialog.SelectedVisionaryFiles.Count} VISIONARY rule files.\n" +
+                $"Existing rules and section prechecks are preserved. Passwords stored by FluxFTP use Windows DPAPI.\nBackup: {backup}",
                 "FTPRush Import", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception exception)

@@ -11,6 +11,17 @@
             <TextBlock Text="SITE OPTIONS" FontSize="22" FontWeight="SemiBold" Foreground="{DynamicResource AccentBrush}"/>
             <TextBlock x:Name="SiteSummary" Foreground="{DynamicResource MutedTextBrush}" Margin="0,4,0,14"/>
             <TabControl>
+                <TabItem Header="Imported rules">
+                    <StackPanel Margin="12">
+                        <TextBlock Text="Rush skip list (original flags and patterns)"/>
+                        <TextBox x:Name="ImportedSkipBox" Height="120" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
+                        <TextBlock Text="Rush priority list" Margin="0,8,0,0"/>
+                        <TextBox x:Name="ImportedPriorityBox" Height="65" AcceptsReturn="True" VerticalScrollBarVisibility="Auto"/>
+                        <TextBlock Text="VISIONARY site rules, global skip and rushopt profiles" Margin="0,8,0,0"/>
+                        <TextBox x:Name="VisionaryRulesBox" Height="160" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
+                        <TextBlock Text="Priority entries beginning with 1 are active. Rush skip flags and VISIONARY settings are preserved for review; these are not converted into FluxFTP filters. VISIONARY continues to evaluate its trading rules." TextWrapping="Wrap" Margin="0,8,0,0"/>
+                    </StackPanel>
+                </TabItem>
                 <TabItem Header="Slots &amp; transfers">
                     <Grid Margin="16">
                         <Grid.ColumnDefinitions><ColumnDefinition Width="190"/><ColumnDefinition Width="120"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>

@@ -1,21 +1,28 @@
 <Window x:Class="IoFtp.Desktop.FtpRushImportWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Import Sites" Width="980" Height="560" MinWidth="760" MinHeight="420"
+        Title="Import Sites" Width="1120" Height="680" MinWidth="850" MinHeight="480"
         WindowStartupLocation="CenterOwner" ShowInTaskbar="False" Background="{DynamicResource WindowBrush}" Foreground="{DynamicResource TextBrush}">
     <DockPanel Margin="16" Background="{DynamicResource WindowBrush}">
         <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
             <TextBlock x:Name="HeadingText" Text="IMPORT SITES" FontSize="22" FontWeight="SemiBold" Foreground="{DynamicResource AccentBrush}"/>
-            <TextBlock x:Name="SummaryText" Margin="0,6,0,0" Foreground="{DynamicResource MutedTextBrush}"/>
+            <TextBlock x:Name="SummaryText" Margin="0,6,0,0" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}"/>
             <Border x:Name="GuidePanel" Margin="0,12,0,0" Padding="12,9" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1">
                 <StackPanel>
                     <TextBlock Text="IMPORT GUIDE" FontWeight="SemiBold" Foreground="{DynamicResource AccentBrush}" Margin="0,0,0,6"/>
                     <StackPanel Orientation="Horizontal">
                         <CheckBox x:Name="ImportSitesBox" Content="Import Sites" IsChecked="True" Margin="0,0,20,0"/>
                         <CheckBox x:Name="ImportBookmarksBox" Content="Import Bookmarks" IsChecked="True" Margin="0,0,28,0"/>
+                        <CheckBox x:Name="ImportSectionsBox" Content="Import Sections" IsChecked="True" Margin="0,0,20,0"/>
                         <RadioButton x:Name="ReplaceBox" GroupName="ConflictMode" Content="Replace existing" Margin="0,0,20,0"/>
                         <RadioButton x:Name="SkipBox" GroupName="ConflictMode" Content="Skip existing" IsChecked="True"/>
                     </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                        <Button Content="Load password text file..." Click="PasswordFile_Click"/>
+                        <Button Content="Clear password file" Click="ClearPasswordFile_Click"/>
+                        <CheckBox x:Name="UpdatePasswordsBox" Content="Update selected saved sites' passwords from this file" IsChecked="True" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <TextBlock x:Name="PasswordFileStatus" Text="Optional UTF-8 text file: one ftp://user:password@host:port or Site name=password per line. The checkbox allows password-only updates even with Skip existing." TextWrapping="Wrap" Margin="0,4,0,0"/>
                 </StackPanel>
             </Border>
         </StackPanel>
@@ -23,6 +30,8 @@
             <Button Content="Cancel" IsCancel="True"/>
             <Button Content="Import selected" IsDefault="True" Click="Import_Click"/>
         </StackPanel>
+        <TabControl>
+        <TabItem Header="Sites">
         <DataGrid x:Name="SitesGrid" AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="False" SelectionMode="Extended">
             <DataGrid.Columns>
                 <DataGridCheckBoxColumn Header="IMPORT" Binding="{Binding Selected}" Width="70"/>
@@ -31,8 +40,40 @@
                 <DataGridTextColumn Header="PROTOCOL" Binding="{Binding Protocol}" IsReadOnly="True" Width="100"/>
                 <DataGridTextColumn Header="HOST" Binding="{Binding Host}" IsReadOnly="True" Width="190"/>
                 <DataGridTextColumn Header="PORT" Binding="{Binding Port}" IsReadOnly="True" Width="65"/>
+                <DataGridTextColumn Header="PASSWORD" Binding="{Binding PasswordStatus}" IsReadOnly="True" Width="110"/>
                 <DataGridTextColumn Header="REMOTE PATH" Binding="{Binding RemotePath}" IsReadOnly="True" Width="170"/>
             </DataGrid.Columns>
         </DataGrid>
+        </TabItem>
+        <TabItem x:Name="SectionsTab" Header="Sections and paths">
+         <DockPanel>
+          <TextBlock DockPanel.Dock="Top" Margin="8" TextWrapping="Wrap" Text="Site-specific remote bookmarks become sections automatically. Conflicting paths and global/local bookmarks are unselected. Edit a site/path to resolve it, then select the row. Skip/Replace also applies to existing section paths; existing precheck rules are preserved."/>
+          <DataGrid x:Name="SectionsGrid" AutoGenerateColumns="False" CanUserAddRows="False">
+           <DataGrid.Columns>
+            <DataGridCheckBoxColumn Header="IMPORT" Binding="{Binding Selected, UpdateSourceTrigger=PropertyChanged}" Width="70"/>
+            <DataGridTextColumn Header="SECTION" Binding="{Binding Section, UpdateSourceTrigger=PropertyChanged}" Width="150"/>
+            <DataGridTextColumn Header="SITE" Binding="{Binding Site, UpdateSourceTrigger=PropertyChanged}" Width="150"/>
+            <DataGridTextColumn Header="REMOTE PATH" Binding="{Binding Path, UpdateSourceTrigger=PropertyChanged}" Width="240"/>
+            <DataGridTextColumn Header="SOURCE / REVIEW" Binding="{Binding Note}" IsReadOnly="True" Width="*"/>
+           </DataGrid.Columns>
+          </DataGrid>
+         </DockPanel>
+        </TabItem>
+        <TabItem x:Name="VisionaryTab" Header="VISIONARY rules">
+         <DockPanel>
+          <StackPanel DockPanel.Dock="Top" Margin="8">
+           <Button Content="Add VISIONARY / User_Files folder…" Click="VisionaryFolder_Click" HorizontalAlignment="Left"/>
+           <TextBlock x:Name="RulesStatus" TextWrapping="Wrap" Margin="0,8" Text="Optional: include all exported site rules, section.cha, options.ini and rushopt.ini in the VISIONARY editor. VISIONARY continues to evaluate its rules, including metadata, affiliations and trading chains. Import does not replace the running VISIONARY database or convert those rules into a different engine."/>
+          </StackPanel>
+          <DataGrid x:Name="VisionaryGrid" AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True">
+           <DataGrid.Columns>
+            <DataGridTextColumn Header="FILE" Binding="{Binding Path}" Width="2*"/>
+            <DataGridTextColumn Header="SETTINGS" Binding="{Binding Settings}" Width="90"/>
+            <DataGridTextColumn Header="BEHAVIOR" Binding="{Binding Behavior}" Width="2*"/>
+           </DataGrid.Columns>
+          </DataGrid>
+         </DockPanel>
+        </TabItem>
+        </TabControl>
     </DockPanel>
 </Window>

@@ -42,6 +42,9 @@ public partial class SiteOptionsWindow : Window
         BrokenPasvBox.IsChecked = options.FxpDataRole == FxpDataRole.Active;
         BlockFromBox.Text = options.BlockTransfersFrom; BlockToBox.Text = options.BlockTransfersTo;
         AffilsBox.Text = options.Affils;
+        ImportedSkipBox.Text = options.ImportedSkipRules;
+        ImportedPriorityBox.Text = options.ImportedPriorityRules;
+        VisionaryRulesBox.Text = options.VisionaryRules;
         ProxyModeBox.ItemsSource = new[]
         {
             new ProxyModeChoice(null, "Use global proxy"),
@@ -88,7 +91,7 @@ public partial class SiteOptionsWindow : Window
             BrokenPasvBox.IsChecked == true
                 ? FxpDataRole.Active
                 : (FxpDataRoleBox.SelectedItem as FxpDataRoleChoice)?.Role ?? FxpDataRole.Auto,
-            OpenSslTlsBox.IsChecked == true);
+            OpenSslTlsBox.IsChecked == true, ImportedSkipBox.Text, ImportedPriorityBox.Text, VisionaryRulesBox.Text);
         SiteProxy = proxyType switch
         {
             null => null,

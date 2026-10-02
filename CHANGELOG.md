@@ -2,6 +2,25 @@
 
 All notable FluxFTP changes are documented here.
 
+## 1.0.56 — 2026-10-02
+
+### Added
+
+- Rush import defaults to AUTH TLS, Auto listings and 4 total / 2 upload / 2 download slots. Site Options shows original Rush skip/prio entries and VISIONARY configuration from `RULES/*.ini`, `options.ini` and `rushopt.ini`; site affils are matched by filename. Priority patterns are applied to queued files; legacy skip flags and VISIONARY rules remain source configuration, not converted filters.
+- Site Manager columns support ascending/descending sorting.
+- Rush import offers an optional UTF-8 `Site name=password` text file for missing passwords, with per-site match status and validation. Existing-site password updates follow the Replace existing choice.
+- Site Rules can discover Visionary's linked `User_Files/RULES` folder or select it manually, and edit its `.txt` documents with backups and protection against overwriting external changes.
+
+### Fixed
+
+- Removed the experimental WinSCP engine from racefix.9 and restored the previous FTP/SSH.NET connection and transfer paths. Saved engine selections are ignored; slot defaults remain 4 total / 2 upload / 2 download.
+- Password-file imports can explicitly update passwords on selected existing sites even with Skip existing. The password prompt now uses FluxFTP theme resources.
+- Local disk transfers are serialized and progress is throttled before dispatch; local copy I/O runs off the UI thread. FXP remains independently scheduled.
+- RACE errors now include FTP server reply text alongside status codes.
+- Legacy Rush XML import reads the site's SSL mode instead of inferring it only from the port. Explicit SSL/TLS sites use FluxFTP's AUTH TLS-first connection.
+- Import Sections preserves per-site paths when importing a full RushSite XML file, instead of assigning every bookmark to `ioFTPD`. Ambiguous names and paths require review.
+- Export mIRC bridge bundles updated DLLs that avoid reading beyond the legacy LOADINFO structure in mIRC 7.52. The same DLLs handle the newer mIRC 7.64+ structure, so no export version selector is needed.
+
 ## 1.0.53 — 2026-09-29
 
 ### Added

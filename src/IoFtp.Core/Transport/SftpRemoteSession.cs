@@ -197,9 +197,10 @@ public sealed class SftpRemoteSession : IRemoteSession
 
     private static bool FingerprintsEqual(string configured, string observed)
     {
+        // Also accept full fingerprints saved by the withdrawn racefix.9 build.
         static string Normalize(string value) =>
-            value.Trim().Replace("SHA256:", "", StringComparison.OrdinalIgnoreCase)
-                .TrimEnd('=');
+            value.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries).LastOrDefault()?.Replace("SHA256:", "", StringComparison.OrdinalIgnoreCase)
+                .TrimEnd('=') ?? "";
         if (string.IsNullOrWhiteSpace(configured)) return false;
         var configuredBytes = System.Text.Encoding.ASCII.GetBytes(Normalize(configured));
         var observedBytes = System.Text.Encoding.ASCII.GetBytes(Normalize(observed));

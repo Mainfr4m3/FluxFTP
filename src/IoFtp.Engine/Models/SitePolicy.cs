@@ -3,7 +3,7 @@ namespace IoFtp.Engine.Models;
 public sealed record SitePolicy(
     Guid SiteId,
     string Name,
-    int MaxSlots = 2,
+    int MaxSlots = 4,
     int MaxDownloads = 2,
     int MaxUploads = 2,
     int Priority = 0,

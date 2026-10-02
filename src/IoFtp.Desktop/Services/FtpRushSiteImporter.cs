@@ -9,8 +9,67 @@ namespace IoFtp.Desktop.Services;
 internal sealed record FtpRushImportedSite(ConnectionProfile Profile, string GroupPath);
 internal sealed record FtpRushImportPackage(IReadOnlyList<FtpRushImportedSite> Sites, IReadOnlyList<SiteBookmark> Bookmarks);
 
+internal static class FtpRushPasswordFile
+{
+    // Split only at the first '='. Password whitespace and remaining '=' are significant.
+    public static IReadOnlyDictionary<string, string> Read(string path, IEnumerable<ConnectionProfile> profiles)
+    {
+        if (new FileInfo(path).Length > 1024 * 1024) throw new InvalidDataException("Password file exceeds 1 MB.");
+        var imported = profiles.ToArray();
+        var sites = imported.GroupBy(profile => profile.Name.Trim(), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var lines = File.ReadAllLines(path, new UTF8Encoding(false, true));
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (string.IsNullOrWhiteSpace(line) || line.TrimStart().StartsWith('#') || line.TrimStart().StartsWith(';')) continue;
+            string site, password;
+            if (line.TrimStart().StartsWith("ftp://", StringComparison.OrdinalIgnoreCase))
+            {
+                var address = line.Trim()[6..];
+                var at = address.LastIndexOf('@');
+                var colon = address.IndexOf(':');
+                if (at <= 0 || colon <= 0 || colon >= at ||
+                    !Uri.TryCreate("ftp://" + address[(at + 1)..], UriKind.Absolute, out var endpoint) ||
+                    endpoint.Host.Length == 0 || endpoint.UserInfo.Length != 0 || endpoint.Port < 1 ||
+                    endpoint.AbsolutePath is not ("" or "/") || endpoint.Query.Length != 0 || endpoint.Fragment.Length != 0)
+                    throw new InvalidDataException($"Password file line {i + 1}: expected ftp://user:password@host:port.");
+                var username = Uri.UnescapeDataString(address[..colon]);
+                password = Uri.UnescapeDataString(address[(colon + 1)..at]);
+                var matches = imported.Where(profile =>
+                    profile.Host.Trim().Trim('[', ']').Equals(endpoint.Host.Trim('[', ']'), StringComparison.OrdinalIgnoreCase) &&
+                    profile.Port == endpoint.Port && profile.Username.Equals(username, StringComparison.Ordinal)).ToArray();
+                if (matches.Length != 1)
+                    throw new InvalidDataException($"Password file line {i + 1}: address, port and username must match exactly one imported site.");
+                site = matches[0].Name.Trim();
+            }
+            else
+            {
+                var separator = line.IndexOf('=');
+                if (separator <= 0) throw new InvalidDataException($"Password file line {i + 1}: expected Site name=password or an FTP URL.");
+                site = line[..separator].Trim();
+                password = line[(separator + 1)..];
+            }
+            if (!sites.TryGetValue(site, out var count) || count != 1)
+                throw new InvalidDataException($"Password file line {i + 1}: site name must match exactly one imported site.");
+            if (password.Length == 0 || password.Any(char.IsControl))
+                throw new InvalidDataException($"Password file line {i + 1}: password must be nonempty and contain no control characters.");
+            if (!result.TryAdd(site, password)) throw new InvalidDataException($"Password file line {i + 1}: duplicate site entry.");
+        }
+        if (result.Count == 0) throw new InvalidDataException("No passwords found in the file.");
+        return result;
+    }
+}
+
 internal static class FtpRushSiteImporter
 {
+    internal static ConnectionProfile MergeProfile(ConnectionProfile existing, ConnectionProfile incoming, bool replace, bool updatePassword)
+    {
+        if (!replace) return updatePassword && incoming.Password.Length > 0 ? existing with { Password = incoming.Password } : existing;
+        return incoming with { Id = existing.Id, Name = existing.Name,
+            Password = incoming.Password.Length > 0 ? incoming.Password : existing.Password };
+    }
     public static IReadOnlyList<FtpRushImportedSite> Import(string path)
         => ImportPackage(path).Sites;
 
@@ -54,13 +113,15 @@ internal static class FtpRushSiteImporter
         if (isSite && !string.IsNullOrWhiteSpace(host))
         {
             var port = int.TryParse(LegacyValue(node, "PORT", "FTPPORT"), out var parsedPort) ? parsedPort : 21;
-            var protocol = port == 22 ? TransferProtocol.Sftp : port == 990 ? TransferProtocol.FtpsImplicit : TransferProtocol.Ftp;
+            var protocol = TransferProtocol.FtpsExplicit;
             var remotePath = LegacyValue(node, "REMOTEPATH", "REMOTE_PATH", "PATH", "DEFAULTREMOTEPATH").Replace('\\', '/');
             if (string.IsNullOrWhiteSpace(remotePath)) remotePath = "/";
             if (!remotePath.StartsWith('/')) remotePath = "/" + remotePath;
             var profile = new ConnectionProfile(Guid.NewGuid(), string.IsNullOrWhiteSpace(name) ? host : name, host, port,
-                LegacyValue(node, "USERNAME", "USER"), protocol, "", false, DirectoryListingMode.StatThenList,
-                new SiteOptions(BasePath: remotePath));
+                LegacyValue(node, "USERNAME", "USER"), protocol, "", false, DirectoryListingMode.Auto,
+                new SiteOptions(BasePath: remotePath,
+                    ImportedSkipRules: string.Join("\n", node.Elements("SKIP").Elements("I").Select(item => item.Value.Trim())),
+                    ImportedPriorityRules: string.Join("\n", node.Elements("PRIO").Elements("I").Select(item => item.Value.Trim()))));
             result.Add(new(profile, parentPath));
             ReadLegacyBookmarks(node, profile.Name, bookmarks);
         }
@@ -100,6 +161,7 @@ internal static class FtpRushSiteImporter
         return "";
     }
 
+
     private static bool IsLegacyValueElement(string name) => name.Equals("HOST", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("PORT", StringComparison.OrdinalIgnoreCase) || name.Equals("FTPPORT", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("USERNAME", StringComparison.OrdinalIgnoreCase) || name.Equals("USER", StringComparison.OrdinalIgnoreCase) ||
@@ -136,8 +198,9 @@ internal static class FtpRushSiteImporter
                 if (string.IsNullOrWhiteSpace(remotePath)) remotePath = "/";
                 if (!remotePath.StartsWith('/')) remotePath = "/" + remotePath;
                 var password = DecodeBase64(Text(server, "Base64Password"));
-                var profile = new ConnectionProfile(Guid.NewGuid(), name, host, port, Text(server, "Username"), protocol.Value,
-                    password, false, DirectoryListingMode.StatThenList, new SiteOptions(BasePath: remotePath));
+                var profile = new ConnectionProfile(Guid.NewGuid(), name, host, port, Text(server, "Username"),
+                    protocol == TransferProtocol.Sftp ? TransferProtocol.Sftp : TransferProtocol.FtpsExplicit,
+                    password, false, DirectoryListingMode.Auto, new SiteOptions(BasePath: remotePath));
                 result.Add(new(profile, parentPath));
                 ReadBookmarks(server, profile.Name, bookmarks);
             }

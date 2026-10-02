@@ -14,7 +14,8 @@ internal static class ProfileStoreChecks
         {
             var store = new ProfileStore(directory);
             var profile = new ConnectionProfile(Guid.NewGuid(), "Min sajt å %20", "localhost", 21,
-                " user %20+=; ", TransferProtocol.Ftp, " secret %20+=; ", Description: "line1\nline2");
+                " user %20+=; ", TransferProtocol.Ftp, " secret %20+=; ", Description: "line1\nline2",
+                Options: new SiteOptions(ImportedSkipRules: "01111111(?i)(TEST)\n00211111^SAMPLE$", ImportedPriorityRules: "1*.sfv", VisionaryRules: "[GLOBAL:SKIP]\nLIST=(TEST)"));
             store.Save([profile]);
             var saved = File.ReadAllText(path);
             Check(saved.Contains("Name=Min sajt å %20"), "readable name");
@@ -22,6 +23,7 @@ internal static class ProfileStoreChecks
             Check(!saved.Contains(profile.Password), "password protected");
             var loaded = store.Load().Single();
             Check(loaded.Username == profile.Username && loaded.Password == profile.Password && loaded.Description == profile.Description, "round trip");
+            Check(loaded.EffectiveOptions == profile.EffectiveOptions, "imported rules and slot defaults round trip");
             File.WriteAllLines(path, File.ReadAllLines(path).Select(line => line.StartsWith("Password=") ? "Password= manual %20+=; " : line).Append("Unknown=keep me"));
             Check(store.Load().Single().Password == " manual %20+=; ", "manual literal password");
             Check(File.ReadAllText(path).Contains("Password=dpapi:") && File.ReadAllText(path).Contains("Unknown=keep me"), "migration preserves unknown field");
@@ -38,7 +40,7 @@ internal static class ProfileStoreChecks
             File.WriteAllLines(path, File.ReadAllLines(path).Select(line => line.StartsWith("Password=") ? "Password=dpapi:invalid" : line));
             store.Load();
             Check(File.ReadAllText(path).Contains("Password=dpapi:invalid"), "unreadable secret retained");
-            Console.WriteLine("ProfileStore: 13 checks passed.");
+            Console.WriteLine("ProfileStore: 14 checks passed.");
         }
         finally { Directory.Delete(directory, true); }
     }
