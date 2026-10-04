@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define FLUXFTP_VERSION "1.04"
+#define FLUXFTP_VERSION "1.05"
 #define FALLBACK_BUFFER_SIZE 4096
 
 typedef struct LOADINFO {
@@ -42,10 +42,10 @@ __declspec(dllexport) void __stdcall LoadDll(LOADINFO *info)
     if (!info) return;
     info->mKeep = FALSE;
     info->mUnicode = FALSE;
-    /* mBytes does not exist before mIRC 7.64. */
+    /* mBytes does not exist before mIRC 7.64. Accept either word order; unknown versions use the legacy limit. */
     g_buffer_size = FALLBACK_BUFFER_SIZE;
-    if (LOWORD(info->mVersion) > 7 ||
-        (LOWORD(info->mVersion) == 7 && HIWORD(info->mVersion) >= 64)) {
+    if ((HIWORD(info->mVersion) == 7 && LOWORD(info->mVersion) >= 64 && LOWORD(info->mVersion) <= 99) ||
+        (LOWORD(info->mVersion) == 7 && HIWORD(info->mVersion) >= 64 && HIWORD(info->mVersion) <= 99)) {
         if (info->mBytes > 0 && info->mBytes < FALLBACK_BUFFER_SIZE)
             g_buffer_size = info->mBytes;
     }

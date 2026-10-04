@@ -56,6 +56,7 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
         _lastComplete = SourceComplete;
     }
     public static bool IsVerificationMetadata(RemoteEntry entry) => entry.Name.StartsWith(".ioFTPD", StringComparison.OrdinalIgnoreCase) ||
+        entry.Name.EndsWith("-MISSING", StringComparison.OrdinalIgnoreCase) ||
         entry.Name.EndsWith(".missing", StringComparison.OrdinalIgnoreCase) || entry.Name.EndsWith(".bad", StringComparison.OrdinalIgnoreCase) ||
         entry.Name.StartsWith("(iNCOMPLETE)", StringComparison.OrdinalIgnoreCase);
     public IEnumerable<Guid> Jobs => _files.Values.Select(file => file.Job);
@@ -72,6 +73,7 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
         if (profile is null)
         {
             var markerComplete = entries.Any(IsCompletionMarker) && !entries.Any(entry =>
+                entry.Name.EndsWith("-MISSING", StringComparison.OrdinalIgnoreCase) ||
                 entry.Name.EndsWith(".missing", StringComparison.OrdinalIgnoreCase) || entry.Name.EndsWith(".bad", StringComparison.OrdinalIgnoreCase));
             if (releaseRoot) SourceComplete = markerComplete;
             if (entries.Any(entry => !entry.IsDirectory && !IsVerificationMetadata(entry) &&

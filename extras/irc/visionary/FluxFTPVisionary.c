@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define VERSION "1.01"
+#define VERSION "1.02"
 #define PIPE_PATH "\\\\.\\pipe\\FluxFTP.Visionary.v1"
 typedef struct LOADINFO { DWORD mVersion; HWND mHwnd; BOOL mKeep; BOOL mUnicode; DWORD mBeta; DWORD mBytes; } LOADINFO;
 static DWORD g_capacity = 4096;
@@ -21,10 +21,10 @@ __declspec(dllexport) void __stdcall LoadDll(LOADINFO *info)
 {
     if (!info) return;
     info->mKeep = FALSE; info->mUnicode = FALSE;
-    /* mBytes does not exist before mIRC 7.64. */
+    /* mBytes does not exist before mIRC 7.64. Accept either word order; unknown versions use the legacy limit. */
     g_capacity = 4096;
-    if (LOWORD(info->mVersion) > 7 ||
-        (LOWORD(info->mVersion) == 7 && HIWORD(info->mVersion) >= 64)) {
+    if ((HIWORD(info->mVersion) == 7 && LOWORD(info->mVersion) >= 64 && LOWORD(info->mVersion) <= 99) ||
+        (LOWORD(info->mVersion) == 7 && HIWORD(info->mVersion) >= 64 && HIWORD(info->mVersion) <= 99)) {
         if (info->mBytes > 0 && info->mBytes < 4096) g_capacity = info->mBytes;
     }
 }
