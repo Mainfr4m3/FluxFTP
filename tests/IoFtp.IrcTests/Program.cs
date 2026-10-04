@@ -8,6 +8,7 @@ using IoFtp.Desktop.Models;
 using IoFtp.Desktop.Services;
 
 var assertions = 0;
+FxpSpeedChecks.Run();
 if (args.FirstOrDefault() == "--import-local-checks")
 {
     ProfileStoreChecks.Run();

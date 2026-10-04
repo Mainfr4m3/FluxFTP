@@ -2046,35 +2046,25 @@ public partial class MainWindow : Window
     private static async Task MonitorFxpAsync(ConnectionProfile sourceProfile, ConnectionProfile destinationProfile,
         QueueEntryView entry, CancellationToken cancellationToken)
     {
-        await using var monitor = await CreateWorkerAsync(destinationProfile, cancellationToken);
+        FtpRemoteSession? monitor = null;
         FtpRemoteSession? sourceMonitor = null;
         long previousBytes = 0;
         var previousAt = DateTime.UtcNow;
         var hasSizeBaseline = false;
         bool? ioGuiExtAvailable = null;
         var destinationMisses = 0;
-        var lastActivityAt = DateTime.UtcNow;
-
         void ApplyActivitySample(long transferred, long speed)
         {
-            var now = DateTime.UtcNow;
-            var elapsed = Math.Clamp((now - lastActivityAt).TotalSeconds, 0, 2);
-            lastActivityAt = now;
-            if (transferred > entry.BytesTransferred)
-                entry.BytesTransferred = entry.TotalBytes > 0 ? Math.Min(transferred, entry.TotalBytes) : transferred;
-            else if (speed > 0 && elapsed > 0)
-            {
-                var estimated = entry.BytesTransferred + (long)(speed * elapsed);
-                entry.BytesTransferred = entry.TotalBytes > 0 ? Math.Min(estimated, entry.TotalBytes) : estimated;
-            }
-            if (speed > 0) entry.SpeedBytesPerSecond = speed;
+            hasSizeBaseline = false;
+            if (transferred >= 0)
+                entry.BytesTransferred = FxpSpeedParser.ClampProgress(Math.Max(entry.BytesTransferred, transferred), entry.TotalBytes);
+            entry.SpeedBytesPerSecond = Math.Max(0, speed);
         }
-
         try
         {
             while (true)
             {
-                await Task.Delay(400, cancellationToken);
+                await Task.Delay(1000, cancellationToken);
                 // FluxTelemetry keeps one persistent ioFTPD session and exposes the
                 // live client-who snapshot locally. Prefer it so concurrent FXP jobs
                 // do not each consume another FTP slot merely to sample progress.
@@ -2096,17 +2086,18 @@ public partial class MainWindow : Window
                 // ioFTPD commonly preallocates the complete destination file, so SIZE
                 // cannot reveal live FXP progress. ioGuiExt exposes the same transfer
                 // counter and speed that ioGUI uses; prefer it when available.
+                // Only open a monitoring login when local telemetry cannot supply progress.
+                monitor ??= await CreateWorkerAsync(destinationProfile, cancellationToken);
                 var activityMatched = false;
                 try
                 {
                     var activity = await monitor.ExecuteCommandAsync("SITE ioGuiExt who", cancellationToken);
                     ioGuiExtAvailable = activity.StatusCode is >= 200 and < 300;
                     if (ioGuiExtAvailable == true &&
-                        TryReadIoFtpdTransfer(activity.Message, entry, expectUpload: true, out var transferred, out var speed))
+                        FxpSpeedParser.TryReadIoFtpdTransfer(activity.Message, entry.Name, expectUpload: true, out var transferred, out var speed))
                     {
-                        // ioFTPD can leave TRANSFERSIZE at zero while still reporting
-                        // a valid speed. Integrate that speed until a better counter
-                        // arrives so the aggregate progress bar keeps moving.
+                        // Keep server speed and byte count independent; do not invent
+                        // transferred bytes when the server counter stops changing.
                         ApplyActivitySample(transferred, speed);
                         activityMatched = true;
                     }
@@ -2129,7 +2120,7 @@ public partial class MainWindow : Window
                 {
                     var who = await monitor.ExecuteCommandAsync("SITE WHO", cancellationToken);
                     if (who.StatusCode is >= 200 and < 300 &&
-                        TryReadDrFtpdTransfer(who.Message, entry, expectUpload: true, out var speed))
+                        FxpSpeedParser.TryReadDrFtpdTransfer(who.Message, entry.Name, expectUpload: true, out var speed))
                     {
                         ApplyActivitySample(-1, speed);
                         destinationMisses = 0;
@@ -2150,7 +2141,7 @@ public partial class MainWindow : Window
                     {
                         var sourceActivity = await sourceMonitor.ExecuteCommandAsync("SITE ioGuiExt who", cancellationToken);
                         if (sourceActivity.StatusCode is >= 200 and < 300 &&
-                            TryReadIoFtpdTransfer(sourceActivity.Message, entry, expectUpload: false, out var transferred, out var speed))
+                            FxpSpeedParser.TryReadIoFtpdTransfer(sourceActivity.Message, entry.Name, expectUpload: false, out var transferred, out var speed))
                         {
                             ApplyActivitySample(transferred, speed);
                             continue;
@@ -2158,7 +2149,7 @@ public partial class MainWindow : Window
 
                         var sourceWho = await sourceMonitor.ExecuteCommandAsync("SITE WHO", cancellationToken);
                         if (sourceWho.StatusCode is >= 200 and < 300 &&
-                            TryReadDrFtpdTransfer(sourceWho.Message, entry, expectUpload: false, out speed))
+                            FxpSpeedParser.TryReadDrFtpdTransfer(sourceWho.Message, entry.Name, expectUpload: false, out speed))
                         {
                             ApplyActivitySample(-1, speed);
                             continue;
@@ -2169,8 +2160,9 @@ public partial class MainWindow : Window
 
                 // If ioGuiExt answered but did not contain a matching row, SIZE is
                 // still worth trying. Previously this fallback was skipped entirely.
+                entry.SpeedBytesPerSecond = 0;
                 var bytes = await monitor.GetSizeAsync(entry.Destination, cancellationToken);
-                if (bytes is null) continue;
+                if (bytes is null || FxpSpeedParser.IsPreallocatedSize(bytes.Value, entry.TotalBytes)) { entry.SpeedBytesPerSecond = 0; hasSizeBaseline = false; continue; }
                 var now = DateTime.UtcNow;
                 if (!hasSizeBaseline)
                 {
@@ -2181,15 +2173,17 @@ public partial class MainWindow : Window
                 }
                 var seconds = Math.Max((now - previousAt).TotalSeconds, 0.001);
                 var measuredSpeed = Math.Max(0, (long)((bytes.Value - previousBytes) / seconds));
-                if (measuredSpeed > 0 || ioGuiExtAvailable == false) entry.SpeedBytesPerSecond = measuredSpeed;
-                entry.BytesTransferred = bytes.Value;
+                entry.SpeedBytesPerSecond = measuredSpeed;
+                entry.BytesTransferred = FxpSpeedParser.ClampProgress(Math.Max(entry.BytesTransferred, bytes.Value), entry.TotalBytes);
                 previousBytes = bytes.Value;
                 previousAt = now;
             }
         }
         finally
         {
-            if (sourceMonitor is not null) await sourceMonitor.DisposeAsync();
+            entry.SpeedBytesPerSecond = 0;
+            try { if (sourceMonitor is not null) await sourceMonitor.DisposeAsync(); }
+            finally { if (monitor is not null) await monitor.DisposeAsync(); }
         }
     }
 
@@ -2205,128 +2199,17 @@ public partial class MainWindow : Window
 
         var source = NormalizeTelemetryPath(entry.Source);
         var destination = NormalizeTelemetryPath(entry.Destination);
-        TelemetryActivitySession? fallback = null;
-        var candidates = 0;
-        foreach (var session in snapshot.Sessions)
+        var matches = snapshot.Sessions.Where(session =>
         {
-            var upload = session.Direction.Equals("upload", StringComparison.OrdinalIgnoreCase) ||
-                         session.Action.StartsWith("STOR ", StringComparison.OrdinalIgnoreCase);
-            var download = session.Direction.Equals("download", StringComparison.OrdinalIgnoreCase) ||
-                           session.Action.StartsWith("RETR ", StringComparison.OrdinalIgnoreCase);
-            if (!upload && !download) continue;
-            var identity = NormalizeTelemetryPath($"{session.Action} {session.VirtualPath} {session.DataPath}");
-            if (!identity.Contains(entry.Name, StringComparison.OrdinalIgnoreCase)) continue;
-            candidates++;
-            fallback = session;
-            var expectedPath = upload ? destination : source;
-            if (!string.IsNullOrWhiteSpace(expectedPath) && identity.Contains(expectedPath, StringComparison.OrdinalIgnoreCase))
-                return (session.TransferredBytes, session.SpeedBytesPerSecond);
-        }
-        return candidates == 1 && fallback is not null
-            ? (fallback.TransferredBytes, fallback.SpeedBytesPerSecond)
-            : null;
+            var upload = session.Direction.Equals("upload", StringComparison.OrdinalIgnoreCase) || session.Action.StartsWith("STOR ", StringComparison.OrdinalIgnoreCase);
+            var download = session.Direction.Equals("download", StringComparison.OrdinalIgnoreCase) || session.Action.StartsWith("RETR ", StringComparison.OrdinalIgnoreCase);
+            var expected = upload ? destination : source;
+            return (upload || download) && !string.IsNullOrWhiteSpace(expected) &&
+                new[] { session.VirtualPath, session.DataPath }.Any(path => NormalizeTelemetryPath(path).Equals(expected, StringComparison.OrdinalIgnoreCase));
+        }).ToArray();
+        return matches.Length == 1 ? (matches[0].TransferredBytes, matches[0].SpeedBytesPerSecond) : null;
     }
-
     private static string NormalizeTelemetryPath(string value) => value.Replace('\\', '/').Trim().TrimEnd('/');
-
-    private static bool TryReadIoFtpdTransfer(string response, QueueEntryView entry, bool expectUpload,
-        out long transferred, out long speed)
-    {
-        transferred = -1;
-        speed = 0;
-        var fileName = entry.Name;
-        (long Transferred, long Speed)? fallback = null;
-        var activeCandidates = 0;
-        foreach (var line in response.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
-        {
-            var payload = line.Length > 4 && char.IsDigit(line[0]) && char.IsDigit(line[1]) && char.IsDigit(line[2])
-                ? line[4..].Trim()
-                : line.Trim();
-            if (!payload.StartsWith("cid |", StringComparison.OrdinalIgnoreCase)) continue;
-            var parts = payload.Split('|').Select(part => part.Trim()).ToArray();
-            if (parts.Length < 19) continue;
-            var action = $"{parts[10]} {parts[16]}";
-            var expectedAction = expectUpload
-                ? action.Contains("STOR", StringComparison.OrdinalIgnoreCase) || action.Contains("UPLOAD", StringComparison.OrdinalIgnoreCase)
-                : action.Contains("RETR", StringComparison.OrdinalIgnoreCase) || action.Contains("DOWNLOAD", StringComparison.OrdinalIgnoreCase);
-            if (!expectedAction) continue;
-
-            var bytes = long.TryParse(parts[17], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedBytes)
-                ? parsedBytes
-                : -1;
-            var parsedSpeed = ParseIoFtpdSpeed(parts[18]);
-            var identity = $"{parts[10]} {parts[12]} {parts[13]}";
-            if (identity.Contains(fileName, StringComparison.OrdinalIgnoreCase))
-            {
-                transferred = bytes;
-                speed = parsedSpeed;
-                return true;
-            }
-
-            activeCandidates++;
-            fallback = (bytes, parsedSpeed);
-        }
-        if (activeCandidates != 1 || fallback is null) return false;
-        transferred = fallback.Value.Transferred;
-        speed = fallback.Value.Speed;
-        return true;
-    }
-
-    private static long ParseIoFtpdSpeed(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return 0;
-        var normalized = value.Trim().Replace(',', '.');
-        var number = new string(normalized.TakeWhile(ch => char.IsDigit(ch) || ch == '.').ToArray());
-        if (!double.TryParse(number, NumberStyles.Float, CultureInfo.InvariantCulture, out var amount)) return 0;
-        var unit = normalized[number.Length..].Trim().ToLowerInvariant();
-        var multiplier = unit.StartsWith("g") ? 1024d * 1024 * 1024
-            : unit.StartsWith("m") ? 1024d * 1024
-            : unit.StartsWith("b") ? 1d
-            : 1024d; // ioFTPD TRANSFERSPEED without a suffix is KiB/s.
-        return Math.Max(0, (long)(amount * multiplier));
-    }
-
-    private static bool TryReadDrFtpdTransfer(string response, QueueEntryView entry, bool expectUpload, out long speed)
-    {
-        speed = 0;
-        var direction = expectUpload ? "UP" : "DN";
-        (string File, long Speed)? fallback = null;
-        var candidates = 0;
-        foreach (var rawLine in response.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
-        {
-            var line = Regex.Replace(rawLine, @"^\s*\d{3}[- ]\s*", "").Trim();
-            var match = Regex.Match(line,
-                $@"->\s*{direction}\s+(?<speed>[0-9]+(?:[.,][0-9]+)?\s*[KMGTPE]?i?B)/s\s+(?:to|from)\s+.+?\s+-\s+(?<file>.+)$",
-                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-            if (!match.Success) continue;
-            var parsedSpeed = ParseDrFtpdSpeed(match.Groups["speed"].Value);
-            if (parsedSpeed <= 0) continue;
-            var file = match.Groups["file"].Value.Trim();
-            if (file.Contains(entry.Name, StringComparison.OrdinalIgnoreCase))
-            {
-                speed = parsedSpeed;
-                return true;
-            }
-            candidates++;
-            fallback = (file, parsedSpeed);
-        }
-        if (candidates != 1 || fallback is null) return false;
-        speed = fallback.Value.Speed;
-        return true;
-    }
-
-    private static long ParseDrFtpdSpeed(string value)
-    {
-        var match = Regex.Match(value.Trim().Replace(',', '.'),
-            @"^(?<amount>[0-9]+(?:\.[0-9]+)?)\s*(?<prefix>[KMGTPE]?)(?<binary>I?)B$",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        if (!match.Success || !double.TryParse(match.Groups["amount"].Value,
-                NumberStyles.Float, CultureInfo.InvariantCulture, out var amount)) return 0;
-        var exponent = "KMGTPE".IndexOf(match.Groups["prefix"].Value.ToUpperInvariant(), StringComparison.Ordinal) + 1;
-        var basis = match.Groups["binary"].Value.Length > 0 ? 1024d : 1000d;
-        var multiplier = exponent <= 0 ? 1d : Math.Pow(basis, exponent);
-        return Math.Max(0, (long)(amount * multiplier));
-    }
 
     private static async Task<FtpRemoteSession> CreateWorkerAsync(ConnectionProfile profile, CancellationToken cancellationToken)
     {
