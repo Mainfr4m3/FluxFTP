@@ -2,6 +2,12 @@
 
 All notable FluxFTP changes are documented here.
 
+## Unreleased
+
+- VISIONARY watches share one serialized source-listing connection per site and immutable directory snapshots for up to one second. Idle connections close automatically; changed profiles and failed operations discard the session and cached listings.
+- VISIONARY import reads consistent slotsup/slotsdn values from each site's configuration, capped by the existing Flux total slot limit. Missing, invalid or differing section values retain the existing directional limit. Live bridge calls do not synchronize configuration.
+- Includes the bridge compatibility and FXP speed measurement fixes from the 1.0.57 test builds. Monitoring/browsing connections are not yet included in the transfer scheduler's total slot accounting.
+
 ## 1.0.56 — 2026-10-02
 
 ### Added

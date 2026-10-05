@@ -47,6 +47,7 @@ public partial class MainWindow : Window
     private IrcManager? _ircService;
     private readonly SemaphoreSlim _ircRestartGate = new(1, 1);
     private readonly RaceLogStore _raceLog = new();
+    private readonly RaceListingService _raceListings = new(async (profile, token) => await CreateWorkerAsync(profile, token));
     private readonly ConcurrentDictionary<Guid, string> _raceSiteNames = new();
     private RaceLogWindow? _raceLogWindow;
     private readonly System.Windows.Threading.DispatcherTimer _raceLogTimer = new() { Interval = TimeSpan.FromMinutes(1) };
@@ -2468,6 +2469,7 @@ public partial class MainWindow : Window
         if (_ircService is not null) await _ircService.DisposeAsync();
         _workerPoolShuttingDown = true;
         await _engine.DisposeAsync();
+        await _raceListings.DisposeAsync();
         await DisposePooledWorkersAsync();
         if (_remoteSession is not null) await _remoteSession.DisposeAsync();
         if (_leftRemoteSession is not null) await _leftRemoteSession.DisposeAsync();
@@ -3002,13 +3004,17 @@ public partial class MainWindow : Window
         if (!siteRules.Accepted) throw new InvalidOperationException($"Site rules blocked transfer: {siteRules.Message}");
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromMinutes(5));
-        await using var sourceSession = new FtpRemoteSession();
-        await sourceSession.ConnectAsync(ApplyGlobalProxy(sourceProfile), timeout.Token);
+        await using var sourceSession = race is null ? new FtpRemoteSession() : null;
+        var listingProfile = ApplyGlobalProxy(sourceProfile);
+        if (sourceSession is not null) await sourceSession.ConnectAsync(listingProfile, timeout.Token);
+        Task<IReadOnlyList<RemoteEntry>> ListSourceAsync(string path) => sourceSession is not null
+            ? sourceSession.ListAsync(path, timeout.Token)
+            : _raceListings.ListAsync(listingProfile, path, timeout.Token);
         var itemParent = race is not null ? RemoteParent(source) : sourceBase;
         var itemName = race is not null ? RemoteLeaf(source) : request.Name;
         race?.BeginListing();
         IReadOnlyList<RemoteEntry> parentEntries;
-        try { parentEntries = await sourceSession.ListAsync(itemParent, timeout.Token); }
+        try { parentEntries = await ListSourceAsync(itemParent); }
         catch (FtpCommandException exception) when (race is not null && request.Name.Contains('/') && exception.StatusCode == 550)
         { return new ApiTransferStartResult(request.Name, "WAITING", 0, request.SrcSite, request.DstSite, []); }
         if (race is not null && request.Name.Contains('/'))
@@ -3027,7 +3033,7 @@ public partial class MainWindow : Window
         var apiFiles = new List<(RemoteEntry Entry, string Destination)>();
         async Task QueueDirectory(string sourceDirectory, string destinationDirectory)
         {
-            var children = await sourceSession.ListAsync(sourceDirectory, timeout.Token);
+            var children = await ListSourceAsync(sourceDirectory);
             var nuke = NukeDetector.DetectDirectory(RemoteLeaf(sourceDirectory), children);
             if (nuke.IsNuked)
                 throw new InvalidOperationException($"Nuke detection blocked automated transfer: {sourceDirectory} ({nuke.Display}).");

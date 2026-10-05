@@ -8,6 +8,12 @@ using IoFtp.Desktop.Models;
 using IoFtp.Desktop.Services;
 
 var assertions = 0;
+if (args.FirstOrDefault() == "--race-listing-checks")
+{
+    VisionarySlotChecks.Run();
+    await RaceListingChecks.Run();
+    return;
+}
 FxpSpeedChecks.Run();
 if (args.FirstOrDefault() == "--import-local-checks")
 {
