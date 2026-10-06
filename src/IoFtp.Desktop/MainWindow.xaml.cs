@@ -94,6 +94,8 @@ public partial class MainWindow : Window
     };
     private static readonly JsonSerializerOptions TelemetryJsonOptions = new() { PropertyNameCaseInsensitive = true };
     private bool _exitRequested;
+    private bool _leftConnectionBusy;
+    private bool _rightConnectionBusy;
     private bool _workerPoolShuttingDown;
     private int _legendOffset;
     public MainWindow()
@@ -123,7 +125,7 @@ public partial class MainWindow : Window
         Loaded += async (_, _) => { RestoreWindowLayout(); await RestartApiServerAsync(); await RestartIrcAsync(); if (_settings.CheckForUpdatesAtStartup) await CheckForUpdatesAsync(); };
         ConfigureTrayIcon();
         StateChanged += MainWindow_StateChanged;
-        _legendTimer.Tick += (_, _) => UpdateLegendBar();
+        _legendTimer.Tick += (_, _) => { UpdateLegendBar(); UpdateConnectionButtons(); };
         _legendTimer.Start(); UpdateLegendBar();
     }
 
@@ -193,6 +195,8 @@ public partial class MainWindow : Window
 
     private async Task ConnectPaneAsync(ConnectionProfile profile, bool left)
     {
+        if (left ? _leftConnectionBusy : _rightConnectionBusy) return;
+        SetConnectionBusy(left, true);
         profile = ApplyGlobalProxy(profile);
         ConnectionStatus.Text = $"Connecting to {profile.Host}:{profile.Port}…";
         if (left) LeftSiteTitle.Text = $"REMOTE — {profile.Name.ToUpperInvariant()}";
@@ -252,7 +256,7 @@ public partial class MainWindow : Window
             if (left) LocalList.ItemsSource = null; else RemoteList.ItemsSource = null;
             LogText.AppendText($"{Environment.NewLine}Connection failed: {FriendlyMessage(exception)}");
         }
-        finally { LogText.ScrollToEnd(); }
+        finally { SetConnectionBusy(left, false); LogText.ScrollToEnd(); }
     }
 
     private static void SaveTrustedHostKey(ConnectionProfile trustedProfile)
@@ -339,7 +343,45 @@ public partial class MainWindow : Window
         if (!_reloadingQuickSites && RightQuickSites.SelectedItem is QuickSiteChoice { Profile: { } profile }) await ConnectPaneAsync(profile, false);
     }
 
-    private async void DisconnectLeft_Click(object sender, RoutedEventArgs e)
+    private void UpdateConnectionButtons()
+    {
+        LeftConnectionButton.Content = _leftRemoteSession?.IsConnected == true ? "Disconnect" : "Connect";
+        RightConnectionButton.Content = _remoteSession?.IsConnected == true ? "Disconnect" : "Connect";
+        LeftConnectionButton.IsEnabled = !_leftConnectionBusy;
+        RightConnectionButton.IsEnabled = !_rightConnectionBusy;
+        LeftQuickSites.IsEnabled = !_leftConnectionBusy;
+        RightQuickSites.IsEnabled = !_rightConnectionBusy;
+    }
+
+    private void SetConnectionBusy(bool left, bool busy)
+    {
+        if (left) _leftConnectionBusy = busy; else _rightConnectionBusy = busy;
+        UpdateConnectionButtons();
+    }
+
+    private async void ToggleConnection_Click(object sender, RoutedEventArgs e)
+    {
+        var left = (sender as Button)?.Tag as string == "Left";
+        if (left ? _leftConnectionBusy : _rightConnectionBusy) return;
+        if ((left ? _leftRemoteSession : _remoteSession)?.IsConnected != true)
+        {
+            if (left) ConnectLeft_Click(sender, e); else ConnectRight_Click(sender, e);
+            return;
+        }
+        SetConnectionBusy(left, true);
+        try
+        {
+            if (left) await DisconnectLeftAsync(); else await DisconnectRightAsync();
+        }
+        catch (Exception exception)
+        {
+            ConnectionStatus.Text = "Disconnect failed";
+            LogText.AppendText($"{Environment.NewLine}Disconnect failed: {FriendlyMessage(exception)}");
+        }
+        finally { SetConnectionBusy(left, false); }
+    }
+
+    private async Task DisconnectLeftAsync()
     {
         if (_leftProfile is not null) await RunScriptsAsync("OnDisconnect", new() { ["site"] = _leftProfile.Name, ["host"] = _leftProfile.Host, ["path"] = _leftRemoteDirectory, ["status"] = "Disconnected" }, true);
         if (_leftRemoteSession is not null) { await _leftRemoteSession.DisposeAsync(); _leftRemoteSession = null; }
@@ -352,7 +394,7 @@ public partial class MainWindow : Window
         LogText.AppendText($"{Environment.NewLine}Remote disconnected."); LogText.ScrollToEnd();
     }
 
-    private async void DisconnectRight_Click(object sender, RoutedEventArgs e)
+    private async Task DisconnectRightAsync()
     {
         if (_rightProfile is not null) await RunScriptsAsync("OnDisconnect", new() { ["site"] = _rightProfile.Name, ["host"] = _rightProfile.Host, ["path"] = _remoteDirectory, ["status"] = "Disconnected" }, true);
         if (_remoteSession is not null) { await _remoteSession.DisposeAsync(); _remoteSession = null; }
