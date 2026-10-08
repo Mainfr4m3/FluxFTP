@@ -125,7 +125,7 @@
                                   KeyDown="LocalPath_KeyDown" DropDownOpened="Path_DropDownOpened"
                                   DropDownClosed="LocalPath_DropDownClosed" ToolTip="Path history and common locations"/>
                     </DockPanel>
-                    <ListView x:Name="LocalList" Margin="8,0,8,8" SelectionMode="Extended" MouseDoubleClick="LocalList_DoubleClick" SizeChanged="FileList_SizeChanged"
+                    <ListView x:Name="LocalList" Margin="8,0,8,8" SelectionMode="Extended" PreviewKeyDown="FileList_PreviewKeyDown" MouseDoubleClick="LocalList_DoubleClick" SizeChanged="FileList_SizeChanged"
                               PreviewMouseLeftButtonDown="FileList_PreviewMouseLeftButtonDown" PreviewMouseLeftButtonUp="FileList_PreviewMouseLeftButtonUp"
                               MouseMove="LocalList_MouseMove"
                               PreviewMouseRightButtonDown="FileList_PreviewMouseRightButtonDown" AllowDrop="True"
@@ -198,7 +198,7 @@
                                   KeyDown="RemotePath_KeyDown" DropDownOpened="Path_DropDownOpened"
                                   DropDownClosed="RemotePath_DropDownClosed" ToolTip="Path history and common locations"/>
                     </DockPanel>
-                    <ListView x:Name="RemoteList" Margin="8,0,8,8" SelectionMode="Extended" MouseDoubleClick="RemoteList_DoubleClick" SizeChanged="FileList_SizeChanged"
+                    <ListView x:Name="RemoteList" Margin="8,0,8,8" SelectionMode="Extended" PreviewKeyDown="FileList_PreviewKeyDown" MouseDoubleClick="RemoteList_DoubleClick" SizeChanged="FileList_SizeChanged"
                               PreviewMouseLeftButtonDown="FileList_PreviewMouseLeftButtonDown" PreviewMouseLeftButtonUp="FileList_PreviewMouseLeftButtonUp"
                               MouseMove="RemoteList_MouseMove"
                               PreviewMouseRightButtonDown="FileList_PreviewMouseRightButtonDown" AllowDrop="True"

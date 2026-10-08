@@ -2,6 +2,12 @@
 
 All notable FluxFTP changes are documented here.
 
+## 1.0.62 — 2026-10-08
+
+- Delete processes every selected file/folder with one confirmation, supports the Delete key in both panes, checks server replies and verifies removal. Recursive deletion removes files and subfolders before the selected folder.
+- Path history displays the current directory and supports typing/pasting a path followed by Enter. Noneditable selectors retain their existing behavior.
+- Live FXP speed monitoring defaults to off to reduce race overhead. Global Settings > FXP can enable it; explicitly saved preferences are preserved.
+
 ## 1.0.61 — 2026-10-08
 
 - Global Settings > FXP can disable live speed/progress monitoring to reduce additional FTP connections and status queries during VISIONARY races. Saving stops active monitoring; enabling applies to new files. Completion and final average speed remain available.

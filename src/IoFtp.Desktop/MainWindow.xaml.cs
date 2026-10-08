@@ -799,12 +799,12 @@ public partial class MainWindow : Window
 
     private async void LocalPath_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Enter) { if (LeftMode.SelectedIndex == 0) LoadLocalDirectory(LocalPath.Text); else await NavigateLeftRemoteAsync(LocalPath.Text); e.Handled = true; }
+        if (e.Key == Key.Enter) { e.Handled = true; await NavigatePaneAsync(true, LocalPath.Text); }
     }
 
     private async void RemotePath_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Enter) { if (RightMode.SelectedIndex == 0) LoadRightLocalDirectory(RemotePath.Text); else await NavigateRemoteAsync(RemotePath.Text); e.Handled = true; }
+        if (e.Key == Key.Enter) { e.Handled = true; await NavigatePaneAsync(false, RemotePath.Text); }
     }
 
     private static string NormalizeRemotePath(string path)
@@ -1099,47 +1099,58 @@ public partial class MainWindow : Window
         catch (Exception exception) { MessageBox.Show(FriendlyMessage(exception), "Rename", MessageBoxButton.OK, MessageBoxImage.Error); }
     }
 
-    private async void DeleteLeft_Click(object sender, RoutedEventArgs e) { if (LocalList.SelectedItem is LocalEntryView item) await DeleteEntryAsync(true, item.Name, item.FullPath, item.IsDirectory); }
-    private async void DeleteRight_Click(object sender, RoutedEventArgs e) { if (RemoteList.SelectedItem is RemoteEntryView item) await DeleteEntryAsync(false, item.Name, item.FullPath, item.IsDirectory); }
-    private async Task DeleteEntryAsync(bool left, string name, string path, bool directory)
+    private async void DeleteLeft_Click(object sender, RoutedEventArgs e) => await DeleteSelectedAsync(true);
+    private bool _deleteKeyBusy;
+    private async void FileList_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        var warning = directory
-            ? $"Permanently delete '{name}' and everything inside it?\n\nThis recursive operation cannot be undone."
-            : $"Permanently delete '{name}'?";
+        if (e.Key != Key.Delete || Keyboard.Modifiers != ModifierKeys.None) return;
+        e.Handled = true;
+        if (e.IsRepeat || _deleteKeyBusy) return;
+        _deleteKeyBusy = true;
+        try { await DeleteSelectedAsync(ReferenceEquals(sender, LocalList)); }
+        finally { _deleteKeyBusy = false; }
+    }
+    private async void DeleteRight_Click(object sender, RoutedEventArgs e) => await DeleteSelectedAsync(false);
+    private async Task DeleteSelectedAsync(bool left)
+    {
+        var items = left
+            ? LocalList.SelectedItems.Cast<LocalEntryView>().Select(item => (item.Name, Path: item.FullPath, Directory: item.IsDirectory)).ToArray()
+            : RemoteList.SelectedItems.Cast<RemoteEntryView>().Select(item => (item.Name, Path: item.FullPath, Directory: item.IsDirectory)).ToArray();
+        if (items.Length == 0) return;
+        var names = string.Join("\n", items.Take(10).Select(item => item.Name)) + (items.Length > 10 ? "\n…" : "");
+        var warning = $"Permanently delete {items.Length} selected item(s)?\n\n{names}\n\nFolders and their contents will be removed. This cannot be undone.";
         if (MessageBox.Show(warning, "Delete", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+        foreach (var item in items)
+            if (!await DeleteEntryAsync(left, item.Path, item.Directory)) break;
+        if (left && LeftMode.SelectedIndex == 0) LoadLocalDirectory(_localDirectory);
+        else if (!left && RightMode.SelectedIndex == 0) LoadRightLocalDirectory(_rightLocalDirectory);
+        else if (left) await NavigateLeftRemoteAsync(_leftRemoteDirectory);
+        else await NavigateRemoteAsync(_remoteDirectory);
+    }
+
+    private async Task<bool> DeleteEntryAsync(bool left, string path, bool directory)
+    {
         try
         {
             if ((left && LeftMode.SelectedIndex == 0) || (!left && RightMode.SelectedIndex == 0)) { if (directory) Directory.Delete(path, true); else File.Delete(path); }
             else
             {
-                var session = left ? _leftRemoteSession : _remoteSession; if (session?.IsConnected != true) return;
+                var session = left ? _leftRemoteSession : _remoteSession;
                 using var timeout = new CancellationTokenSource(directory ? TimeSpan.FromMinutes(10) : TimeSpan.FromSeconds(20));
-                if (directory) await DeleteRemoteTreeAsync(session, path, timeout.Token);
-                else await session.ExecuteCommandAsync($"DELE {path}", timeout.Token);
+                var profile = left ? _leftProfile : _rightProfile;
+                if (session?.IsConnected != true) throw new IOException("Reconnect to the site before deleting.");
+                await RemoteDeletion.DeleteAsync(session, path, directory, profile?.Protocol != TransferProtocol.Sftp, timeout.Token,
+                    message => LogText.AppendText($"{Environment.NewLine}{message}"));
             }
-            if (left) RefreshLeft_Click(this, new RoutedEventArgs()); else RefreshRight_Click(this, new RoutedEventArgs());
+            LogText.AppendText($"{Environment.NewLine}Deleted: {path}");
+            return true;
         }
-        catch (Exception exception) { MessageBox.Show(FriendlyMessage(exception), "Delete", MessageBoxButton.OK, MessageBoxImage.Error); }
-    }
-
-    private static async Task DeleteRemoteTreeAsync(FtpRemoteSession session, string root, CancellationToken cancellationToken)
-    {
-        var directories = new Stack<string>();
-        var pending = new Stack<string>();
-        pending.Push(root);
-        while (pending.Count > 0)
+        catch (Exception exception)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var directory = pending.Pop(); directories.Push(directory);
-            foreach (var child in await session.ListAsync(directory, cancellationToken))
-            {
-                if (child.Name is "." or "..") continue;
-                if (child.IsDirectory) pending.Push(child.FullPath);
-                else await session.ExecuteCommandAsync($"DELE {child.FullPath}", cancellationToken);
-            }
+            LogText.AppendText($"{Environment.NewLine}Delete failed for {path}: {exception.Message}");
+            MessageBox.Show(FriendlyMessage(exception), "Delete", MessageBoxButton.OK, MessageBoxImage.Error);
+            return false;
         }
-        while (directories.Count > 0)
-            await session.ExecuteCommandAsync($"RMD {directories.Pop()}", cancellationToken);
     }
 
     private async void ChmodLeft_Click(object sender, RoutedEventArgs e) { if (LocalList.SelectedItem is LocalEntryView item) await ChmodAsync(true, item.FullPath); }

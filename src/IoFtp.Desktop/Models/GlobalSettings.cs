@@ -43,4 +43,4 @@ public sealed record GlobalSettings(
     bool EnableVisionaryBridge = false,
     bool SerializeLocalTransfers = true,
     string TransferCategoryOrder = "SFV\nMain files\nSample\nProof\nNFO",
-    bool EnableFxpSpeedMonitoring = true);
+    bool EnableFxpSpeedMonitoring = false);

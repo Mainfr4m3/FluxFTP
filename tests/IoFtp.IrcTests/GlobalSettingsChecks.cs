@@ -19,7 +19,7 @@ internal static class GlobalSettingsChecks
             var path = Path.Combine(directory, "settings.json");
             Check(!File.ReadAllText(path).Contains(irc.Password), "secret protected on disk");
             Check(new GlobalSettingsStore(directory).Load().TransferCategoryOrder == settings.TransferCategoryOrder, "transfer category order survives restart");
-            Check(new GlobalSettingsStore(directory).Load().EnableFxpSpeedMonitoring, "FXP monitoring enabled by default");
+            Check(!new GlobalSettingsStore(directory).Load().EnableFxpSpeedMonitoring, "FXP monitoring disabled by default");
             new GlobalSettingsStore(directory).Save(settings with { EnableFxpSpeedMonitoring = false });
             Check(!new GlobalSettingsStore(directory).Load().EnableFxpSpeedMonitoring, "disabled FXP monitoring survives restart");
             new GlobalSettingsStore(directory).Save(settings);
