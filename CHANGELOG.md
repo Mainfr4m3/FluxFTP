@@ -2,6 +2,62 @@
 
 All notable FluxFTP changes are documented here.
 
+## 1.0.62 — 2026-10-08
+
+- Delete processes every selected file/folder with one confirmation, supports the Delete key in both panes, checks server replies and verifies removal. Recursive deletion removes files and subfolders before the selected folder.
+- Path history displays the current directory and supports typing/pasting a path followed by Enter. Noneditable selectors retain their existing behavior.
+- Live FXP speed monitoring defaults to off to reduce race overhead. Global Settings > FXP can enable it; explicitly saved preferences are preserved.
+
+## 1.0.61 — 2026-10-08
+
+- Global Settings > FXP can disable live speed/progress monitoring to reduce additional FTP connections and status queries during VISIONARY races. Saving stops active monitoring; enabling applies to new files. Completion and final average speed remain available.
+- FXP progress samples both servers independently with bounded monitoring operations, reconnects failed connections and skips unsupported monitoring commands.
+- Brief measurement gaps retain the last observed speed. After six seconds without fresh data, speed is marked unavailable while monitoring continues. Stale local telemetry snapshots are rejected.
+- Actual zero-speed samples remain distinct from missing measurements. Destination SIZE fallback ignores preallocated complete files and resets its baseline after reconnecting.
+
+## 1.0.60 — 2026-10-08
+
+- Configurable SFV → main files → Sample → Proof → NFO transfer priority in Global Settings > Prio List. Imported and global wildcard rules apply within each category; changes update waiting jobs without interrupting running files.
+- Restored FXP progress monitoring by querying the source first with a timeout and reading SITE FLUXWHO directly. Monitoring failures include diagnostics and destination SIZE failures no longer end monitoring.
+
+## 1.0.59 — 2026-10-08
+
+### Fixed
+
+- Transfer queue heading uses the same text color as Connection Log.
+- Buttons use white text, including Quick Connect. Local/Remote selectors inherit the correct foreground color in their dropdown toggle.
+
+## 1.0.58 — 2026-10-06
+
+- Each pane now has one Connect/Disconnect button that follows connection state and prevents duplicate connection attempts.
+
+- VISIONARY watches share one serialized source-listing connection per site and immutable directory snapshots for up to one second. Idle connections close automatically; changed profiles and failed operations discard the session and cached listings.
+- VISIONARY import reads consistent slotsup/slotsdn values from each site's configuration, capped by the existing Flux total slot limit. Missing, invalid or differing section values retain the existing directional limit. Live bridge calls do not synchronize configuration.
+- Includes the bridge compatibility and FXP speed measurement fixes from the 1.0.57 test builds. Monitoring/browsing connections are not yet included in the transfer scheduler's total slot accounting.
+
+## 1.0.57 — test builds, 2026-10-04–2026-10-05
+
+- Test builds corrected mIRC bridge compatibility/version checks, VISIONARY missing-marker detection and FXP speed matching, units and preallocation handling. These changes were included in 1.0.58; no standalone stable 1.0.57 release was published.
+
+## 1.0.56 — 2026-10-02
+
+### Added
+
+- Rush import defaults to AUTH TLS, Auto listings and 4 total / 2 upload / 2 download slots. Site Options shows original Rush skip/prio entries and VISIONARY configuration from `RULES/*.ini`, `options.ini` and `rushopt.ini`; site affils are matched by filename. Priority patterns are applied to queued files; legacy skip flags and VISIONARY rules remain source configuration, not converted filters.
+- Site Manager columns support ascending/descending sorting.
+- Rush import offers an optional UTF-8 `Site name=password` text file for missing passwords, with per-site match status and validation. Existing-site password updates follow the Replace existing choice.
+- Site Rules can discover Visionary's linked `User_Files/RULES` folder or select it manually, and edit its `.txt` documents with backups and protection against overwriting external changes.
+
+### Fixed
+
+- Removed the experimental WinSCP engine from racefix.9 and restored the previous FTP/SSH.NET connection and transfer paths. Saved engine selections are ignored; slot defaults remain 4 total / 2 upload / 2 download.
+- Password-file imports can explicitly update passwords on selected existing sites even with Skip existing. The password prompt now uses FluxFTP theme resources.
+- Local disk transfers are serialized and progress is throttled before dispatch; local copy I/O runs off the UI thread. FXP remains independently scheduled.
+- RACE errors now include FTP server reply text alongside status codes.
+- Legacy Rush XML import reads the site's SSL mode instead of inferring it only from the port. Explicit SSL/TLS sites use FluxFTP's AUTH TLS-first connection.
+- Import Sections preserves per-site paths when importing a full RushSite XML file, instead of assigning every bookmark to `ioFTPD`. Ambiguous names and paths require review.
+- Export mIRC bridge bundles updated DLLs that avoid reading beyond the legacy LOADINFO structure in mIRC 7.52. The same DLLs handle the newer mIRC 7.64+ structure, so no export version selector is needed.
+
 ## 1.0.55 — 2026-10-01
 
 ### Added
