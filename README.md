@@ -46,7 +46,7 @@ FluxFTP can minimize and close to the Windows system tray so transfers and API
 automation continue in the background. Use **Exit FluxFTP** from the tray menu to
 stop the application; an additional warning is shown while the HTTPS/JSON API is active.
 
-### mIRC and d-tool automation
+### mIRC and automation
 
 HTTPS/JSON API jobs use saved site profiles and reusable slots and do not require
 the sites to be open in the two visible Remote panes. Keep **Localhost only**
