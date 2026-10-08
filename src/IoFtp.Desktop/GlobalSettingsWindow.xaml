@@ -59,10 +59,19 @@
                     <TextBox x:Name="SkipPatternsBox" Grid.Row="1" Margin="0,10" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" FontFamily="{DynamicResource AppMonospaceFontFamily}"/>
                     <TextBlock Grid.Row="2" Text="One wildcard per line, for example *.message or *sample*. Matching files are not queued." Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap"/>
                 </Grid></TabItem>
-                <TabItem Header="Prio List"><Grid Margin="16"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                    <TextBlock Text="PRE / folder upload priority" FontWeight="SemiBold"/>
-                    <TextBox x:Name="PriorityPatternsBox" Grid.Row="1" Margin="0,10" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" FontFamily="{DynamicResource AppMonospaceFontFamily}"/>
-                    <TextBlock Grid.Row="2" Text="One wildcard per line. Earlier entries are queued first; for example *.nfo then *.sfv." Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap"/>
+                <TabItem Header="Prio List"><Grid Margin="16"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                    <TextBlock Text="Transfer category order — highest priority first" FontWeight="SemiBold"/>
+                    <DockPanel Grid.Row="1" Margin="0,10">
+                        <StackPanel DockPanel.Dock="Right" Margin="10,0,0,0">
+                            <Button Content="Move up" Click="PriorityCategoryUp_Click"/>
+                            <Button Content="Move down" Click="PriorityCategoryDown_Click"/>
+                        </StackPanel>
+                        <ListBox x:Name="PriorityCategoriesList" Height="140" Background="{DynamicResource WindowBrush}" Foreground="{DynamicResource TextBrush}" BorderBrush="{DynamicResource BorderBrush}"/>
+                    </DockPanel>
+                    <TextBlock Grid.Row="2" Text="Sample and Proof are identified by folder name. Their contents stay in that category, including SFV and NFO files. Other files belong to Main files. Applies to uploads, downloads and FXP; running transfers finish normally." Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                    <TextBlock Grid.Row="3" Text="Wildcard priority within each category" FontWeight="SemiBold"/>
+                    <TextBox x:Name="PriorityPatternsBox" Grid.Row="4" Margin="0,10" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" FontFamily="{DynamicResource AppMonospaceFontFamily}"/>
+                    <TextBlock Grid.Row="5" Text="One wildcard per line; earlier matches go first within their category. Active imported site rules take precedence over these wildcards within the same category." Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap"/>
                 </Grid></TabItem>
                 <TabItem Header="Appearance"><Grid Margin="16"><Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="220"/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                     <TextBlock Text="Legend bar mode" VerticalAlignment="Center"/><ComboBox x:Name="LegendModeBox" Grid.Column="1" Margin="0,4"/>

@@ -2,6 +2,11 @@
 
 All notable FluxFTP changes are documented here.
 
+## 1.0.60 — 2026-10-08
+
+- Configurable SFV → main files → Sample → Proof → NFO transfer priority in Global Settings > Prio List. Imported and global wildcard rules apply within each category; changes update waiting jobs without interrupting running files.
+- Restored FXP progress monitoring by querying the source first with a timeout and reading SITE FLUXWHO directly. Monitoring failures include diagnostics and destination SIZE failures no longer end monitoring.
+
 ## 1.0.59 — 2026-10-08
 
 ### Fixed
@@ -11,6 +16,9 @@ All notable FluxFTP changes are documented here.
 
 ## Unreleased
 
+- Transfers default to SFV → main files → Sample → Proof → NFO. Global Settings > Prio List allows reordering these categories for uploads, downloads and FXP.
+- Sample and Proof are recognized by complete folder names, including nested contents. Imported site and global wildcard priorities apply within each category.
+- Saving priority settings updates waiting, paused and failed scheduled jobs without interrupting running transfers. Priority selects the next eligible file for a free slot; it does not require one category to finish before another starts.
 - VISIONARY watches share one serialized source-listing connection per site and immutable directory snapshots for up to one second. Idle connections close automatically; changed profiles and failed operations discard the session and cached listings.
 - VISIONARY import reads consistent slotsup/slotsdn values from each site's configuration, capped by the existing Flux total slot limit. Missing, invalid or differing section values retain the existing directional limit. Live bridge calls do not synchronize configuration.
 - Includes the bridge compatibility and FXP speed measurement fixes from the 1.0.57 test builds. Monitoring/browsing connections are not yet included in the transfer scheduler's total slot accounting.

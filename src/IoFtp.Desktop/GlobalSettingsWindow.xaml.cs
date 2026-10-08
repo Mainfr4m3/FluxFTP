@@ -28,6 +28,8 @@ public partial class GlobalSettingsWindow : Window
         LocalPathBox.Text=s.LocalDownloadPath; LocalDownloadsBox.Text=$"{s.MaxLocalDownloadSlots}"; LocalUploadsBox.Text=$"{s.MaxLocalUploadSlots}";
         SerializeLocalBox.IsChecked = s.SerializeLocalTransfers;
         PriorityPatternsBox.Text=s.PriorityPatterns;
+        foreach (var category in TransferFilePriority.Categories(s.TransferCategoryOrder)) PriorityCategoriesList.Items.Add(category);
+        PriorityCategoriesList.SelectedIndex = 0;
         SkipPatternsBox.Text=s.SkipPatterns;
         ApiPasswordBox.Password=s.ApiPassword;
         MinimizeToTrayBox.IsChecked=s.MinimizeToTray;
@@ -53,12 +55,26 @@ public partial class GlobalSettingsWindow : Window
         if (irc is null) return;
         if (!ThemeManager.TryValidate(theme, out var themeError)) { ErrorText.Text = themeError; return; }
         Settings = new GlobalSettings(BindBox.Text.Trim(),N(PortFromBox),N(PortToBox),ApiEnabledBox.IsChecked==true,N(ApiPortBox),ApiLocalBox.IsChecked==true,N(ExpirationBox),N(StarterBox),N(RuntimeBox),N(JobHistoryBox),N(TransferHistoryBox),N(LogHistoryBox),UsernameBox.Text.Trim(),N(SlotsBox),N(UploadsBox),N(DownloadsBox),((ProtocolChoice)ProtocolBox.SelectedItem).Protocol,N(DefaultIdleBox),LocalPathBox.Text.Trim(),N(LocalDownloadsBox),N(LocalUploadsBox),PriorityPatternsBox.Text.Trim(),SkipPatternsBox.Text.Trim(),ApiPasswordBox.Password,MinimizeToTrayBox.IsChecked==true,LegendModeBox.SelectedItem?.ToString() ?? "Compact",(ProxyType)(ProxyTypeBox.SelectedItem ?? ProxyType.None),ProxyHostBox.Text.Trim(),N(ProxyPortBox),ProxyUsernameBox.Text.Trim(),ProxyPasswordBox.Password,ProxyDnsBox.IsChecked==true,ProxyDataBox.IsChecked==true,CheckUpdatesBox.IsChecked==true, _advancedSkipRules.ToArray(), theme, irc);
-        Settings = Settings with { EnableVisionaryBridge = _visionaryBridge, SerializeLocalTransfers = SerializeLocalBox.IsChecked == true };
+        Settings = Settings with { EnableVisionaryBridge = _visionaryBridge, SerializeLocalTransfers = SerializeLocalBox.IsChecked == true,
+            TransferCategoryOrder = string.Join("\n", PriorityCategoriesList.Items.Cast<string>()) };
         try { new GlobalSettingsStore().Save(Settings); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException)
         { Settings = null; ErrorText.Text = "Could not save settings to disk. Check write access and free space; your edits are still here. Please try Save again."; return; }
         ThemeManager.Apply(theme); DialogResult = true;
     }
+    private void PriorityCategoryUp_Click(object sender, RoutedEventArgs e) => MovePriorityCategory(-1);
+    private void PriorityCategoryDown_Click(object sender, RoutedEventArgs e) => MovePriorityCategory(1);
+    private void MovePriorityCategory(int delta)
+    {
+        var index = PriorityCategoriesList.SelectedIndex;
+        var target = index + delta;
+        if (index < 0 || target < 0 || target >= PriorityCategoriesList.Items.Count) return;
+        var category = PriorityCategoriesList.Items[index];
+        PriorityCategoriesList.Items.RemoveAt(index);
+        PriorityCategoriesList.Items.Insert(target, category);
+        PriorityCategoriesList.SelectedIndex = target;
+    }
+
     private void LoadIrc(IrcSettings irc)
     {
         IrcEnabledBox.IsChecked = irc.Enabled; IrcHostBox.Text = irc.Host; IrcPortBox.Text = irc.Port.ToString();

@@ -1198,7 +1198,7 @@ public partial class MainWindow : Window
                 }
             }
             if (startImmediately) await WarmWorkersForDirectionAsync(direction, files.Count, timeout.Token);
-            var queuedEntries = files.OrderBy(file => PriorityRank(file.Entry.Name)).ThenBy(file => file.Entry.Name, NaturalNameComparer.Instance)
+            var queuedEntries = files.OrderBy(file => PriorityRank(file.Entry.Name, file.Entry.FullPath)).ThenBy(file => file.Entry.Name, NaturalNameComparer.Instance)
                 .Select(file => AddQueue(file.Entry.Name, file.Entry.FullPath, file.Destination, direction, file.Entry.Size ?? 0, persist: false)).ToList();
             if (startImmediately) ScheduleBatch(queuedEntries); else { SaveQueue(); UpdateQueueStatus(); }
             LogText.AppendText($"{Environment.NewLine}Queued remote folder {sourceRoot}: {fileCount} files.");
@@ -1391,7 +1391,7 @@ public partial class MainWindow : Window
                 }
             }
             if (startImmediately) await WarmWorkersForDirectionAsync(direction, files.Count, timeout.Token);
-            var queuedEntries = files.OrderBy(file => PriorityRank(file.Entry.Name)).ThenBy(file => file.Entry.Name, NaturalNameComparer.Instance)
+            var queuedEntries = files.OrderBy(file => PriorityRank(file.Entry.Name, file.Entry.FullPath)).ThenBy(file => file.Entry.Name, NaturalNameComparer.Instance)
                 .Select(file => AddQueue(file.Entry.Name, file.Entry.FullPath, file.Destination, direction, file.Entry.Size ?? 0, persist: false)).ToList();
             if (startImmediately) ScheduleBatch(queuedEntries); else { SaveQueue(); UpdateQueueStatus(); }
             LogText.AppendText($"{Environment.NewLine}Queued remote folder for local download {sourceRoot}: {files.Count} files.");
@@ -1430,7 +1430,7 @@ public partial class MainWindow : Window
                 }
             }
             if (startImmediately) await WarmWorkersForDirectionAsync(direction, files.Count, timeout.Token);
-            var queuedEntries = files.OrderBy(file => PriorityRank(file.File.Name)).ThenBy(file => file.File.Name, NaturalNameComparer.Instance)
+            var queuedEntries = files.OrderBy(file => PriorityRank(file.File.Name, file.File.FullName)).ThenBy(file => file.File.Name, NaturalNameComparer.Instance)
                 .Select(file => AddQueue(file.File.Name, file.File.FullName, file.Destination, direction, file.File.Length, persist: false)).ToList();
             if (startImmediately) ScheduleBatch(queuedEntries); else { SaveQueue(); UpdateQueueStatus(); }
             LogText.AppendText($"{Environment.NewLine}Queued local folder {sourceRoot}: {files.Count} files.");
@@ -1443,13 +1443,7 @@ public partial class MainWindow : Window
         LogText.ScrollToEnd();
     }
 
-    private int PriorityRank(string name)
-    {
-        var patterns = _settings.PriorityPatterns.Split(['\r', '\n', ',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        for (var index = 0; index < patterns.Length; index++)
-            if (System.IO.Enumeration.FileSystemName.MatchesSimpleExpression(patterns[index], name, true)) return index;
-        return patterns.Length;
-    }
+    private int PriorityRank(string name, string sourcePath) => TransferFilePriority.Rank(name, sourcePath, _settings);
 
     private bool ShouldSkip(string name, bool isDirectory = false) =>
         SkipRuleMatcher.ShouldSkip(_settings, name, isDirectory, "Transfer");
@@ -1664,8 +1658,8 @@ public partial class MainWindow : Window
             entry.QueuedAt ??= DateTimeOffset.Now;
             work.Add(new TransferWorkItem(entry.Id, entry.Id, entry.Name, sourceSite, destinationSite,
                 entry.Source, entry.Destination, entry.TotalBytes,
-                QueuedAt: entry.QueuedAt.Value.ToUniversalTime(), FilePriorityRank: ImportedTransferSettings.PriorityRank(entry.Name,
-                    [sourceSite is { } s ? profiles.GetValueOrDefault(s) : null, destinationSite is { } d ? profiles.GetValueOrDefault(d) : null], PriorityRank(entry.Name))));
+                QueuedAt: entry.QueuedAt.Value.ToUniversalTime(), FilePriorityRank: TransferFilePriority.Rank(entry.Name, entry.Source, _settings,
+                    [sourceSite is { } s ? profiles.GetValueOrDefault(s) : null, destinationSite is { } d ? profiles.GetValueOrDefault(d) : null])));
         }
         if (work.Count > 0) _engine.Enqueue(work);
         SaveQueue(); UpdateQueueStatus();
@@ -2086,7 +2080,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private static async Task MonitorFxpAsync(ConnectionProfile sourceProfile, ConnectionProfile destinationProfile,
+    private async Task MonitorFxpAsync(ConnectionProfile sourceProfile, ConnectionProfile destinationProfile,
         QueueEntryView entry, CancellationToken cancellationToken)
     {
         FtpRemoteSession? monitor = null;
@@ -2096,6 +2090,8 @@ public partial class MainWindow : Window
         var hasSizeBaseline = false;
         bool? ioGuiExtAvailable = null;
         var destinationMisses = 0;
+        var destinationWarningShown = false;
+        var sourceWarningShown = false;
         void ApplyActivitySample(long transferred, long speed)
         {
             hasSizeBaseline = false;
@@ -2126,14 +2122,45 @@ public partial class MainWindow : Window
                     // ioGuiExt and SIZE paths for ioFTPD and all other FTP servers.
                 }
 
+                // Probe the source first: an unsupported or stalled destination
+                // must not prevent ioFTPD from reporting its RETR counters.
+                using (var sourceSample = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+                {
+                    sourceSample.CancelAfter(TimeSpan.FromSeconds(4));
+                    try
+                    {
+                        sourceMonitor ??= await CreateWorkerAsync(sourceProfile, sourceSample.Token);
+                        var flux = await sourceMonitor.ExecuteCommandAsync("SITE FLUXWHO", sourceSample.Token);
+                        if (flux.StatusCode is >= 200 and < 300 && FxpSpeedParser.TryReadFluxWhoTransfer(flux.Message, entry.Name, false, out var transferred, out var speed))
+                        { ApplyActivitySample(transferred, speed); continue; }
+                        var who = await sourceMonitor.ExecuteCommandAsync("SITE ioGuiExt who", sourceSample.Token);
+                        if (who.StatusCode is >= 200 and < 300 && FxpSpeedParser.TryReadIoFtpdTransfer(who.Message, entry.Name, false, out transferred, out speed))
+                        { ApplyActivitySample(transferred, speed); continue; }
+                        if (!sourceWarningShown)
+                        {
+                            sourceWarningShown = true;
+                            LogText.AppendText($"{Environment.NewLine}FXP progress on {sourceProfile.Name}: FLUXWHO {flux.StatusCode}, ioGuiExt WHO {who.StatusCode}; no matching RETR row for {entry.Name}.");
+                        }
+                    }
+                    catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+                    {
+                        if (!sourceWarningShown)
+                        {
+                            sourceWarningShown = true;
+                            LogText.AppendText($"{Environment.NewLine}FXP progress on {sourceProfile.Name}: source monitoring failed ({exception.GetType().Name}) for {entry.Name}.");
+                        }
+                        if (sourceMonitor is not null) { await sourceMonitor.DisposeAsync(); sourceMonitor = null; }
+                    }
+                }
+
                 // ioFTPD commonly preallocates the complete destination file, so SIZE
                 // cannot reveal live FXP progress. ioGuiExt exposes the same transfer
                 // counter and speed that ioGUI uses; prefer it when available.
                 // Only open a monitoring login when local telemetry cannot supply progress.
-                monitor ??= await CreateWorkerAsync(destinationProfile, cancellationToken);
                 var activityMatched = false;
                 try
                 {
+                    monitor ??= await CreateWorkerAsync(destinationProfile, cancellationToken);
                     var activity = await monitor.ExecuteCommandAsync("SITE ioGuiExt who", cancellationToken);
                     ioGuiExtAvailable = activity.StatusCode is >= 200 and < 300;
                     if (ioGuiExtAvailable == true &&
@@ -2148,6 +2175,11 @@ public partial class MainWindow : Window
                 catch (Exception) when (!cancellationToken.IsCancellationRequested)
                 {
                     ioGuiExtAvailable = false;
+                    if (monitor is null && !destinationWarningShown)
+                    {
+                        destinationWarningShown = true;
+                        LogText.AppendText($"{Environment.NewLine}FXP progress: destination monitoring login unavailable on {destinationProfile.Name}; trying source monitoring for {entry.Name}.");
+                    }
                 }
 
                 if (activityMatched)
@@ -2161,6 +2193,7 @@ public partial class MainWindow : Window
                 // filename, which lets us match concurrent jobs safely.
                 try
                 {
+                    if (monitor is null) throw new InvalidOperationException("Destination monitor unavailable.");
                     var who = await monitor.ExecuteCommandAsync("SITE WHO", cancellationToken);
                     if (who.StatusCode is >= 200 and < 300 &&
                         FxpSpeedParser.TryReadDrFtpdTransfer(who.Message, entry.Name, expectUpload: true, out var speed))
@@ -2173,7 +2206,7 @@ public partial class MainWindow : Window
                 catch (Exception) when (!cancellationToken.IsCancellationRequested) { }
 
                 destinationMisses++;
-                if (sourceMonitor is null && destinationMisses >= 3)
+                if (sourceMonitor is null && (monitor is null || destinationMisses >= 3))
                 {
                     try { sourceMonitor = await CreateWorkerAsync(sourceProfile, cancellationToken); }
                     catch (Exception) when (!cancellationToken.IsCancellationRequested) { }
@@ -2204,7 +2237,16 @@ public partial class MainWindow : Window
                 // If ioGuiExt answered but did not contain a matching row, SIZE is
                 // still worth trying. Previously this fallback was skipped entirely.
                 entry.SpeedBytesPerSecond = 0;
-                var bytes = await monitor.GetSizeAsync(entry.Destination, cancellationToken);
+                if (monitor is null) { hasSizeBaseline = false; continue; }
+                long? bytes;
+                try { bytes = await monitor.GetSizeAsync(entry.Destination, cancellationToken); }
+                catch (Exception) when (!cancellationToken.IsCancellationRequested)
+                {
+                    // SIZE may be denied while STOR is active. Keep monitoring
+                    // the source on subsequent samples rather than ending it.
+                    hasSizeBaseline = false;
+                    continue;
+                }
                 if (bytes is null || FxpSpeedParser.IsPreallocatedSize(bytes.Value, entry.TotalBytes)) { entry.SpeedBytesPerSecond = 0; hasSizeBaseline = false; continue; }
                 var now = DateTime.UtcNow;
                 if (!hasSizeBaseline)
@@ -2835,6 +2877,12 @@ public partial class MainWindow : Window
         if (dialog.ShowDialog() == true && dialog.Settings is not null)
         {
             _settings = dialog.Settings;
+            var priorityProfiles = new ProfileStore().Load().ToDictionary(profile => profile.Id);
+            var ranks = _engine.Snapshot().ToDictionary(status => status.Item.Id, status => TransferFilePriority.Rank(
+                status.Item.Name, status.Item.SourcePath, _settings,
+                [status.Item.SourceSiteId is { } source ? priorityProfiles.GetValueOrDefault(source) : null,
+                 status.Item.DestinationSiteId is { } destination ? priorityProfiles.GetValueOrDefault(destination) : null]));
+            _engine.UpdateFilePriorities(ranks);
             ThemeManager.Apply(_settings.Theme);
             ConfigureTrayIcon();
             UpdateLegendBar();
@@ -3100,7 +3148,7 @@ public partial class MainWindow : Window
         race?.EndListing();
         var selectedFiles = apiFiles.Where(file => race is null || race.NeedsTransfer(file.Entry.FullPath, file.Entry.Size,
             file.Entry.ModifiedAt, id => _queue.FirstOrDefault(entry => entry.Id == id)?.State)).ToList();
-        var queuedEntries = selectedFiles.OrderBy(file => PriorityRank(file.Entry.Name))
+        var queuedEntries = selectedFiles.OrderBy(file => PriorityRank(file.Entry.Name, file.Entry.FullPath))
             .ThenBy(file => file.Entry.Name, NaturalNameComparer.Instance)
             .Select(file => AddQueue(file.Entry.Name, file.Entry.FullPath, file.Destination, TransferDirection.ApiFxp,
                 file.Entry.Size ?? 0, sourceProfile.Id, destinationProfile.Id, persist: false)).ToList();
@@ -3180,7 +3228,7 @@ public partial class MainWindow : Window
             downloadFiles.Add((selected, Path.Combine(localRoot, selected.Name)));
         }
         foreach (var file in downloadFiles) Directory.CreateDirectory(Path.GetDirectoryName(file.Destination)!);
-        var queuedEntries = downloadFiles.OrderBy(file => PriorityRank(file.Entry.Name))
+        var queuedEntries = downloadFiles.OrderBy(file => PriorityRank(file.Entry.Name, file.Entry.FullPath))
             .ThenBy(file => file.Entry.Name, NaturalNameComparer.Instance)
             .Select(file => AddQueue(file.Entry.Name, file.Entry.FullPath, file.Destination, TransferDirection.ApiDownload,
                 file.Entry.Size ?? 0, profile.Id, persist: false)).ToList();

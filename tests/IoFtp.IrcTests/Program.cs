@@ -8,6 +8,12 @@ using IoFtp.Desktop.Models;
 using IoFtp.Desktop.Services;
 
 var assertions = 0;
+if (args.FirstOrDefault() == "--file-priority-checks")
+{
+    await TransferFilePriorityChecks.Run();
+    GlobalSettingsChecks.Run();
+    return;
+}
 if (args.FirstOrDefault() == "--race-listing-checks")
 {
     VisionarySlotChecks.Run();

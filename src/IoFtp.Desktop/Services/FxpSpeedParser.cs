@@ -62,6 +62,26 @@ internal static class FxpSpeedParser
         return Math.Max(0, (long)(amount * multiplier));
     }
 
+    public static bool TryReadFluxWhoTransfer(string response, string fileName, bool expectUpload, out long transferred, out long speed)
+    {
+        transferred = -1; speed = 0;
+        var matches = 0;
+        foreach (var raw in response.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var line = Regex.Replace(raw, @"^\s*\d{3}[- ]\s*", "").Trim();
+            var parts = line.Split('|');
+            if (parts.Length < 12 || !parts[0].Equals("fluxwho", StringComparison.OrdinalIgnoreCase)) continue;
+            var action = parts[6].Trim();
+            if (!(expectUpload ? action.StartsWith("STOR ", StringComparison.OrdinalIgnoreCase)
+                : action.StartsWith("RETR ", StringComparison.OrdinalIgnoreCase))) continue;
+            if (!new[] { action, parts[7], parts[8] }.Any(value => MatchesFile(value, fileName))) continue;
+            transferred = long.TryParse(parts[5], NumberStyles.Integer, CultureInfo.InvariantCulture, out var bytes) ? bytes : -1;
+            speed = ParseIoFtpdSpeed(parts[4]);
+            matches++;
+        }
+        return matches == 1;
+    }
+
     public static bool TryReadDrFtpdTransfer(string response, string fileName, bool expectUpload, out long speed)
     {
         speed = 0;

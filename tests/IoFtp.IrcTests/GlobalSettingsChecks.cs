@@ -14,10 +14,11 @@ internal static class GlobalSettingsChecks
             var irc = new IrcSettings(Enabled: true, Host: "irc.example.test", Port: 6697, UseTls: true,
                 Nick: "FluxTest", Password: "dpapi:literal-password %20", UseZnc: true, ZncUsername: "user",
                 ZncNetwork: "network", Channel: "#test", NetworkName: "Example", AccountLinks: [new("account", "admin")], AllowInvalidCertificate: false);
-            var settings = new GlobalSettings(Irc: irc);
+            var settings = new GlobalSettings(Irc: irc, TransferCategoryOrder: "NFO\nSFV\nMain files\nProof\nSample");
             new GlobalSettingsStore(directory).Save(settings);
             var path = Path.Combine(directory, "settings.json");
             Check(!File.ReadAllText(path).Contains(irc.Password), "secret protected on disk");
+            Check(new GlobalSettingsStore(directory).Load().TransferCategoryOrder == settings.TransferCategoryOrder, "transfer category order survives restart");
             var reloaded = new GlobalSettingsStore(directory).Load().Irc!;
             Check(reloaded.Enabled && reloaded.Host == irc.Host && reloaded.Port == irc.Port && reloaded.Nick == irc.Nick && reloaded.Channel == irc.Channel, "connection survives restart without FTP authority");
             Check(reloaded.Password == irc.Password && reloaded.ZncUsername == irc.ZncUsername && reloaded.ZncNetwork == irc.ZncNetwork && reloaded.UseZnc, "ZNC settings survive restart");

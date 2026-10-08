@@ -14,6 +14,11 @@ internal static class FxpSpeedChecks
         Check(!FxpSpeedParser.TryReadIoFtpdTransfer(Row("target.rar.extra", "100"), "target.rar", true, out _, out _));
         Check(FxpSpeedParser.TryReadIoFtpdTransfer(Row("/release/target.rar", "0"), "target.rar", true, out var bytes, out var speed) && bytes == 123 && speed == 0);
         var row = Row("target.rar", "1024");
+        var fluxRow = "200-fluxwho|1|test|1|1024|123|RETR target.rar|/release/target.rar|/disk/target.rar|1|127.0.0.1|127.0.0.2";
+        Check(FxpSpeedParser.TryReadFluxWhoTransfer(fluxRow, "target.rar", false, out bytes, out speed) && bytes == 123 && speed == 1048576);
+        Check(!FxpSpeedParser.TryReadFluxWhoTransfer(fluxRow, "target.rar", true, out _, out _));
+        Check(!FxpSpeedParser.TryReadFluxWhoTransfer(fluxRow, "other.rar", false, out _, out _));
+        Check(!FxpSpeedParser.TryReadFluxWhoTransfer(fluxRow + "\n" + fluxRow, "target.rar", false, out _, out _));
         Check(FxpSpeedParser.TryReadIoFtpdTransfer(row, "target.rar", true, out _, out speed) && speed == 1048576);
         Check(!FxpSpeedParser.TryReadIoFtpdTransfer(row + "\n" + row, "target.rar", true, out _, out _));
         Check(!FxpSpeedParser.TryReadDrFtpdTransfer("-> UP 75MB/s from user - other.rar", "target.rar", true, out _));

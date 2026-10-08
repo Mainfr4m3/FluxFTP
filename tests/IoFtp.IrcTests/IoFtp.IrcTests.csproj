@@ -16,6 +16,7 @@
     <ProjectReference Include="../../src/IoFtp.Core/IoFtp.Core.csproj" />
     <ProjectReference Include="../../src/IoFtp.Engine/IoFtp.Engine.csproj" />
     <Compile Include="../../src/IoFtp.Desktop/Services/ImportedTransferSettings.cs" Link="ImportedTransferSettings.cs" />
+    <Compile Include="../../src/IoFtp.Desktop/Services/TransferFilePriority.cs" Link="TransferFilePriority.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Models/GlobalSettings.cs" Link="GlobalSettings.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Models/ThemeSettings.cs" Link="ThemeSettings.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Models/AdvancedSkipRule.cs" Link="AdvancedSkipRule.cs" />

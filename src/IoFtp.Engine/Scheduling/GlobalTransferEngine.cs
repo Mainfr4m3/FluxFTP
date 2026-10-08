@@ -69,6 +69,17 @@ public sealed class GlobalTransferEngine : IAsyncDisposable
         RaiseStateChanged();
     }
 
+    public void UpdateFilePriorities(IReadOnlyDictionary<Guid, int> ranks)
+    {
+        lock (_gate)
+            foreach (var work in _work.Values)
+                if ((work.State is TransferWorkState.Queued or TransferWorkState.Paused or TransferWorkState.Failed) &&
+                    ranks.TryGetValue(work.Item.Id, out var rank))
+                    work.Item = work.Item with { FilePriorityRank = rank };
+        RaiseStateChanged();
+        RequestPump();
+    }
+
     public void Resume(Guid workId)
     {
         lock (_gate)
@@ -231,7 +242,7 @@ public sealed class GlobalTransferEngine : IAsyncDisposable
     }
     private sealed class WorkRuntime(TransferWorkItem item)
     {
-        public TransferWorkItem Item { get; } = item;
+        public TransferWorkItem Item { get; set; } = item;
         public TransferWorkState State { get; set; } = TransferWorkState.Queued;
         public string? Error { get; set; }
         public CancellationTokenSource? Cancellation { get; set; }

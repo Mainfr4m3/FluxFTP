@@ -41,4 +41,5 @@ public sealed record GlobalSettings(
     ThemeSettings? Theme = null,
     IrcSettings? Irc = null,
     bool EnableVisionaryBridge = false,
-    bool SerializeLocalTransfers = true);
+    bool SerializeLocalTransfers = true,
+    string TransferCategoryOrder = "SFV\nMain files\nSample\nProof\nNFO");
