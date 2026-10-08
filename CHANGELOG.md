@@ -2,6 +2,12 @@
 
 All notable FluxFTP changes are documented here.
 
+## 1.0.61 — 2026-10-08
+
+- FXP progress samples both servers independently with bounded monitoring operations, reconnects failed connections and skips unsupported monitoring commands.
+- Brief measurement gaps retain the last observed speed. After six seconds without fresh data, speed is marked unavailable while monitoring continues. Stale local telemetry snapshots are rejected.
+- Actual zero-speed samples remain distinct from missing measurements. Destination SIZE fallback ignores preallocated complete files and resets its baseline after reconnecting.
+
 ## 1.0.60 — 2026-10-08
 
 - Configurable SFV → main files → Sample → Proof → NFO transfer priority in Global Settings > Prio List. Imported and global wildcard rules apply within each category; changes update waiting jobs without interrupting running files.

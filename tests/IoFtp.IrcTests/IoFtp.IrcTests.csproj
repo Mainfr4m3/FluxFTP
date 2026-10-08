@@ -7,6 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../src/IoFtp.Desktop/Services/FxpSpeedParser.cs" Link="FxpSpeedParser.cs" />
+    <Compile Include="../../src/IoFtp.Desktop/Services/FxpProgressProbe.cs" Link="FxpProgressProbe.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/RaceListingService.cs" Link="RaceListingService.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/SpreadRaceCoordinator.cs" Link="SpreadRaceCoordinator.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/RaceDestinationLease.cs" Link="RaceDestinationLease.cs" />

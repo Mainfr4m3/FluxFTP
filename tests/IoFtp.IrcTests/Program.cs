@@ -8,6 +8,12 @@ using IoFtp.Desktop.Models;
 using IoFtp.Desktop.Services;
 
 var assertions = 0;
+if (args.FirstOrDefault() == "--fxp-monitor-checks")
+{
+    FxpSpeedChecks.Run();
+    await FxpProgressProbeChecks.Run();
+    return;
+}
 if (args.FirstOrDefault() == "--file-priority-checks")
 {
     await TransferFilePriorityChecks.Run();

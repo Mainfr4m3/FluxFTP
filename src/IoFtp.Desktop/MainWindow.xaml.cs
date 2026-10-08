@@ -2083,193 +2083,100 @@ public partial class MainWindow : Window
     private async Task MonitorFxpAsync(ConnectionProfile sourceProfile, ConnectionProfile destinationProfile,
         QueueEntryView entry, CancellationToken cancellationToken)
     {
-        FtpRemoteSession? monitor = null;
-        FtpRemoteSession? sourceMonitor = null;
-        long previousBytes = 0;
-        var previousAt = DateTime.UtcNow;
-        var hasSizeBaseline = false;
-        bool? ioGuiExtAvailable = null;
-        var destinationMisses = 0;
-        var destinationWarningShown = false;
-        var sourceWarningShown = false;
-        void ApplyActivitySample(long transferred, long speed)
+        var endpoints = new[] { new FxpMonitorEndpoint(sourceProfile, false), new FxpMonitorEndpoint(destinationProfile, true) };
+        var lastSampleAt = DateTimeOffset.MinValue;
+        var bridgeWarning = false;
+        void Apply(FxpProgressSample sample)
         {
-            hasSizeBaseline = false;
-            if (transferred >= 0)
-                entry.BytesTransferred = FxpSpeedParser.ClampProgress(Math.Max(entry.BytesTransferred, transferred), entry.TotalBytes);
-            entry.SpeedBytesPerSecond = Math.Max(0, speed);
+            lastSampleAt = DateTimeOffset.UtcNow;
+            entry.FxpSpeedUnavailable = false;
+            entry.FxpLiveMeasured = true;
+            if (sample.Bytes >= 0)
+                entry.BytesTransferred = FxpSpeedParser.ClampProgress(Math.Max(entry.BytesTransferred, sample.Bytes), entry.TotalBytes);
+            entry.SpeedBytesPerSecond = Math.Max(0, sample.Speed);
+        }
+        async Task<FxpProgressSample?> Probe(FxpMonitorEndpoint endpoint)
+        {
+            if (DateTimeOffset.UtcNow < endpoint.RetryAt) return null;
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(endpoint.Session is null ? TimeSpan.FromSeconds(8) : TimeSpan.FromSeconds(4));
+            try
+            {
+                endpoint.Session ??= await CreateWorkerAsync(endpoint.Profile, timeout.Token);
+                return await endpoint.Probe.ReadAsync(entry.Name, entry.Destination, entry.TotalBytes, endpoint.Upload,
+                    endpoint.Session.ExecuteCommandAsync, token => endpoint.Session.GetSizeAsync(entry.Destination, token), timeout.Token);
+            }
+            catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                // A cancelled FTP read can leave a reply pending. Discard the
+                // connection before retrying so responses cannot become misaligned.
+                if (!endpoint.WarningShown)
+                {
+                    endpoint.WarningShown = true;
+                    LogText.AppendText($"{Environment.NewLine}FXP progress on {endpoint.Profile.Name}: monitoring {(exception is OperationCanceledException ? "timed out" : "connection failed")} ({exception.GetType().Name}); reconnecting for {entry.Name}.");
+                }
+                var failed = endpoint.Session; endpoint.Session = null;
+                endpoint.Probe.ResetConnection();
+                endpoint.RetryAt = DateTimeOffset.UtcNow.AddSeconds(5);
+                if (failed is not null) { try { await failed.DisposeAsync(); } catch { } }
+                return null;
+            }
         }
         try
         {
             while (true)
             {
                 await Task.Delay(1000, cancellationToken);
-                // FluxTelemetry keeps one persistent ioFTPD session and exposes the
-                // live client-who snapshot locally. Prefer it so concurrent FXP jobs
-                // do not each consume another FTP slot merely to sample progress.
+                // Expire the display before awaiting a slow server. A genuine
+                // zero sample is different from missing or stale measurements.
+                if (DateTimeOffset.UtcNow - lastSampleAt > TimeSpan.FromSeconds(6))
+                { entry.FxpSpeedUnavailable = true; entry.SpeedBytesPerSecond = 0; }
                 try
                 {
                     if (await TryReadTelemetryTransferAsync(entry, cancellationToken) is { } telemetry)
-                    {
-                        ApplyActivitySample(telemetry.Transferred, telemetry.Speed);
-                        destinationMisses = 0;
-                        continue;
-                    }
-                }
-                catch (Exception) when (!cancellationToken.IsCancellationRequested)
-                {
-                    // Optional bridge unavailable or stale: retain the existing
-                    // ioGuiExt and SIZE paths for ioFTPD and all other FTP servers.
-                }
-
-                // Probe the source first: an unsupported or stalled destination
-                // must not prevent ioFTPD from reporting its RETR counters.
-                using (var sourceSample = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
-                {
-                    sourceSample.CancelAfter(TimeSpan.FromSeconds(4));
-                    try
-                    {
-                        sourceMonitor ??= await CreateWorkerAsync(sourceProfile, sourceSample.Token);
-                        var flux = await sourceMonitor.ExecuteCommandAsync("SITE FLUXWHO", sourceSample.Token);
-                        if (flux.StatusCode is >= 200 and < 300 && FxpSpeedParser.TryReadFluxWhoTransfer(flux.Message, entry.Name, false, out var transferred, out var speed))
-                        { ApplyActivitySample(transferred, speed); continue; }
-                        var who = await sourceMonitor.ExecuteCommandAsync("SITE ioGuiExt who", sourceSample.Token);
-                        if (who.StatusCode is >= 200 and < 300 && FxpSpeedParser.TryReadIoFtpdTransfer(who.Message, entry.Name, false, out transferred, out speed))
-                        { ApplyActivitySample(transferred, speed); continue; }
-                        if (!sourceWarningShown)
-                        {
-                            sourceWarningShown = true;
-                            LogText.AppendText($"{Environment.NewLine}FXP progress on {sourceProfile.Name}: FLUXWHO {flux.StatusCode}, ioGuiExt WHO {who.StatusCode}; no matching RETR row for {entry.Name}.");
-                        }
-                    }
-                    catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
-                    {
-                        if (!sourceWarningShown)
-                        {
-                            sourceWarningShown = true;
-                            LogText.AppendText($"{Environment.NewLine}FXP progress on {sourceProfile.Name}: source monitoring failed ({exception.GetType().Name}) for {entry.Name}.");
-                        }
-                        if (sourceMonitor is not null) { await sourceMonitor.DisposeAsync(); sourceMonitor = null; }
-                    }
-                }
-
-                // ioFTPD commonly preallocates the complete destination file, so SIZE
-                // cannot reveal live FXP progress. ioGuiExt exposes the same transfer
-                // counter and speed that ioGUI uses; prefer it when available.
-                // Only open a monitoring login when local telemetry cannot supply progress.
-                var activityMatched = false;
-                try
-                {
-                    monitor ??= await CreateWorkerAsync(destinationProfile, cancellationToken);
-                    var activity = await monitor.ExecuteCommandAsync("SITE ioGuiExt who", cancellationToken);
-                    ioGuiExtAvailable = activity.StatusCode is >= 200 and < 300;
-                    if (ioGuiExtAvailable == true &&
-                        FxpSpeedParser.TryReadIoFtpdTransfer(activity.Message, entry.Name, expectUpload: true, out var transferred, out var speed))
-                    {
-                        // Keep server speed and byte count independent; do not invent
-                        // transferred bytes when the server counter stops changing.
-                        ApplyActivitySample(transferred, speed);
-                        activityMatched = true;
-                    }
-                }
-                catch (Exception) when (!cancellationToken.IsCancellationRequested)
-                {
-                    ioGuiExtAvailable = false;
-                    if (monitor is null && !destinationWarningShown)
-                    {
-                        destinationWarningShown = true;
-                        LogText.AppendText($"{Environment.NewLine}FXP progress: destination monitoring login unavailable on {destinationProfile.Name}; trying source monitoring for {entry.Name}.");
-                    }
-                }
-
-                if (activityMatched)
-                {
-                    destinationMisses = 0;
-                    continue;
-                }
-
-                // DrFTPD exposes live FXP speed through SITE WHO. Its default
-                // theme identifies uploads/downloads and includes the active
-                // filename, which lets us match concurrent jobs safely.
-                try
-                {
-                    if (monitor is null) throw new InvalidOperationException("Destination monitor unavailable.");
-                    var who = await monitor.ExecuteCommandAsync("SITE WHO", cancellationToken);
-                    if (who.StatusCode is >= 200 and < 300 &&
-                        FxpSpeedParser.TryReadDrFtpdTransfer(who.Message, entry.Name, expectUpload: true, out var speed))
-                    {
-                        ApplyActivitySample(-1, speed);
-                        destinationMisses = 0;
-                        continue;
-                    }
+                    { Apply(new(telemetry.Transferred, telemetry.Speed)); continue; }
                 }
                 catch (Exception) when (!cancellationToken.IsCancellationRequested) { }
 
-                destinationMisses++;
-                if (sourceMonitor is null && (monitor is null || destinationMisses >= 3))
+                // Sample both ends independently. A blocked destination cannot
+                // hold back a successful source sample, or vice versa.
+                var sourceMatched = false;
+                async Task ReadEndpoint(FxpMonitorEndpoint endpoint)
                 {
-                    try { sourceMonitor = await CreateWorkerAsync(sourceProfile, cancellationToken); }
-                    catch (Exception) when (!cancellationToken.IsCancellationRequested) { }
-                }
-                if (sourceMonitor is not null)
-                {
-                    try
+                    if (await Probe(endpoint) is { } sample)
                     {
-                        var sourceActivity = await sourceMonitor.ExecuteCommandAsync("SITE ioGuiExt who", cancellationToken);
-                        if (sourceActivity.StatusCode is >= 200 and < 300 &&
-                            FxpSpeedParser.TryReadIoFtpdTransfer(sourceActivity.Message, entry.Name, expectUpload: false, out var transferred, out var speed))
-                        {
-                            ApplyActivitySample(transferred, speed);
-                            continue;
-                        }
-
-                        var sourceWho = await sourceMonitor.ExecuteCommandAsync("SITE WHO", cancellationToken);
-                        if (sourceWho.StatusCode is >= 200 and < 300 &&
-                            FxpSpeedParser.TryReadDrFtpdTransfer(sourceWho.Message, entry.Name, expectUpload: false, out speed))
-                        {
-                            ApplyActivitySample(-1, speed);
-                            continue;
-                        }
+                        if (!endpoint.Upload) sourceMatched = true;
+                        else if (sourceMatched) return;
+                        Apply(sample);
                     }
-                    catch (Exception) when (!cancellationToken.IsCancellationRequested) { }
                 }
-
-                // If ioGuiExt answered but did not contain a matching row, SIZE is
-                // still worth trying. Previously this fallback was skipped entirely.
-                entry.SpeedBytesPerSecond = 0;
-                if (monitor is null) { hasSizeBaseline = false; continue; }
-                long? bytes;
-                try { bytes = await monitor.GetSizeAsync(entry.Destination, cancellationToken); }
-                catch (Exception) when (!cancellationToken.IsCancellationRequested)
+                await Task.WhenAll(endpoints.Select(ReadEndpoint));
+                if (DateTimeOffset.UtcNow - lastSampleAt > TimeSpan.FromSeconds(6))
                 {
-                    // SIZE may be denied while STOR is active. Keep monitoring
-                    // the source on subsequent samples rather than ending it.
-                    hasSizeBaseline = false;
-                    continue;
+                    entry.FxpSpeedUnavailable = true; entry.SpeedBytesPerSecond = 0;
+                    if (!bridgeWarning)
+                    {
+                        bridgeWarning = true;
+                        LogText.AppendText($"{Environment.NewLine}FXP progress: no fresh live measurement for {entry.Name}; monitoring continues on both servers.");
+                    }
                 }
-                if (bytes is null || FxpSpeedParser.IsPreallocatedSize(bytes.Value, entry.TotalBytes)) { entry.SpeedBytesPerSecond = 0; hasSizeBaseline = false; continue; }
-                var now = DateTime.UtcNow;
-                if (!hasSizeBaseline)
-                {
-                    previousBytes = bytes.Value;
-                    previousAt = now;
-                    hasSizeBaseline = true;
-                    continue;
-                }
-                var seconds = Math.Max((now - previousAt).TotalSeconds, 0.001);
-                var measuredSpeed = Math.Max(0, (long)((bytes.Value - previousBytes) / seconds));
-                entry.SpeedBytesPerSecond = measuredSpeed;
-                entry.BytesTransferred = FxpSpeedParser.ClampProgress(Math.Max(entry.BytesTransferred, bytes.Value), entry.TotalBytes);
-                previousBytes = bytes.Value;
-                previousAt = now;
             }
         }
         finally
         {
-            entry.SpeedBytesPerSecond = 0;
-            try { if (sourceMonitor is not null) await sourceMonitor.DisposeAsync(); }
-            finally { if (monitor is not null) await monitor.DisposeAsync(); }
+            foreach (var endpoint in endpoints)
+                if (endpoint.Session is not null) { try { await endpoint.Session.DisposeAsync(); } catch { } }
         }
+    }
+
+    private sealed class FxpMonitorEndpoint(ConnectionProfile profile, bool upload)
+    {
+        public ConnectionProfile Profile { get; } = profile;
+        public bool Upload { get; } = upload;
+        public FtpRemoteSession? Session { get; set; }
+        public FxpProgressProbe Probe { get; } = new();
+        public DateTimeOffset RetryAt { get; set; }
+        public bool WarningShown { get; set; }
     }
 
     private static async Task<(long Transferred, long Speed)?> TryReadTelemetryTransferAsync(
@@ -2280,7 +2187,8 @@ public partial class MainWindow : Window
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         var snapshot = await JsonSerializer.DeserializeAsync<TelemetryActivitySnapshot>(stream,
             TelemetryJsonOptions, cancellationToken);
-        if (snapshot?.Sessions is null) return null;
+        if (snapshot?.Sessions is null || DateTimeOffset.UtcNow - snapshot.UpdatedAt > TimeSpan.FromSeconds(6) ||
+            snapshot.UpdatedAt > DateTimeOffset.UtcNow.AddSeconds(2)) return null;
 
         var source = NormalizeTelemetryPath(entry.Source);
         var destination = NormalizeTelemetryPath(entry.Destination);
@@ -2308,7 +2216,7 @@ public partial class MainWindow : Window
         catch { await session.DisposeAsync(); throw; }
     }
 
-    private sealed record TelemetryActivitySnapshot(IReadOnlyList<TelemetryActivitySession> Sessions);
+    private sealed record TelemetryActivitySnapshot(IReadOnlyList<TelemetryActivitySession> Sessions, DateTimeOffset UpdatedAt);
     private sealed record TelemetryActivitySession(string Direction, long SpeedBytesPerSecond, long TransferredBytes,
         string Action, string VirtualPath, string DataPath);
 
@@ -2820,11 +2728,12 @@ public partial class MainWindow : Window
         StatusProgressBar.IsIndeterminate = current.State == "Transferring" && current.TotalBytes <= 0;
         StatusProgressBar.Value = percent;
         StatusProgressText.Text = current.TotalBytes > 0 ? $"{percent:0}%" : current.State;
-        TransferBytesText.Text = current.SpeedBytesPerSecond > 0
+        TransferBytesText.Text = current.SpeedBytesPerSecond > 0 || (current.FxpLiveMeasured && !current.FxpSpeedUnavailable)
             ? $"{FormatSize(current.BytesTransferred)} ({FormatSize(current.SpeedBytesPerSecond)}/s)"
             : current.TotalBytes > 0
                 ? $"{FormatSize(current.BytesTransferred)} / {FormatSize(current.TotalBytes)}"
                 : FormatSize(current.BytesTransferred);
+        if (current.FxpSpeedUnavailable && current.State == "Transferring") TransferBytesText.Text += " · speed unavailable";
 
         var elapsed = current.StartedAt is { } started
             ? DateTimeOffset.Now - started.ToLocalTime()
@@ -3336,6 +3245,8 @@ public partial class MainWindow : Window
         private long _totalBytes = totalBytes;
         public long TotalBytes { get => _totalBytes; set { _totalBytes = value; Changed(); Changed(nameof(ProgressPercent)); Changed(nameof(ProgressDisplay)); } }
         private long _speedBytesPerSecond;
+        public bool FxpSpeedUnavailable { get; set; }
+        public bool FxpLiveMeasured { get; set; }
         public long SpeedBytesPerSecond { get => _speedBytesPerSecond; set { _speedBytesPerSecond = value; Changed(); } }
         public Guid? SourceProfileId { get; set; }
         public bool VisionaryRace { get; set; }
