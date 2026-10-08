@@ -27,14 +27,17 @@ All notable FluxFTP changes are documented here.
 - Transfer queue heading uses the same text color as Connection Log.
 - Buttons use white text, including Quick Connect. Local/Remote selectors inherit the correct foreground color in their dropdown toggle.
 
-## Unreleased
+## 1.0.58 — 2026-10-06
 
-- Transfers default to SFV → main files → Sample → Proof → NFO. Global Settings > Prio List allows reordering these categories for uploads, downloads and FXP.
-- Sample and Proof are recognized by complete folder names, including nested contents. Imported site and global wildcard priorities apply within each category.
-- Saving priority settings updates waiting, paused and failed scheduled jobs without interrupting running transfers. Priority selects the next eligible file for a free slot; it does not require one category to finish before another starts.
+- Each pane now has one Connect/Disconnect button that follows connection state and prevents duplicate connection attempts.
+
 - VISIONARY watches share one serialized source-listing connection per site and immutable directory snapshots for up to one second. Idle connections close automatically; changed profiles and failed operations discard the session and cached listings.
 - VISIONARY import reads consistent slotsup/slotsdn values from each site's configuration, capped by the existing Flux total slot limit. Missing, invalid or differing section values retain the existing directional limit. Live bridge calls do not synchronize configuration.
 - Includes the bridge compatibility and FXP speed measurement fixes from the 1.0.57 test builds. Monitoring/browsing connections are not yet included in the transfer scheduler's total slot accounting.
+
+## 1.0.57 — test builds, 2026-10-04–2026-10-05
+
+- Test builds corrected mIRC bridge compatibility/version checks, VISIONARY missing-marker detection and FXP speed matching, units and preallocation handling. These changes were included in 1.0.58; no standalone stable 1.0.57 release was published.
 
 ## 1.0.56 — 2026-10-02
 
@@ -54,6 +57,36 @@ All notable FluxFTP changes are documented here.
 - Legacy Rush XML import reads the site's SSL mode instead of inferring it only from the port. Explicit SSL/TLS sites use FluxFTP's AUTH TLS-first connection.
 - Import Sections preserves per-site paths when importing a full RushSite XML file, instead of assigning every bookmark to `ioFTPD`. Ambiguous names and paths require review.
 - Export mIRC bridge bundles updated DLLs that avoid reading beyond the legacy LOADINFO structure in mIRC 7.52. The same DLLs handle the newer mIRC 7.64+ structure, so no export version selector is needed.
+
+## 1.0.55 — 2026-10-01
+
+### Added
+
+- Shared growing-release supervision for RaceTrade spread jobs and VISIONARY, including download-only targets, destination verification and overlapping-race protection.
+- VISIONARY configuration/import tools, sample/covers profiles and embedded mIRC bridge export.
+
+### Fixed
+
+- Server CRC/zero-byte rejection messages fail transfers even when returned with FTP 226.
+- Preserve DUPE, NUKE and SAMPLE rejections; avoid relay fallback for recognized server policy stops.
+- Keep multiline server error boxes readable and distinguish expected missing-directory probes from transfer failures.
+- White bottom status text for improved readability.
+- Removed queue jobs cannot cause a spread job to report DONE; final source state triggers rechecks of growing files.
+
+### Security
+
+- Upgrade SSH.NET from 2025.1.0 to 2026.0.0, including upstream SCP security fixes. FluxFTP uses SftpClient, not ScpClient.
+
+### Validation
+
+- Race verification checks and the existing desktop test suite passed.
+- NuGet vulnerability audit including transitive dependencies reported no vulnerable packages.
+- SFTP and an initial live race passed user testing in the racefix.5 candidate.
+
+### Downloads
+
+- Windows x64 single-file EXEs: framework-dependent (.NET 8 Desktop and ASP.NET Core runtimes required) and self-contained (runtimes included).
+- Separate bridge and rules/guides ZIPs, plus SHA-256 checksums.
 
 ## 1.0.53 — 2026-09-29
 
