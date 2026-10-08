@@ -248,7 +248,7 @@
                             <Button Content="Clear finished" Click="ClearFinished_Click" Padding="9,3"/>
                             <Button Content="Clear all" Click="ClearAll_Click" Padding="9,3"/>
                         </StackPanel>
-                        <TextBlock Text="TRANSFER QUEUE" FontWeight="SemiBold" Margin="3" VerticalAlignment="Center"/>
+                        <TextBlock Text="TRANSFER QUEUE" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" Margin="3" VerticalAlignment="Center"/>
                     </DockPanel>
                     <ListView x:Name="QueueList" SizeChanged="QueueList_SizeChanged"
                               PreviewMouseRightButtonDown="FileList_PreviewMouseRightButtonDown"

@@ -2,6 +2,13 @@
 
 All notable FluxFTP changes are documented here.
 
+## 1.0.59 — 2026-10-08
+
+### Fixed
+
+- Transfer queue heading uses the same text color as Connection Log.
+- Buttons use white text, including Quick Connect. Local/Remote selectors inherit the correct foreground color in their dropdown toggle.
+
 ## Unreleased
 
 - VISIONARY watches share one serialized source-listing connection per site and immutable directory snapshots for up to one second. Idle connections close automatically; changed profiles and failed operations discard the session and cached listings.
