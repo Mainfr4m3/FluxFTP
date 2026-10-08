@@ -42,4 +42,5 @@ public sealed record GlobalSettings(
     IrcSettings? Irc = null,
     bool EnableVisionaryBridge = false,
     bool SerializeLocalTransfers = true,
-    string TransferCategoryOrder = "SFV\nMain files\nSample\nProof\nNFO");
+    string TransferCategoryOrder = "SFV\nMain files\nSample\nProof\nNFO",
+    bool EnableFxpSpeedMonitoring = true);

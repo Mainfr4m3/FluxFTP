@@ -2080,9 +2080,16 @@ public partial class MainWindow : Window
         }
     }
 
+    private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _fxpMonitoring = new();
+
     private async Task MonitorFxpAsync(ConnectionProfile sourceProfile, ConnectionProfile destinationProfile,
         QueueEntryView entry, CancellationToken cancellationToken)
     {
+        entry.FxpMonitoringDisabled = !_settings.EnableFxpSpeedMonitoring;
+        if (entry.FxpMonitoringDisabled) return;
+        using var monitoringCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cancellationToken = monitoringCancellation.Token;
+        _fxpMonitoring[entry.Id] = monitoringCancellation;
         var endpoints = new[] { new FxpMonitorEndpoint(sourceProfile, false), new FxpMonitorEndpoint(destinationProfile, true) };
         var lastSampleAt = DateTimeOffset.MinValue;
         var bridgeWarning = false;
@@ -2164,6 +2171,9 @@ public partial class MainWindow : Window
         }
         finally
         {
+            _fxpMonitoring.TryRemove(entry.Id, out _);
+            if (!_settings.EnableFxpSpeedMonitoring)
+            { entry.FxpMonitoringDisabled = true; entry.SpeedBytesPerSecond = 0; entry.FxpSpeedUnavailable = false; }
             foreach (var endpoint in endpoints)
                 if (endpoint.Session is not null) { try { await endpoint.Session.DisposeAsync(); } catch { } }
         }
@@ -2734,6 +2744,7 @@ public partial class MainWindow : Window
                 ? $"{FormatSize(current.BytesTransferred)} / {FormatSize(current.TotalBytes)}"
                 : FormatSize(current.BytesTransferred);
         if (current.FxpSpeedUnavailable && current.State == "Transferring") TransferBytesText.Text += " · speed unavailable";
+        if (current.FxpMonitoringDisabled && current.State == "Transferring") TransferBytesText.Text += " · monitoring off";
 
         var elapsed = current.StartedAt is { } started
             ? DateTimeOffset.Now - started.ToLocalTime()
@@ -2786,6 +2797,8 @@ public partial class MainWindow : Window
         if (dialog.ShowDialog() == true && dialog.Settings is not null)
         {
             _settings = dialog.Settings;
+            if (!_settings.EnableFxpSpeedMonitoring)
+                foreach (var monitoring in _fxpMonitoring.Values) monitoring.Cancel();
             var priorityProfiles = new ProfileStore().Load().ToDictionary(profile => profile.Id);
             var ranks = _engine.Snapshot().ToDictionary(status => status.Item.Id, status => TransferFilePriority.Rank(
                 status.Item.Name, status.Item.SourcePath, _settings,
@@ -3247,6 +3260,7 @@ public partial class MainWindow : Window
         private long _speedBytesPerSecond;
         public bool FxpSpeedUnavailable { get; set; }
         public bool FxpLiveMeasured { get; set; }
+        public bool FxpMonitoringDisabled { get; set; }
         public long SpeedBytesPerSecond { get => _speedBytesPerSecond; set { _speedBytesPerSecond = value; Changed(); } }
         public Guid? SourceProfileId { get; set; }
         public bool VisionaryRace { get; set; }

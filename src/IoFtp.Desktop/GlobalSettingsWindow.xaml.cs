@@ -27,6 +27,7 @@ public partial class GlobalSettingsWindow : Window
         UsernameBox.Text=s.DefaultUsername; ProtocolBox.SelectedItem=((ProtocolChoice[])ProtocolBox.ItemsSource).First(choice => choice.Protocol == s.DefaultProtocol); SlotsBox.Text=$"{s.DefaultSlots}"; UploadsBox.Text=$"{s.DefaultUploadSlots}"; DownloadsBox.Text=$"{s.DefaultDownloadSlots}"; DefaultIdleBox.Text=$"{s.DefaultIdleSeconds}";
         LocalPathBox.Text=s.LocalDownloadPath; LocalDownloadsBox.Text=$"{s.MaxLocalDownloadSlots}"; LocalUploadsBox.Text=$"{s.MaxLocalUploadSlots}";
         SerializeLocalBox.IsChecked = s.SerializeLocalTransfers;
+        FxpSpeedMonitoringBox.IsChecked = s.EnableFxpSpeedMonitoring;
         PriorityPatternsBox.Text=s.PriorityPatterns;
         foreach (var category in TransferFilePriority.Categories(s.TransferCategoryOrder)) PriorityCategoriesList.Items.Add(category);
         PriorityCategoriesList.SelectedIndex = 0;
@@ -56,7 +57,8 @@ public partial class GlobalSettingsWindow : Window
         if (!ThemeManager.TryValidate(theme, out var themeError)) { ErrorText.Text = themeError; return; }
         Settings = new GlobalSettings(BindBox.Text.Trim(),N(PortFromBox),N(PortToBox),ApiEnabledBox.IsChecked==true,N(ApiPortBox),ApiLocalBox.IsChecked==true,N(ExpirationBox),N(StarterBox),N(RuntimeBox),N(JobHistoryBox),N(TransferHistoryBox),N(LogHistoryBox),UsernameBox.Text.Trim(),N(SlotsBox),N(UploadsBox),N(DownloadsBox),((ProtocolChoice)ProtocolBox.SelectedItem).Protocol,N(DefaultIdleBox),LocalPathBox.Text.Trim(),N(LocalDownloadsBox),N(LocalUploadsBox),PriorityPatternsBox.Text.Trim(),SkipPatternsBox.Text.Trim(),ApiPasswordBox.Password,MinimizeToTrayBox.IsChecked==true,LegendModeBox.SelectedItem?.ToString() ?? "Compact",(ProxyType)(ProxyTypeBox.SelectedItem ?? ProxyType.None),ProxyHostBox.Text.Trim(),N(ProxyPortBox),ProxyUsernameBox.Text.Trim(),ProxyPasswordBox.Password,ProxyDnsBox.IsChecked==true,ProxyDataBox.IsChecked==true,CheckUpdatesBox.IsChecked==true, _advancedSkipRules.ToArray(), theme, irc);
         Settings = Settings with { EnableVisionaryBridge = _visionaryBridge, SerializeLocalTransfers = SerializeLocalBox.IsChecked == true,
-            TransferCategoryOrder = string.Join("\n", PriorityCategoriesList.Items.Cast<string>()) };
+            TransferCategoryOrder = string.Join("\n", PriorityCategoriesList.Items.Cast<string>()),
+            EnableFxpSpeedMonitoring = FxpSpeedMonitoringBox.IsChecked == true };
         try { new GlobalSettingsStore().Save(Settings); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException)
         { Settings = null; ErrorText.Text = "Could not save settings to disk. Check write access and free space; your edits are still here. Please try Save again."; return; }

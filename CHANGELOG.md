@@ -4,6 +4,7 @@ All notable FluxFTP changes are documented here.
 
 ## 1.0.61 — 2026-10-08
 
+- Global Settings > FXP can disable live speed/progress monitoring to reduce additional FTP connections and status queries during VISIONARY races. Saving stops active monitoring; enabling applies to new files. Completion and final average speed remain available.
 - FXP progress samples both servers independently with bounded monitoring operations, reconnects failed connections and skips unsupported monitoring commands.
 - Brief measurement gaps retain the last observed speed. After six seconds without fresh data, speed is marked unavailable while monitoring continues. Stale local telemetry snapshots are rejected.
 - Actual zero-speed samples remain distinct from missing measurements. Destination SIZE fallback ignores preallocated complete files and resets its baseline after reconnecting.

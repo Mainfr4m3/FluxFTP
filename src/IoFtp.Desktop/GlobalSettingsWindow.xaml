@@ -52,6 +52,11 @@
                         <CheckBox x:Name="MinimizeToTrayBox" Content="Minimize and close FluxFTP to the system tray" Margin="0,8,0,4"/>
                     </StackPanel>
                 </Grid></TabItem>
+                <TabItem Header="FXP"><StackPanel Margin="16">
+                    <TextBlock Text="FXP speed monitoring" FontWeight="SemiBold"/>
+                    <CheckBox x:Name="FxpSpeedMonitoringBox" Content="Measure live FXP speed and progress" Margin="0,14,0,8"/>
+                    <TextBlock Text="Uses telemetry or extra FTP connections and server status commands. Disable to reduce monitoring overhead during VISIONARY races. Saving stops active FXP monitoring; enabling applies to new transfers. Completion and final average speed remain available." TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}"/>
+                </StackPanel></TabItem>
                 <TabItem Header="Skiplist"><Grid Margin="16"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                     <Grid><TextBlock Text="Files skipped during folder / PRE transfers" FontWeight="SemiBold" VerticalAlignment="Center"/>
                         <Button Content="Advanced…" HorizontalAlignment="Right" Click="AdvancedSkiplist_Click"/>

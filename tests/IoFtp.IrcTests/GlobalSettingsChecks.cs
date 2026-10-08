@@ -19,6 +19,10 @@ internal static class GlobalSettingsChecks
             var path = Path.Combine(directory, "settings.json");
             Check(!File.ReadAllText(path).Contains(irc.Password), "secret protected on disk");
             Check(new GlobalSettingsStore(directory).Load().TransferCategoryOrder == settings.TransferCategoryOrder, "transfer category order survives restart");
+            Check(new GlobalSettingsStore(directory).Load().EnableFxpSpeedMonitoring, "FXP monitoring enabled by default");
+            new GlobalSettingsStore(directory).Save(settings with { EnableFxpSpeedMonitoring = false });
+            Check(!new GlobalSettingsStore(directory).Load().EnableFxpSpeedMonitoring, "disabled FXP monitoring survives restart");
+            new GlobalSettingsStore(directory).Save(settings);
             var reloaded = new GlobalSettingsStore(directory).Load().Irc!;
             Check(reloaded.Enabled && reloaded.Host == irc.Host && reloaded.Port == irc.Port && reloaded.Nick == irc.Nick && reloaded.Channel == irc.Channel, "connection survives restart without FTP authority");
             Check(reloaded.Password == irc.Password && reloaded.ZncUsername == irc.ZncUsername && reloaded.ZncNetwork == irc.ZncNetwork && reloaded.UseZnc, "ZNC settings survive restart");
