@@ -7,7 +7,7 @@ self-contained), a bridge ZIP, a rules/guides ZIP and SHA-256 checksums under
 and ASP.NET Core runtimes; the self-contained build includes its runtimes.
 
 Both executables embed the FluxFTP and VISIONARY mIRC scripts and 32-/64-bit DLLs.
-Use **VISIONARY > Export mIRC bridge** to extract them into an empty folder,
+Use **IRC Add-ons > Bridge & integrations > Export mIRC bridge** to extract them into an empty folder,
 even if only the EXE was downloaded. The separate bridge ZIP contains the same
 files for convenient manual installation. The VISIONARY wrapper is in its
 `visionary` subfolder. Native DLLs are checked in under `extras/irc`; rebuild them

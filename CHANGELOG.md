@@ -2,6 +2,11 @@
 
 All notable FluxFTP changes are documented here.
 
+## 1.0.63 — 2026-10-09
+
+- IRC Add-ons collects IRC settings, VISIONARY and bridge integrations in one window. IRC settings can be saved directly from this window.
+- Metrics now provides access to Transfer Jobs, RACE-Log and Spread Jobs, reducing the number of buttons in the main toolbar.
+
 ## 1.0.62 — 2026-10-08
 
 - Delete processes every selected file/folder with one confirmation, supports the Delete key in both panes, checks server replies and verifies removal. Recursive deletion removes files and subfolders before the selected folder.

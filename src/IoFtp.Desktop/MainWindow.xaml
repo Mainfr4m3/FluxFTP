@@ -22,13 +22,10 @@
                 <TextBlock x:Name="ConnectionStatus" Grid.Column="1" Text="Offline workspace" Foreground="{DynamicResource MutedTextBrush}"
                            VerticalAlignment="Center" HorizontalAlignment="Center" />
                 <WrapPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right">
-                    <Button Content="Transfer Jobs" Click="TransferJobs_Click" />
-                    <Button Content="RACE-Log" Click="RaceLog_Click" />
                     <Button Content="Metrics" Click="Metrics_Click" />
                     <Button Content="Scripts" Click="Scripts_Click" />
                     <Button Content="Sections" Click="Sections_Click" />
-                    <Button Content="VISIONARY" Click="Visionary_Click" />
-                    <Button Content="Spread Jobs" Click="SpreadJobs_Click" />
+                    <Button Content="IRC Add-ons" Click="Visionary_Click" />
                     <Button x:Name="ToggleQueueButton" Content="Show Queue" Click="ToggleQueue_Click" />
                     <Button x:Name="ToggleLogButton" Content="Hide Log" Click="ToggleLog_Click" />
                     <Button Content="Global Settings" Click="GlobalSettings_Click" />

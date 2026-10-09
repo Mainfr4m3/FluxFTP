@@ -6,13 +6,18 @@ namespace IoFtp.Desktop;
 public partial class MetricsWindow : Window
 {
     private readonly Func<MetricsSnapshot> _snapshot;
+    private readonly Action _transferJobs, _raceLog, _spreadJobs;
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
-    internal MetricsWindow(Func<MetricsSnapshot> snapshot)
+    internal MetricsWindow(Func<MetricsSnapshot> snapshot, Action transferJobs, Action raceLog, Action spreadJobs)
     {
+        _transferJobs = transferJobs; _raceLog = raceLog; _spreadJobs = spreadJobs;
         InitializeComponent(); _snapshot = snapshot; _timer.Tick += (_, _) => RefreshMetrics();
         Loaded += (_, _) => { RefreshMetrics(); _timer.Start(); }; Closed += (_, _) => _timer.Stop();
     }
     private void Refresh_Click(object sender, RoutedEventArgs e) => RefreshMetrics();
+    private void TransferJobs_Click(object sender, RoutedEventArgs e) => _transferJobs();
+    private void RaceLog_Click(object sender, RoutedEventArgs e) => _raceLog();
+    private void SpreadJobs_Click(object sender, RoutedEventArgs e) => _spreadJobs();
     private void Close_Click(object sender, RoutedEventArgs e) => Close();
     private void RefreshMetrics()
     {

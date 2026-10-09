@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using IoFtp.Desktop.Services;
+using IoFtp.Desktop.Models;
 using Microsoft.Win32;
 
 namespace IoFtp.Desktop;
@@ -14,13 +15,18 @@ public partial class VisionaryWindow : Window
 {
     private readonly ObservableCollection<VisionaryConfiguration> _files = [];
     private readonly Func<bool, Task> _setBridge;
+    private readonly Func<IrcSettings, Task> _saveIrc;
+    private readonly Action _openRaceLog;
     private bool _ready;
     private readonly string _indexPath = Path.Combine(AppContext.BaseDirectory, "FluxFTP-visionary-files.json");
 
-    internal VisionaryWindow(bool enabled, Func<bool, Task> setBridge)
+    internal VisionaryWindow(bool enabled, Func<bool, Task> setBridge, IrcSettings irc, Func<IrcSettings, Task> saveIrc, Action openRaceLog)
     {
         _setBridge = setBridge;
+        _saveIrc = saveIrc;
+        _openRaceLog = openRaceLog;
         InitializeComponent();
+        IrcEditor.Load(irc);
         FilesBox.ItemsSource = _files;
         BridgeBox.IsChecked = enabled;
         HelpBox.Text = "1. Import the VISIONARY User_Files folder (or individual INI / CHA files).\n" +
@@ -48,6 +54,15 @@ public partial class VisionaryWindow : Window
                 "Discard unsaved VISIONARY edits?", "Unsaved edits", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes;
         };
     }
+
+    private async void SaveIrc_Click(object sender, RoutedEventArgs e)
+    {
+        var settings = IrcEditor.Read();
+        if (settings is null) return;
+        try { await _saveIrc(settings); MessageBox.Show(this, "IRC settings saved. Connection status appears in the main log.", "IRC Add-ons"); }
+        catch (Exception error) { MessageBox.Show(this, error.Message, "Save IRC settings", MessageBoxButton.OK, MessageBoxImage.Error); }
+    }
+    private void RaceLog_Click(object sender, RoutedEventArgs e) => _openRaceLog();
 
     private void Import_Click(object sender, RoutedEventArgs e)
     {

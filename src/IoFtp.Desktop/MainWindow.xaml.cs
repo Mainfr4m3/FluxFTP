@@ -2653,7 +2653,10 @@ public partial class MainWindow : Window
         window.Show();
     }
 
-    private void Metrics_Click(object sender, RoutedEventArgs e) => new MetricsWindow(GetMetricsSnapshot) { Owner = this }.Show();
+    private void Metrics_Click(object sender, RoutedEventArgs e) => new MetricsWindow(GetMetricsSnapshot,
+        () => TransferJobs_Click(this, new RoutedEventArgs()),
+        () => RaceLog_Click(this, new RoutedEventArgs()),
+        () => SpreadJobs_Click(this, new RoutedEventArgs())) { Owner = this }.Show();
     private void Scripts_Click(object sender, RoutedEventArgs e) => new ExternalScriptsWindow { Owner = this }.Show();
     private void About_Click(object sender, RoutedEventArgs e) => new AboutWindow { Owner = this }.ShowDialog();
 
@@ -2793,7 +2796,13 @@ public partial class MainWindow : Window
             _settings = _settings with { EnableVisionaryBridge = enabled };
             new GlobalSettingsStore().Save(_settings);
             await RestartApiServerAsync();
-        }) { Owner = this }.ShowDialog();
+        }, _settings.Irc ?? new(), async irc =>
+        {
+            var updated = _settings with { Irc = irc };
+            new GlobalSettingsStore().Save(updated);
+            _settings = updated;
+            await RestartIrcAsync();
+        }, () => RaceLog_Click(this, new RoutedEventArgs())) { Owner = this }.ShowDialog();
         ReloadQuickSites(LeftQuickSites); ReloadQuickSites(RightQuickSites);
     }
 
