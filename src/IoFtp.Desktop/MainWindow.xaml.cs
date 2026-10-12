@@ -2046,7 +2046,8 @@ public partial class MainWindow : Window
                     }
                     catch (TransferVerificationException) { throw; }
                     catch (Exception exception) when (TransferRejection.Category(exception.Message) is not null) { throw; }
-                    catch (FtpCommandException exception) when (exception.StatusCode == 553 && DestinationUsesXdupe(entry) && TransferRejection.Category(exception.Message) is null)
+                    // A permanent FTP rejection cannot be repaired by changing the data route.
+                    catch (FtpCommandException exception) when (exception.StatusCode == 553)
                     {
                         throw;
                     }
@@ -2123,6 +2124,8 @@ public partial class MainWindow : Window
         {
             entry.State = "Failed";
             var rejection = TransferRejection.Category(exception.Message);
+            if (rejection == "DIRECTORY-DENIED" && _raceJobOwners.TryGetValue(entry.Id, out var raceOwner))
+                raceOwner.Stop(FriendlyMessage(exception));
             _raceLog.Write(rejection ?? "ERROR", $"{entry.Id} {entry.Name}: {exception.GetType().Name}" + (exception is FtpCommandException ftpError ? $" (FTP {ftpError.StatusCode}): {ftpError.Message}" : ""));
             LogText.AppendText(Environment.NewLine + TransferRejection.FormatFailure(entry.Name, exception is FtpCommandException ? exception.Message : FriendlyMessage(exception)));
             await RunScriptsAsync("TransferFailed", TransferScriptVariables(entry, FriendlyMessage(exception)), true);
@@ -3393,6 +3396,7 @@ public partial class MainWindow : Window
 
     private async Task<object> StartApiTransferCoreAsync(ApiTransferRequest request, VisionaryRaceState? race = null, CancellationToken cancellationToken = default) => await await Dispatcher.InvokeAsync(async () =>
     {
+        race?.ThrowIfStopped();
         if (string.IsNullOrWhiteSpace(request.SrcSite) || string.IsNullOrWhiteSpace(request.DstSite) || string.IsNullOrWhiteSpace(request.Name))
             throw new ArgumentException("src_site, dst_site and name are required for FXP jobs.");
         var ruleRelease = race is not null ? VisionaryTransferProfiles.ReleasePath(request.Name).Split('/')[0] : request.Name;

@@ -45,6 +45,12 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
     public bool SourceComplete { get; set; }
     public bool SourceAvailable { get; set; }
     public bool DestinationVerified { get; set; }
+    private string? _stopReason;
+    public void Stop(string reason) => _stopReason ??= reason;
+    public void ThrowIfStopped()
+    {
+        if (_stopReason is not null) throw new IOException("RACE destination blocked: " + _stopReason);
+    }
     private readonly Dictionary<string, bool> _directoryCompletion = new(StringComparer.Ordinal);
     private bool _lastComplete;
     public void BeginListing() { SourceComplete = false; SourceAvailable = false; DestinationVerified = false; _directoryCompletion.Clear(); }
@@ -93,6 +99,7 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
 
     public bool NeedsTransfer(string path, long? size, DateTimeOffset? modified, Func<Guid, string?> status)
     {
+        ThrowIfStopped();
         if (!_files.TryGetValue(path, out var prior)) return true;
         var state = status(prior.Job);
         if (state is null or "Cancelled") throw new OperationCanceledException("A race job was removed or cancelled.");

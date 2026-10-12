@@ -24,6 +24,16 @@ internal static class RaceFlowChecks
         Check(TransferRejection.Category("NUKE / REASON marker stopped the VISIONARY race.") == "NUKE", "race NUKE classified");
         Check(TransferRejection.Category("550 /Music/Dupe-Album: No such file or directory") is null, "missing directory not guessed DUPE");
         Check(TransferRejection.Category("553 XDUPE existing file") is null, "XDUPE remains distinct");
+        Check(TransferRejection.Category("553- track.mp3: This file looks like a dupe!\n553 It was uploaded by user") == "DUPE", "ioFTPD dupe blocks relay");
+        Check(TransferRejection.Category("553 File is being uploaded by Farmor") == "UPLOAD-IN-PROGRESS", "active upload blocks relay and false completion");
+        Check(TransferRejection.Category("553 Requested action not taken. File exists.") == "DUPE", "existing file blocks relay");
+        Check(TransferRejection.Category("550- Release blocked by section deny filter.\n550 MKD Denied by dirscript.") == "DIRECTORY-DENIED", "release-level directory denial identified");
+        var blockedRace = new VisionaryRaceState(new());
+        blockedRace.Stop("550 MKD Denied by dirscript.");
+        var stopped = false;
+        try { blockedRace.NeedsTransfer("/release/next.rar", 100, null, _ => null); }
+        catch (IOException ex) { stopped = ex.Message.Contains("550 MKD Denied"); }
+        Check(stopped, "directory denial prevents scheduling subsequent race files");
         var commands = new List<string>();
         try
         {
