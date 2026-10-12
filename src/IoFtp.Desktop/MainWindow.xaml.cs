@@ -3376,7 +3376,7 @@ public partial class MainWindow : Window
             token.ThrowIfCancellationRequested();
             RaceDestinationLease.Acquire(request.DstSite!, request.DstSection ?? request.DstPath ?? "/", request.Name!, race);
             await StartApiTransferCoreAsync(request, race, token);
-            var finished = await Dispatcher.InvokeAsync(() => race.DestinationAlreadyComplete || race.DestinationVerified && race.Finished(RaceJobState));
+            var finished = await Dispatcher.InvokeAsync(() => race.DestinationVerified && race.Finished(RaceJobState));
             if (finished || !race.SourceAvailable)
             {
                 RaceDestinationLease.Release(race);
@@ -3503,7 +3503,7 @@ public partial class MainWindow : Window
         race?.EndListing();
         // Inspect raw destination listings before skip rules and before creating transfer jobs.
         // A marker alone cannot prove that the expected payload exists at the right sizes.
-        if (race is not null && apiFiles.Count > 0 && !race.Jobs.Any())
+        if (race is not null && apiFiles.Count > 0)
         {
             try
             {
@@ -3520,9 +3520,12 @@ public partial class MainWindow : Window
                     }
                     if (verified)
                     {
-                        race.DestinationAlreadyComplete = true;
-                        race.DestinationVerified = true;
+                        race.ConfirmDestinationComplete();
+                        var pending = _raceJobOwners.Where(pair => ReferenceEquals(pair.Value, race)).Select(pair => pair.Key)
+                            .Where(id => _queue.Any(entry => entry.Id == id && entry.State != "Completed")).ToArray();
+                        foreach (var id in pending) RemoveTransferJob(id);
                         var message = $"VISIONARY skipped {request.Name}: {request.DstSite} already COMPLETE; destination marker and {apiFiles.Count} files verified";
+                        if (pending.Length > 0) message += $"; removed {pending.Length} pending/active jobs";
                         _raceLog.Write("SKIP", message);
                         LogText.AppendText(Environment.NewLine + message); LogText.ScrollToEnd();
                         return new ApiTransferStartResult(request.Name, "SKIPPED", 0, request.SrcSite, request.DstSite, jobIds);

@@ -47,7 +47,8 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
     public bool SourceComplete { get; set; }
     public bool SourceAvailable { get; set; }
     public bool DestinationVerified { get; set; }
-    public bool DestinationAlreadyComplete { get; set; }
+    public bool DestinationAlreadyComplete { get; private set; }
+    public void ConfirmDestinationComplete() { DestinationAlreadyComplete = true; DestinationVerified = true; }
     private string? _stopReason;
     public void Stop(string reason) => _stopReason ??= reason;
     public void ThrowIfStopped()
@@ -103,6 +104,7 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
     public bool NeedsTransfer(string path, long? size, DateTimeOffset? modified, Func<Guid, string?> status)
     {
         ThrowIfStopped();
+        if (DestinationAlreadyComplete) return false;
         if (!_files.TryGetValue(path, out var prior)) return true;
         var state = status(prior.Job);
         if (state is null or "Cancelled") throw new OperationCanceledException("A race job was removed or cancelled.");
@@ -130,6 +132,6 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
     }
 
     public bool IsSkipped(string path, Func<Guid, string?> status) => _files.TryGetValue(path, out var file) && status(file.Job) == "Skipped";
-    public bool Finished(Func<Guid, string?> status) => SourceComplete && _files.Count > 0 &&
+    public bool Finished(Func<Guid, string?> status) => DestinationAlreadyComplete || SourceComplete && _files.Count > 0 &&
         _files.All(pair => status(pair.Value.Job) == "Skipped" || IsFinal(pair.Key) && pair.Value.Final && status(pair.Value.Job) == "Completed");
 }

@@ -92,6 +92,13 @@ internal static class RaceFlowChecks
         Check(RaceDestinationVerifier.Accepts(expected, [.. expected, ninjaMarker], race), "existing ioNiNJA complete payload can skip before queueing");
         Check(!RaceDestinationVerifier.Accepts(expected, [F("test.sfv"), ninjaMarker], race), "complete marker with absent payload cannot skip");
         Check(!RaceDestinationVerifier.Accepts(expected, [.. expected, ninjaMarker, F("test.rar-MISSING", 0)], race), "hyphen missing marker prevents existing-complete skip");
+        var lateComplete = new VisionaryRaceState(new());
+        lateComplete.Track("/release/test.rar", 100, null, Guid.NewGuid());
+        Check(!lateComplete.Finished(_ => "Failed"), "dupe failure alone does not finish an ongoing race");
+        Check(RaceDestinationVerifier.Accepts(expected, [.. expected, ninjaMarker], lateComplete), "destination can verify after jobs have already been tracked");
+        lateComplete.ConfirmDestinationComplete();
+        Check(lateComplete.Finished(_ => "Failed"), "verified destination completes race despite earlier dupe failures");
+        Check(!lateComplete.NeedsTransfer("/release/test.rar", 100, null, _ => "Failed"), "verified complete race never requeues earlier failed files");
         Check(VisionaryRaceState.IsVerificationMetadata(F("test.rar.missing", 0)), "missing markers never copied");
         Check(VisionaryRaceState.IsVerificationMetadata(F(".ioFTPD.verified")), "ledger never copied");
         race.BeginListing();
