@@ -42,13 +42,18 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<QueueEntryView> _queue = [];
     private readonly Dictionary<Guid, string> _hiddenRaceJobStates = [];
     private readonly HashSet<Guid> _skippedTransferJobs = [];
+    private readonly Dictionary<Guid, VisionaryRaceState> _raceJobOwners = [];
+    private readonly Dictionary<Guid, ConnectionProfile> _raceReadySites = [];
+    private readonly SemaphoreSlim _racePoolGate = new(1, 1);
+    private readonly CancellationTokenSource _racePoolStop = new();
+    private readonly System.Windows.Threading.DispatcherTimer _racePoolTimer = new() { Interval = TimeSpan.FromSeconds(15) };
     private readonly GlobalTransferEngine _engine;
     private readonly GlobalSettingsStore _settingsStore = new();
     private readonly WindowLayoutStore _layoutStore = new();
     private readonly ColumnVisibilityController _columnVisibility;
     private readonly SessionStatistics _sessionStatistics = new();
     private readonly TotalStatisticsStore _totalStatistics = new();
-    private readonly ConcurrentDictionary<FtpRemoteSession, byte> _sessionWorkers = new();
+    private readonly ConcurrentDictionary<FtpRemoteSession, ConnectionProfile> _sessionWorkers = new();
     private ApiServer? _apiServer;
     private IrcManager? _ircService;
     private readonly SemaphoreSlim _ircRestartGate = new(1, 1);
@@ -130,7 +135,16 @@ public partial class MainWindow : Window
         _engine = new GlobalTransferEngine(new DesktopTransferExecutor(this));
         _engine.ConfigureLocalSlots(_settings.MaxLocalDownloadSlots, _settings.MaxLocalUploadSlots, _settings.SerializeLocalTransfers);
         _engine.StateChanged += Engine_StateChanged;
-        QueueList.ItemsSource = _queue;
+        var visibleQueue = new ListCollectionView(_queue) { Filter = item => item is QueueEntryView entry && !entry.VisionaryRace };
+        QueueList.ItemsSource = visibleQueue;
+        _racePoolTimer.Tick += async (_, _) =>
+        {
+            if (!_settings.EnableVisionaryBridge || _workerPoolShuttingDown || _racePoolGate.CurrentCount == 0) return;
+            try { await MaintainRaceSlotsAsync(_racePoolStop.Token); }
+            catch (OperationCanceledException) when (_racePoolStop.IsCancellationRequested) { }
+            catch (Exception exception) { LogText.AppendText(Environment.NewLine + "RACE idle slots: " + FriendlyMessage(exception)); }
+        };
+        _racePoolTimer.Start();
         ReloadQuickSites(LeftQuickSites);
         ReloadQuickSites(RightQuickSites);
         ReloadLocalDrives();
@@ -1740,9 +1754,9 @@ public partial class MainWindow : Window
         }
     }
 
-    private QueueEntryView AddQueue(string name, string source, string destination, TransferDirection direction, long totalBytes = 0, Guid? sourceProfileId = null, Guid? destinationProfileId = null, bool persist = true)
+    private QueueEntryView AddQueue(string name, string source, string destination, TransferDirection direction, long totalBytes = 0, Guid? sourceProfileId = null, Guid? destinationProfileId = null, bool persist = true, bool visionaryRace = false)
     {
-        var entry = new QueueEntryView(name, source, destination, direction, totalBytes: totalBytes) { SourceProfileId = sourceProfileId, DestinationProfileId = destinationProfileId, QueuedAt = DateTimeOffset.Now };
+        var entry = new QueueEntryView(name, source, destination, direction, totalBytes: totalBytes) { SourceProfileId = sourceProfileId, DestinationProfileId = destinationProfileId, QueuedAt = DateTimeOffset.Now, VisionaryRace = visionaryRace };
         _queue.Add(entry);
         TrackRaceEntry(entry);
         if (persist) { SaveQueue(); UpdateQueueStatus(); }
@@ -2121,7 +2135,7 @@ public partial class MainWindow : Window
     private async Task<FtpRemoteSession> CreateTransferWorkerAsync(ConnectionProfile profile, CancellationToken token)
     {
         var worker = await CreateWorkerAsync(profile, token);
-        if (_sessionWorkers.TryAdd(worker, 0)) _sessionStatistics.WorkerCreated();
+        if (_sessionWorkers.TryAdd(worker, profile)) _sessionStatistics.WorkerCreated();
         return worker;
     }
 
@@ -2129,6 +2143,55 @@ public partial class MainWindow : Window
     {
         try { await worker.DisposeAsync(); }
         finally { if (_sessionWorkers.TryRemove(worker, out _)) _sessionStatistics.WorkerClosed(); }
+    }
+
+    private async Task MaintainRaceSlotsAsync(CancellationToken token)
+    {
+        await _racePoolGate.WaitAsync(token);
+        try
+        {
+            foreach (var profile in _raceReadySites.Values.ToArray())
+            {
+                if (_workerPoolShuttingDown) return;
+                await DisposeStalePooledWorkersAsync(profile);
+                var pool = _workerPool.GetOrAdd(profile, _ => new ConcurrentBag<PooledWorker>());
+                var idle = pool.Count;
+                var leases = new List<PooledWorker>();
+                for (var i = 0; i < idle && pool.TryTake(out var pooled); i++) leases.Add(pooled);
+                var released = new HashSet<FtpRemoteSession>();
+                try
+                {
+                foreach (var pooled in leases)
+                {
+                    var healthy = false;
+                    try
+                    {
+                        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+                        timeout.CancelAfter(TimeSpan.FromSeconds(5));
+                        healthy = pooled.Session.IsConnected && (await pooled.Session.ExecuteCommandAsync("NOOP", timeout.Token)).StatusCode is >= 200 and < 300;
+                    }
+                    catch (Exception) when (!token.IsCancellationRequested) { }
+                    finally { released.Add(pooled.Session); await ReleaseWorkerAsync(profile, pooled.Session, healthy); }
+                    token.ThrowIfCancellationRequested();
+                }
+                }
+                finally
+                {
+                    foreach (var abandoned in leases.Where(pooled => !released.Contains(pooled.Session)))
+                        await ReleaseWorkerAsync(profile, abandoned.Session, false);
+                }
+                var live = _sessionWorkers.Count(pair => pair.Value == profile);
+                var missing = Math.Max(0, profile.EffectiveOptions.MaxSlots - live);
+                for (var i = 0; i < missing; i++)
+                {
+                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+                    timeout.CancelAfter(TimeSpan.FromSeconds(15));
+                    var worker = await CreateTransferWorkerAsync(profile, timeout.Token);
+                    await ReleaseWorkerAsync(profile, worker, true);
+                }
+            }
+        }
+        finally { _racePoolGate.Release(); }
     }
 
     private void AppendTransferIntegrityNotices(QueueEntryView entry,
@@ -2392,6 +2455,11 @@ public partial class MainWindow : Window
 
     private async Task<FtpRemoteSession> RentWorkerAsync(ConnectionProfile profile, CancellationToken cancellationToken)
     {
+        // Maintenance temporarily owns idle sessions. Wait for their return
+        // rather than opening extra connections while the bag is drained.
+        await _racePoolGate.WaitAsync(cancellationToken);
+        try
+        {
         await DisposeStalePooledWorkersAsync(profile);
         var pool = _workerPool.GetOrAdd(profile, _ => new ConcurrentBag<PooledWorker>());
         while (pool.TryTake(out var pooled))
@@ -2413,6 +2481,8 @@ public partial class MainWindow : Window
             await DisposeTransferWorkerAsync(session);
         }
         return await CreateTransferWorkerAsync(profile, cancellationToken);
+        }
+        finally { _racePoolGate.Release(); }
     }
 
     private async Task WarmWorkersForDirectionAsync(TransferDirection direction, int fileCount, CancellationToken cancellationToken)
@@ -2536,6 +2606,7 @@ public partial class MainWindow : Window
         var entry = _queue.FirstOrDefault(item => item.Id == id);
         _skippedTransferJobs.Remove(id);
         _hiddenRaceJobStates.Remove(id);
+        _raceJobOwners.Remove(id);
         if (entry is not null) _queue.Remove(entry);
         SaveQueue(); UpdateQueueStatus();
     }
@@ -2543,10 +2614,7 @@ public partial class MainWindow : Window
     private void ClearTransferJobs()
     {
         _raceLog.Write("QUEUE", "Queue cleared");
-        _engine.Clear();
-        _queue.Clear();
-        _skippedTransferJobs.Clear();
-        _hiddenRaceJobStates.Clear();
+        foreach (var entry in _queue.Where(entry => !entry.VisionaryRace).ToArray()) RemoveTransferJob(entry.Id);
         SaveQueue(); UpdateQueueStatus();
     }
 
@@ -2586,7 +2654,7 @@ public partial class MainWindow : Window
         catch (IOException) { }
     }
 
-    private void UpdateQueueStatus() => QueueStatus.Text = $"{_queue.Count(entry => entry.State is "Queued" or "Transferring")} queued";
+    private void UpdateQueueStatus() => QueueStatus.Text = $"{_queue.Count(entry => !entry.VisionaryRace && entry.State is "Queued" or "Transferring")} queued";
 
     private void Engine_StateChanged(object? sender, EventArgs e)
     {
@@ -2606,6 +2674,13 @@ public partial class MainWindow : Window
                     if (entry.VisionaryRace) _hiddenRaceJobStates[entry.Id] = "Skipped";
                     _queue.Remove(entry);
                     _skippedTransferJobs.Remove(entry.Id);
+                    _engine.Remove(entry.Id);
+                    continue;
+                }
+                if (entry.VisionaryRace && status.State == TransferWorkState.Completed)
+                {
+                    _hiddenRaceJobStates[entry.Id] = "Completed";
+                    _queue.Remove(entry);
                     _engine.Remove(entry.Id);
                     continue;
                 }
@@ -2647,6 +2722,11 @@ public partial class MainWindow : Window
     protected override async void OnClosed(EventArgs e)
     {
         SaveWindowLayout();
+        _racePoolTimer.Stop();
+        _workerPoolShuttingDown = true;
+        _racePoolStop.Cancel();
+        await _racePoolGate.WaitAsync();
+        _racePoolGate.Release();
         _legendTimer.Stop();
         _raceLogTimer.Stop();
         _trayIcon.Visible = false;
@@ -2689,7 +2769,7 @@ public partial class MainWindow : Window
     private void StartQueue_Click(object sender, RoutedEventArgs e)
     {
         var snapshot = _engine.Snapshot().ToDictionary(status => status.Item.Id);
-        var candidates = _queue.Where(item => item.State is "Queued" or "Paused" or "Failed").ToList();
+        var candidates = _queue.Where(item => !item.VisionaryRace && item.State is "Queued" or "Paused" or "Failed").ToList();
         ScheduleBatch(candidates.Where(entry => !snapshot.ContainsKey(entry.Id)));
         _engine.Resume(candidates.Where(entry => snapshot.TryGetValue(entry.Id, out var status) &&
             status.State is TransferWorkState.Paused or TransferWorkState.Failed).Select(entry => entry.Id));
@@ -3146,6 +3226,14 @@ public partial class MainWindow : Window
 
     private async Task RestartApiServerAsync()
     {
+        if (!_settings.EnableVisionaryBridge)
+        {
+            var idleRaceSites = _raceReadySites.Keys.ToArray();
+            _raceReadySites.Clear();
+            await _racePoolGate.WaitAsync();
+            try { foreach (var id in idleRaceSites) await DisposePooledWorkersAsync(id); }
+            finally { _racePoolGate.Release(); }
+        }
         if (_apiServer is not null) { await _apiServer.DisposeAsync(); _apiServer = null; }
         if (!_settings.EnableHttpsApi && !_settings.EnableVisionaryBridge) return;
         try
@@ -3180,6 +3268,15 @@ public partial class MainWindow : Window
 
     private string? RaceJobState(Guid id) => _queue.FirstOrDefault(entry => entry.Id == id)?.State ?? _hiddenRaceJobStates.GetValueOrDefault(id);
 
+    private void ForgetRaceJobs(VisionaryRaceState race)
+    {
+        foreach (var id in _raceJobOwners.Where(pair => ReferenceEquals(pair.Value, race)).Select(pair => pair.Key).ToArray())
+        {
+            _hiddenRaceJobStates.Remove(id);
+            _raceJobOwners.Remove(id);
+        }
+    }
+
     private async Task<bool> RunVisionaryStepAsync(ApiTransferRequest request, VisionaryRaceState race, CancellationToken token)
     {
         try
@@ -3191,7 +3288,7 @@ public partial class MainWindow : Window
             if (finished || !race.SourceAvailable)
             {
                 RaceDestinationLease.Release(race);
-                await Dispatcher.InvokeAsync(() => { foreach (var id in race.Jobs) _hiddenRaceJobStates.Remove(id); });
+                await Dispatcher.InvokeAsync(() => ForgetRaceJobs(race));
             }
             return finished;
         }
@@ -3203,6 +3300,7 @@ public partial class MainWindow : Window
                 foreach (var id in race.Jobs.ToArray())
                     if (_queue.FirstOrDefault(item => item.Id == id) is { State: not "Completed" } entry)
                         RemoveTransferJob(entry.Id);
+                ForgetRaceJobs(race);
             });
             throw;
         }
@@ -3232,6 +3330,16 @@ public partial class MainWindow : Window
             ?? throw new KeyNotFoundException($"Site {request.DstSite} was not found.");
         if (race is not null && sourceProfile.Id == destinationProfile.Id)
             throw new ArgumentException("A VISIONARY race needs different source and destination sites.");
+        if (race is not null && _settings.EnableVisionaryBridge)
+        {
+            var needsWarmup = false;
+            foreach (var profile in new[] { sourceProfile, destinationProfile }.Select(ApplyGlobalProxy))
+            {
+                if (!_raceReadySites.TryGetValue(profile.Id, out var ready) || ready != profile) needsWarmup = true;
+                _raceReadySites[profile.Id] = profile;
+            }
+            if (needsWarmup) await MaintainRaceSlotsAsync(_racePoolStop.Token);
+        }
         foreach (var profile in new[] { sourceProfile, destinationProfile })
         {
             var options = profile.EffectiveOptions;
@@ -3301,7 +3409,7 @@ public partial class MainWindow : Window
         var queuedEntries = selectedFiles.OrderBy(file => PriorityRank(file.Entry.Name, file.Entry.FullPath))
             .ThenBy(file => file.Entry.Name, NaturalNameComparer.Instance)
             .Select(file => AddQueue(file.Entry.Name, file.Entry.FullPath, file.Destination, TransferDirection.ApiFxp,
-                file.Entry.Size ?? 0, sourceProfile.Id, destinationProfile.Id, persist: false)).ToList();
+                file.Entry.Size ?? 0, sourceProfile.Id, destinationProfile.Id, persist: false, visionaryRace: race is not null)).ToList();
         jobIds.AddRange(queuedEntries.Select(entry => entry.Id));
         foreach (var entry in queuedEntries)
         {
@@ -3311,6 +3419,7 @@ public partial class MainWindow : Window
                 var original = selectedFiles.First(file => file.Entry.FullPath == entry.Source).Entry;
                 race.Track(entry.Source, original.Size, original.ModifiedAt, entry.Id);
                 entry.VisionaryRace = true;
+                _raceJobOwners[entry.Id] = race;
             }
         }
         queued = queuedEntries.Count;
@@ -3404,7 +3513,7 @@ public partial class MainWindow : Window
         if (_engine.Snapshot().Any(status => status.Item.Id == id)) _engine.Resume(id); else Schedule(entry);
     }
 
-    private IReadOnlyList<TransferJobInfo> GetTransferJobs() => _queue.Select(entry =>
+    private IReadOnlyList<TransferJobInfo> GetTransferJobs() => _queue.Where(entry => !entry.VisionaryRace).Select(entry =>
     {
         var remoteToRemote = entry.Direction is TransferDirection.RelayLeftToRight or TransferDirection.RelayRightToLeft or TransferDirection.ApiFxp;
         var direction = entry.Direction switch

@@ -2,6 +2,12 @@
 
 All notable FluxFTP changes are documented here.
 
+## 1.0.79 — 2026-10-12
+
+- VISIONARY bridge races prewarm each participating site's configured total transfer slots on first use. Idle connections receive NOOP keepalives every 15 seconds and failed idle slots are replenished; active transfers retain exclusive ownership of their connections.
+- Bridge race jobs run internally without appearing in Transfer queue or Transfer Jobs. RACE logs, scheduling, verification and session/all-time counters remain active. Clearing or starting the visible queue does not control hidden races.
+- Disabling the bridge releases its idle transfer pools; shutdown cancels pool maintenance. Completed internal jobs retain only temporary state until their race ends.
+
 ## 1.0.78 — 2026-10-12
 
 - RACE-Log updates every second and follows new events after text layout completes. Follow live defaults to enabled for the active log.
