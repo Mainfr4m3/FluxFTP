@@ -1986,12 +1986,14 @@ public partial class MainWindow : Window
                     destinationSession.FxpProtection == FxpProtectionMode.Clear;
                 var directFxpAvailable = sourceProfile.Protocol != TransferProtocol.Sftp &&
                     destinationProfile.Protocol != TransferProtocol.Sftp &&
-                    (clearFxp || destinationSession.Capabilities.Contains("CPSV") ||
+                    (clearFxp || sourceSession.Capabilities.Contains("CPSV") || destinationSession.Capabilities.Contains("CPSV") ||
                     (sourceSession.Capabilities.Contains("SSCN") && destinationSession.Capabilities.Contains("SSCN")));
                 var pair = (Source: sourceProfile.Id, Destination: destinationProfile.Id);
                 var configuredReverse = PreferredReverseFxp(sourceProfile, destinationProfile);
                 var learnedReverse = configuredReverse is null && _reverseFxpPairs.Contains(pair);
-                var useReverse = clearFxp && (configuredReverse ?? learnedReverse);
+                var sourceCpsvPreferred = !clearFxp && sourceSession.Capabilities.Contains("CPSV") &&
+                    (sourceProfile.EffectiveOptions.NeedsPret || !destinationSession.Capabilities.Contains("CPSV"));
+                var useReverse = configuredReverse ?? (learnedReverse || sourceCpsvPreferred);
                 if (directFxpAvailable)
                 {
                     try
@@ -2004,17 +2006,19 @@ public partial class MainWindow : Window
                         {
                             if (useReverse)
                             {
-                                var routeSource = configuredReverse == true ? "configured" : "learned";
-                                LogText.AppendText($"{Environment.NewLine}Using {routeSource} PASV/PORT route for {sourceProfile.Name} → {destinationProfile.Name}: {entry.Name}");
+                                var routeSource = configuredReverse == true ? "configured" : learnedReverse ? "learned" : "source CPSV preferred";
+                                LogText.AppendText($"{Environment.NewLine}Using {routeSource} source-passive FXP route for {sourceProfile.Name} → {destinationProfile.Name}: {entry.Name}");
                                 await sourceSession.FxpToAsync(destinationSession, entry.Source, entry.Destination,
                                     cancellationToken, reverseDataConnection: true);
                             }
                             else
                             {
                                 try { await sourceSession.FxpToAsync(destinationSession, entry.Source, entry.Destination, cancellationToken); }
-                                catch (FtpCommandException exception) when (clearFxp && exception.StatusCode == 425)
+                                catch (FtpCommandException exception) when (exception.StatusCode == 425 && configuredReverse is null &&
+                                    (clearFxp || sourceSession.Capabilities.Contains("CPSV") ||
+                                    sourceSession.Capabilities.Contains("SSCN") && destinationSession.Capabilities.Contains("SSCN")))
                                 {
-                                    LogText.AppendText($"{Environment.NewLine}Standard clear FXP timed out; retrying with source PASV and destination PORT: {entry.Name}");
+                                    LogText.AppendText($"{Environment.NewLine}Standard FXP returned 425; retrying with source passive and destination PORT, preserving data protection: {entry.Name}");
                                     await sourceSession.RetryFxpWithReversedTopologyAsync(
                                         destinationSession, entry.Source, entry.Destination, cancellationToken);
                                     if (_reverseFxpPairs.Add(pair)) _fxpRouteStore.SaveReverseRoutes(_reverseFxpPairs);

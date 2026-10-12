@@ -287,10 +287,28 @@ public sealed class FtpRemoteSession : IRemoteSession
             destination.PrepareDataCommandAsync($"STOR {destinationFile}", cancellationToken)));
         if (reverseDataConnection)
         {
-            if (!clearFxp) throw new NotSupportedException("Reversed FXP topology is currently available for clear FXP only.");
-            FtpResponse sourcePassive;
+            FtpResponse sourcePassive = new(0, "");
             (string Host, int Port) sourceAdvertised;
-            if (_profile!.EffectiveOptions.CeprSupported)
+            if (secureFxp)
+            {
+                if (Capabilities.Contains("CPSV"))
+                {
+                    sourcePassive = await MeasureFxpStageAsync("CPSV", () => FxpCommandAsync("CPSV", cancellationToken));
+                    usedCpsv = sourcePassive.Code == 227;
+                    if (!usedCpsv && !(Capabilities.Contains("SSCN") && destination.Capabilities.Contains("SSCN")))
+                        throw new FtpCommandException(sourcePassive.Code, sourcePassive.Message);
+                }
+                if (!usedCpsv)
+                {
+                    if (!(Capabilities.Contains("SSCN") && destination.Capabilities.Contains("SSCN")))
+                        throw new NotSupportedException("Secure source-passive FXP requires source CPSV or SSCN on both sites.");
+                    sourcePassive = await MeasureFxpStageAsync("PASV", () => FxpCommandAsync("PASV", cancellationToken));
+                }
+                // Preserve the CPSV endpoint; never substitute the master's control address for a slave address.
+                EnsureSuccess(sourcePassive, 227);
+                sourceAdvertised = ParsePassiveEndpoint(sourcePassive.Message);
+            }
+            else if (_profile!.EffectiveOptions.CeprSupported)
             {
                 sourcePassive = await MeasureFxpStageAsync("EPSV", () => FxpCommandAsync("EPSV", cancellationToken));
                 if (sourcePassive.Code == 229)
@@ -311,9 +329,25 @@ public sealed class FtpRemoteSession : IRemoteSession
                 EnsureSuccess(sourcePassive, 227);
                 sourceAdvertised = ParsePassiveEndpoint(sourcePassive.Message);
             }
+            if (secureFxp && usedCpsv)
+            {
+                // The passive source acts as TLS client; the active destination is TLS server.
+                if (destination.Capabilities.Contains("SSCN"))
+                {
+                    var role = await destination.FxpCommandAsync("SSCN OFF", cancellationToken);
+                    if (role.Code != 200 && !IsSscnRoleReply(role)) throw new FtpCommandException(role.Code, role.Message);
+                }
+            }
+            else if (secureFxp)
+            {
+                var roles = await MeasureFxpStageAsync("SSCN", async () => await Task.WhenAll(
+                    FxpCommandAsync("SSCN OFF", cancellationToken), destination.FxpCommandAsync("SSCN ON", cancellationToken)));
+                foreach (var role in roles)
+                    if (role.Code is < 200 or >= 300) throw new FtpCommandException(role.Code, role.Message);
+            }
             await MeasureFxpStageAsync("PORT", () =>
                 ConfigureActiveFxpEndpointAsync(destination, sourceAdvertised, cancellationToken));
-            LastFxpNegotiation = "PASV/PORT (reverse)";
+            LastFxpNegotiation = secureFxp ? usedCpsv ? "source CPSV / destination PORT" : "source PASV / destination SSCN+PORT" : "PASV/PORT (reverse)";
             await StartAndCompleteFxpAsync(destination, sourceFile, destinationFile, cancellationToken);
             return;
         }
