@@ -968,6 +968,11 @@ public sealed class FtpRemoteSession : IRemoteSession
 
     private async Task PrepareDataCommandAsync(string command, CancellationToken cancellationToken)
     {
+        // Pooled sessions and legacy profiles may be in ASCII mode. Require
+        // binary mode on both FXP peers and every client transfer before PRET.
+        if (command.StartsWith("RETR ", StringComparison.OrdinalIgnoreCase) ||
+            command.StartsWith("STOR ", StringComparison.OrdinalIgnoreCase))
+            EnsureSuccess(await FxpCommandAsync("TYPE I", cancellationToken), 200);
         if (_profile?.EffectiveOptions.NeedsPret != true) return;
         var response = await FxpCommandAsync($"PRET {command}", cancellationToken);
         EnsureSuccess(response, 200);
@@ -1182,7 +1187,12 @@ public sealed class FtpRemoteSession : IRemoteSession
             {
                 line = await _reader.ReadLineAsync(cancellationToken) ?? throw new IOException("FTP server closed the connection.");
                 lines.Add(line);
-                EmitReply($"< {line}");
+                // STAT listings still feed the directory parser, but their rows
+                // belong in protocol details rather than the connection log.
+                if (code is 211 or 212 or 213 && LooksLikeListEntry(line.Trim()))
+                    ProtocolDetailMessage?.Invoke($"< {line}");
+                else
+                    EmitReply($"< {line}");
             }
             while (!line.StartsWith(terminator, StringComparison.Ordinal));
         }

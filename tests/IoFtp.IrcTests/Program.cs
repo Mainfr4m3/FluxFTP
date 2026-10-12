@@ -8,8 +8,16 @@ using IoFtp.Desktop.Models;
 using IoFtp.Desktop.Services;
 
 var assertions = 0;
-if (args.FirstOrDefault() == "--delete-checks") { await RemoteDeletionChecks.Run(); return; }
-if (args.FirstOrDefault() == "--path-editor-checks") { PathEditorChecks.Run(args[1]); return; }
+if (args.FirstOrDefault() == "--path-editor-checks")
+{
+    PathEditorChecks.Run(args[1]);
+    return;
+}
+if (args.FirstOrDefault() == "--delete-checks")
+{
+    await RemoteDeletionChecks.Run();
+    return;
+}
 if (args.FirstOrDefault() == "--fxp-monitor-checks")
 {
     FxpSpeedChecks.Run();
@@ -20,6 +28,11 @@ if (args.FirstOrDefault() == "--file-priority-checks")
 {
     await TransferFilePriorityChecks.Run();
     GlobalSettingsChecks.Run();
+    return;
+}
+if (args.FirstOrDefault() == "--binary-mode-checks")
+{
+    await BinaryModeChecks.Run();
     return;
 }
 if (args.FirstOrDefault() == "--race-listing-checks")

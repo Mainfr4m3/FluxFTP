@@ -7,6 +7,7 @@ internal static class LocalTransferChecks
 {
     public static async Task Run()
     {
+        await LocalDownloadChecks.Run();
         var executor = new Executor();
         await using var engine = new GlobalTransferEngine(executor);
         var a = Guid.NewGuid(); var b = Guid.NewGuid();

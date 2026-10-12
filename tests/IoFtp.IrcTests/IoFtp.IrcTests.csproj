@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../../src/IoFtp.Desktop/Services/LocalDownload.cs" Link="LocalDownload.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/FxpSpeedParser.cs" Link="FxpSpeedParser.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/FxpProgressProbe.cs" Link="FxpProgressProbe.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/RemoteDeletion.cs" Link="RemoteDeletion.cs" />

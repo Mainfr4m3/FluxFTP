@@ -40,7 +40,7 @@ public partial class ConnectionDialog : Window
             HostBox.Text = string.Join(' ', profile.EffectiveAddresses.Select(address => address.ToString()));
             PortBox.Text = profile.Port.ToString();
             GhostLoginBox.IsChecked = profile.Username.StartsWith('/');
-            UsernameBox.Text = profile.Username.TrimStart('/');
+            UsernameBox.Text = profile.Username;
             PasswordBox.Password = profile.Password;
             RemotePathBox.Text = profile.EffectiveOptions.BasePath;
             AllowInvalidCertificateBox.IsChecked = profile.AllowInvalidCertificate;
@@ -57,6 +57,17 @@ public partial class ConnectionDialog : Window
             _options = new SiteOptions(defaults.DefaultSlots, defaults.DefaultUploadSlots, defaults.DefaultDownloadSlots,
                 MaxIdleSeconds: defaults.DefaultIdleSeconds);
         }
+        GhostLoginBox.IsChecked = UsernameBox.Text.StartsWith('/');
+        // Only an explicit click may change the username. Saving other site
+        // details must not silently recreate a prefix the user removed.
+        GhostLoginBox.Click += (_, _) =>
+        {
+            var username = UsernameBox.Text.Trim();
+            UsernameBox.Text = GhostLoginBox.IsChecked == true
+                ? (username.Length > 0 && !username.StartsWith('/') ? "/" + username : username)
+                : username.TrimStart('/');
+        };
+        UsernameBox.TextChanged += (_, _) => GhostLoginBox.IsChecked = UsernameBox.Text.StartsWith('/');
         Loaded += (_, _) => HostBox.Focus();
     }
 
@@ -98,9 +109,6 @@ public partial class ConnectionDialog : Window
         var options = (_options ?? new SiteOptions()) with { BasePath = remotePath };
         var primary = addresses[0];
         var username = UsernameBox.Text.Trim();
-        var killGhost = GhostLoginBox.IsChecked == true || username.StartsWith('/');
-        username = username.TrimStart('/');
-        if (killGhost && username.Length > 0) username = "/" + username;
         Profile = new ConnectionProfile(_id, name, primary.Host, primary.Port, username, ((ProtocolChoice)ProtocolBox.SelectedItem).Protocol,
             PasswordBox.Password, AllowInvalidCertificateBox.IsChecked == true, listingMode, options, _proxy,
             AlternateAddresses: string.Join(' ', addresses.Skip(1).Select(address => address.ToString())), Description: DescriptionBox.Text.Trim(),

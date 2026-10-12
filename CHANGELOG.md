@@ -2,6 +2,16 @@
 
 All notable FluxFTP changes are documented here.
 
+## 1.0.65 — 2026-10-12
+
+- Connection Log omits directory rows from successful multiline STAT replies. Reply headers, completion lines and errors remain visible; full listing data remains available to the directory parser and protocol details.
+
+## 1.0.64 — 2026-10-12
+
+- Local FTP, FTPS and SFTP downloads run their data loop and filesystem operations on a background thread to keep the interface responsive.
+- Local downloads use `filename.FLUXFTP.PART` until completion. Interrupted downloads retain this file for resuming; successful downloads replace the final destination only after the stream is closed.
+- FTP binary mode is reaffirmed before each RETR/STOR file transfer.
+
 ## 1.0.63 — 2026-10-09
 
 - IRC Add-ons collects IRC settings, VISIONARY and bridge integrations in one window. IRC settings can be saved directly from this window.

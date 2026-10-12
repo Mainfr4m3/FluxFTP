@@ -16,7 +16,7 @@ public partial class SiteOptionsWindow : Window
         MaxSlotsBox.Text = options.MaxSlots.ToString(); UploadSlotsBox.Text = options.MaxUploadSlots.ToString(); DownloadSlotsBox.Text = options.MaxDownloadSlots.ToString();
         PriorityBox.Text = options.Priority.ToString(); AllowUploadBox.IsChecked = options.AllowUpload; AllowDownloadBox.IsChecked = options.AllowDownload;
         StayLoggedInBox.IsChecked = options.StayLoggedIn; BasePathBox.Text = options.BasePath; TlsTransfersBox.IsChecked = options.PreferTlsTransfers;
-        BinaryModeBox.IsChecked = options.ForceBinaryMode; IdleBox.Text = options.MaxIdleSeconds.ToString();
+        BinaryModeBox.IsChecked = true; IdleBox.Text = options.MaxIdleSeconds.ToString();
         SecureListingsBox.IsChecked = options.SecureFileListings;
         NeedsPretBox.IsChecked = options.NeedsPret;
         CeprBox.IsChecked = options.CeprSupported;

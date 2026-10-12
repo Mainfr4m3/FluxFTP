@@ -1788,17 +1788,11 @@ public partial class MainWindow : Window
             else if (entry.Direction is TransferDirection.Download or TransferDirection.DownloadFromLeft or TransferDirection.ApiDownload)
             {
                 var session = entry.Direction == TransferDirection.ApiDownload ? apiWorker! : entry.Direction == TransferDirection.Download ? rightWorker! : leftWorker!;
-                var partial = entry.Destination + ".ioftp-part";
-                Directory.CreateDirectory(Path.GetDirectoryName(entry.Destination)!);
-                await using (var output = new FileStream(partial, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None, 64 * 1024, true))
-                {
-                    output.Seek(0, SeekOrigin.End);
-                    entry.BytesTransferred = output.Length;
-                await session.DownloadAsync(entry.Source, output, output.Length, progress, cancellationToken);
-                    AppendTransferIntegrityNotices(entry, ("source", session));
-                    await output.FlushAsync(cancellationToken);
-                }
-                File.Move(partial, entry.Destination, true);
+                var source = entry.Source;
+                await LocalDownload.RunAsync(entry.Destination,
+                    (output, offset) => session.DownloadAsync(source, output, offset, progress, cancellationToken),
+                    progress, cancellationToken);
+                AppendTransferIntegrityNotices(entry, ("source", session));
             }
             else if (entry.Direction is TransferDirection.Upload or TransferDirection.UploadToLeft)
             {
