@@ -2,6 +2,12 @@
 
 All notable FluxFTP changes are documented here.
 
+## 1.0.76 — 2026-10-12
+
+- Failed jobs are logged and removed from the transfer queue after execution ends. RACE retains hidden skipped state so removed failures are not retried or mistaken for user cancellation.
+- Global Settings > FXP can automatically skip existing targets smaller than, equal to or larger than the source. All three default to enabled and apply to new FXP/relay attempts, including RACE; unknown sizes retain normal transfer behavior.
+- Skipped targets are logged, removed from the queue and excluded from completed-transfer byte totals. RACE does not verify skipped payloads as downloaded files.
+
 ## 1.0.75 — 2026-10-12
 
 - IRC admin verification recognizes the standard ioFTPD SITE USER table with UserName and Flags on the same row. Successful replies still require exactly one recognized flags field containing 1 or M; taglines, ambiguous fields and error replies remain rejected.

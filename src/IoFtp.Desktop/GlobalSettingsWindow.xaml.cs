@@ -32,6 +32,9 @@ public partial class GlobalSettingsWindow : Window
         SerializeLocalBox.IsChecked = s.SerializeLocalTransfers;
         FxpSpeedMonitoringBox.IsChecked = s.EnableFxpSpeedMonitoring;
         DownloadMeasurementBox.IsChecked = s.EnableDownloadMeasurement;
+        SkipSmallerTargetBox.IsChecked = s.FxpSkipSmallerTarget;
+        SkipSameTargetBox.IsChecked = s.FxpSkipSameTarget;
+        SkipLargerTargetBox.IsChecked = s.FxpSkipLargerTarget;
         PriorityPatternsBox.Text=s.PriorityPatterns;
         foreach (var category in TransferFilePriority.Categories(s.TransferCategoryOrder)) PriorityCategoriesList.Items.Add(category);
         PriorityCategoriesList.SelectedIndex = 0;
@@ -67,7 +70,10 @@ public partial class GlobalSettingsWindow : Window
         Settings = Settings with { EnableVisionaryBridge = _visionaryBridge, SerializeLocalTransfers = SerializeLocalBox.IsChecked == true,
             TransferCategoryOrder = string.Join("\n", PriorityCategoriesList.Items.Cast<string>()),
             EnableFxpSpeedMonitoring = FxpSpeedMonitoringBox.IsChecked == true, Layout = layout, MetadataSkipDefaultsApplied = true, VideoMetadataSkipDefaultsApplied = true,
-            EnableDownloadMeasurement = DownloadMeasurementBox.IsChecked == true };
+            EnableDownloadMeasurement = DownloadMeasurementBox.IsChecked == true,
+            FxpSkipSmallerTarget = SkipSmallerTargetBox.IsChecked == true,
+            FxpSkipSameTarget = SkipSameTargetBox.IsChecked == true,
+            FxpSkipLargerTarget = SkipLargerTargetBox.IsChecked == true };
         try { new GlobalSettingsStore().Save(Settings); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException)
         { Settings = null; ErrorText.Text = "Could not save settings to disk. Check write access and free space; your edits are still here. Please try Save again."; return; }

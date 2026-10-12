@@ -40,6 +40,8 @@ public partial class MainWindow : Window
     private string _leftRemoteDirectory = "/";
     private string _remoteDirectory = "/";
     private readonly ObservableCollection<QueueEntryView> _queue = [];
+    private readonly Dictionary<Guid, string> _hiddenRaceJobStates = [];
+    private readonly HashSet<Guid> _skippedTransferJobs = [];
     private readonly GlobalTransferEngine _engine;
     private readonly GlobalSettingsStore _settingsStore = new();
     private readonly WindowLayoutStore _layoutStore = new();
@@ -1917,6 +1919,25 @@ public partial class MainWindow : Window
                 var destinationProfile = entry.Direction == TransferDirection.ApiFxp ? apiFxpDestination! :
                     entry.Direction == TransferDirection.RelayLeftToRight ? rightProfile! : leftProfile!;
                 await EnsureRemoteDirectoryAsync(destinationSession, RemoteParent(entry.Destination), cancellationToken);
+                if (sourceProfile.Protocol != TransferProtocol.Sftp && destinationProfile.Protocol != TransferProtocol.Sftp &&
+                    (_settings.FxpSkipSmallerTarget || _settings.FxpSkipSameTarget || _settings.FxpSkipLargerTarget))
+                {
+                    var targetSize = await destinationSession.GetSizeAsync(entry.Destination, cancellationToken);
+                    if (targetSize is not null)
+                    {
+                        var sourceSize = await sourceSession.GetSizeAsync(entry.Source, cancellationToken);
+                        if (FxpExistingFilePolicy.ShouldSkip(_settings, sourceSize, targetSize))
+                        {
+                            var reason = $"Existing target auto skipped: {entry.Name}; source={sourceSize} bytes, target={targetSize} bytes.";
+                            LogText.AppendText(Environment.NewLine + reason);
+                            _raceLog.Write("SKIP", reason);
+                            entry.State = "Skipped";
+                            _skippedTransferJobs.Add(entry.Id);
+                            reuseWorkers = true;
+                            return;
+                        }
+                    }
+                }
                 var clearFxp = !sourceSession.UsesTlsControl || !destinationSession.UsesTlsControl ||
                     sourceSession.FxpProtection == FxpProtectionMode.Clear ||
                     destinationSession.FxpProtection == FxpProtectionMode.Clear;
@@ -2513,6 +2534,8 @@ public partial class MainWindow : Window
         _raceLog.Write("QUEUE", $"Removed job {id}");
         _engine.Remove(id);
         var entry = _queue.FirstOrDefault(item => item.Id == id);
+        _skippedTransferJobs.Remove(id);
+        _hiddenRaceJobStates.Remove(id);
         if (entry is not null) _queue.Remove(entry);
         SaveQueue(); UpdateQueueStatus();
     }
@@ -2522,6 +2545,8 @@ public partial class MainWindow : Window
         _raceLog.Write("QUEUE", "Queue cleared");
         _engine.Clear();
         _queue.Clear();
+        _skippedTransferJobs.Clear();
+        _hiddenRaceJobStates.Clear();
         SaveQueue(); UpdateQueueStatus();
     }
 
@@ -2533,8 +2558,15 @@ public partial class MainWindow : Window
             if (source is null) return;
             var saved = JsonSerializer.Deserialize<List<QueueSnapshot>>(File.ReadAllText(source)) ?? [];
             foreach (var item in saved)
+            {
+                if (item.State is "Failed" or "Skipped")
+                {
+                    _raceLog.Write("SKIP", $"Discarded saved {item.State} job: {item.Id} {item.Name}");
+                    continue;
+                }
                 _queue.Add(new QueueEntryView(item.Name, item.Source, item.Destination, item.Direction, item.Id == Guid.Empty ? Guid.NewGuid() : item.Id)
                 { State = item.State is "Completed" ? "Completed" : "Paused", BytesTransferred = item.BytesTransferred, TotalBytes = item.TotalBytes, SourceProfileId = item.SourceProfileId, DestinationProfileId = item.DestinationProfileId, QueuedAt = item.QueuedAt, StartedAt = item.StartedAt, RuleSection = item.RuleSection, RuleRelease = item.RuleRelease });
+            }
             UpdateQueueStatus();
             if (source == _oldQueuePath) SaveQueue();
         }
@@ -2564,6 +2596,19 @@ public partial class MainWindow : Window
             foreach (var status in _engine.Snapshot())
             {
                 if (!queueById.TryGetValue(status.Item.Id, out var entry)) continue;
+                if (status.State == TransferWorkState.Failed || status.State == TransferWorkState.Completed && _skippedTransferJobs.Contains(entry.Id))
+                {
+                    if (status.State == TransferWorkState.Failed)
+                    {
+                        LogText.AppendText(Environment.NewLine + $"Failed job skipped and removed: {entry.Name} ({status.Error}).");
+                        _raceLog.Write("SKIP", $"Failed job removed: {entry.Id} {entry.Name}; {status.Error}");
+                    }
+                    if (entry.VisionaryRace) _hiddenRaceJobStates[entry.Id] = "Skipped";
+                    _queue.Remove(entry);
+                    _skippedTransferJobs.Remove(entry.Id);
+                    _engine.Remove(entry.Id);
+                    continue;
+                }
                 entry.State = status.State switch
                 {
                     TransferWorkState.Queued => "Queued", TransferWorkState.Running => "Transferring",
@@ -3133,6 +3178,8 @@ public partial class MainWindow : Window
 
     private Task<object> StartApiTransferAsync(ApiTransferRequest request) => StartApiTransferCoreAsync(request);
 
+    private string? RaceJobState(Guid id) => _queue.FirstOrDefault(entry => entry.Id == id)?.State ?? _hiddenRaceJobStates.GetValueOrDefault(id);
+
     private async Task<bool> RunVisionaryStepAsync(ApiTransferRequest request, VisionaryRaceState race, CancellationToken token)
     {
         try
@@ -3140,8 +3187,12 @@ public partial class MainWindow : Window
             token.ThrowIfCancellationRequested();
             RaceDestinationLease.Acquire(request.DstSite!, request.DstSection ?? request.DstPath ?? "/", request.Name!, race);
             await StartApiTransferCoreAsync(request, race, token);
-            var finished = await Dispatcher.InvokeAsync(() => race.DestinationVerified && race.Finished(id => _queue.FirstOrDefault(item => item.Id == id)?.State));
-            if (finished || !race.SourceAvailable) RaceDestinationLease.Release(race);
+            var finished = await Dispatcher.InvokeAsync(() => race.DestinationVerified && race.Finished(RaceJobState));
+            if (finished || !race.SourceAvailable)
+            {
+                RaceDestinationLease.Release(race);
+                await Dispatcher.InvokeAsync(() => { foreach (var id in race.Jobs) _hiddenRaceJobStates.Remove(id); });
+            }
             return finished;
         }
         catch
@@ -3246,7 +3297,7 @@ public partial class MainWindow : Window
         timeout.Token.ThrowIfCancellationRequested();
         race?.EndListing();
         var selectedFiles = apiFiles.Where(file => race is null || race.NeedsTransfer(file.Entry.FullPath, file.Entry.Size,
-            file.Entry.ModifiedAt, id => _queue.FirstOrDefault(entry => entry.Id == id)?.State)).ToList();
+            file.Entry.ModifiedAt, RaceJobState)).ToList();
         var queuedEntries = selectedFiles.OrderBy(file => PriorityRank(file.Entry.Name, file.Entry.FullPath))
             .ThenBy(file => file.Entry.Name, NaturalNameComparer.Instance)
             .Select(file => AddQueue(file.Entry.Name, file.Entry.FullPath, file.Destination, TransferDirection.ApiFxp,
@@ -3264,12 +3315,12 @@ public partial class MainWindow : Window
         }
         queued = queuedEntries.Count;
         ScheduleBatch(queuedEntries);
-        if (race is not null && race.Finished(id => _queue.FirstOrDefault(entry => entry.Id == id)?.State))
+        if (race is not null && race.Finished(RaceJobState))
         {
             await using var targetSession = new FtpRemoteSession();
             await targetSession.ConnectAsync(ApplyGlobalProxy(destinationProfile), timeout.Token);
             var verified = true;
-            foreach (var directory in apiFiles.GroupBy(file => RemoteParent(file.Destination)))
+            foreach (var directory in apiFiles.Where(file => !race.IsSkipped(file.Entry.FullPath, RaceJobState)).GroupBy(file => RemoteParent(file.Destination)))
             {
                 try
                 {

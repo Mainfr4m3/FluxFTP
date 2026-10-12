@@ -47,7 +47,10 @@ public sealed record GlobalSettings(
     Dictionary<string, ViewLayoutSettings>? Layout = null,
     bool MetadataSkipDefaultsApplied = false,
     bool VideoMetadataSkipDefaultsApplied = false,
-    bool EnableDownloadMeasurement = false);
+    bool EnableDownloadMeasurement = false,
+    bool FxpSkipSmallerTarget = true,
+    bool FxpSkipSameTarget = true,
+    bool FxpSkipLargerTarget = true);
 
 public sealed record ViewLayoutSettings(string[]? HiddenColumns = null, string SortBy = "Name",
     bool Descending = false, string FontFamily = "", double FontSize = 0, bool Bold = false);

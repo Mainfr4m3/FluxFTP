@@ -22,6 +22,11 @@ internal static class VisionaryRaceChecks
         var second = Queue(20); states[second] = "Completed";
         Check(!race.NeedsTransfer("/release/a.rar", 20, null, Status), "stable file is not repeated during race");
         Check(!race.Finished(Status), "empty/missing marker never ends race");
+        var skippedRace = new VisionaryRaceState(new());
+        var skippedJob = Guid.NewGuid();
+        skippedRace.Track("/release/started.rar", 10, null, skippedJob);
+        Check(!skippedRace.NeedsTransfer("/release/started.rar", 20, null, _ => "Skipped"), "skipped job is not retried after growth");
+        Check(skippedRace.IsSkipped("/release/started.rar", _ => "Skipped"), "skipped destination is excluded from verification");
         RemoteEntry Marker(string name) => new(name, "/release/" + name, false, 0, null);
         Check(VisionaryRaceState.IsVerificationMetadata(Marker("release.r00-MISSING")), "hyphen missing marker is not payload");
         Check(!VisionaryRaceState.IsVerificationMetadata(Marker("release.r00")), "zero-byte growing payload remains eligible");

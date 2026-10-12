@@ -96,6 +96,7 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
         if (!_files.TryGetValue(path, out var prior)) return true;
         var state = status(prior.Job);
         if (state is null or "Cancelled") throw new OperationCanceledException("A race job was removed or cancelled.");
+        if (state == "Skipped") return false;
         if (state == "Failed")
         {
             // An unfinished source can be preallocated and unchanged in size.
@@ -118,6 +119,7 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
         _files[path] = new(job, size, modified, final, attempts);
     }
 
+    public bool IsSkipped(string path, Func<Guid, string?> status) => _files.TryGetValue(path, out var file) && status(file.Job) == "Skipped";
     public bool Finished(Func<Guid, string?> status) => SourceComplete && _files.Count > 0 &&
-        _files.All(pair => IsFinal(pair.Key) && pair.Value.Final && status(pair.Value.Job) == "Completed");
+        _files.All(pair => status(pair.Value.Job) == "Skipped" || IsFinal(pair.Key) && pair.Value.Final && status(pair.Value.Job) == "Completed");
 }
