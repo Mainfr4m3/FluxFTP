@@ -47,6 +47,7 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
     public bool SourceComplete { get; set; }
     public bool SourceAvailable { get; set; }
     public bool DestinationVerified { get; set; }
+    public bool DestinationAlreadyComplete { get; set; }
     private string? _stopReason;
     public void Stop(string reason) => _stopReason ??= reason;
     public void ThrowIfStopped()

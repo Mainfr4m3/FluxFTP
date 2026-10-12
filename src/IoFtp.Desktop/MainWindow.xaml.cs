@@ -3372,7 +3372,7 @@ public partial class MainWindow : Window
             token.ThrowIfCancellationRequested();
             RaceDestinationLease.Acquire(request.DstSite!, request.DstSection ?? request.DstPath ?? "/", request.Name!, race);
             await StartApiTransferCoreAsync(request, race, token);
-            var finished = await Dispatcher.InvokeAsync(() => race.DestinationVerified && race.Finished(RaceJobState));
+            var finished = await Dispatcher.InvokeAsync(() => race.DestinationAlreadyComplete || race.DestinationVerified && race.Finished(RaceJobState));
             if (finished || !race.SourceAvailable)
             {
                 RaceDestinationLease.Release(race);
@@ -3497,6 +3497,36 @@ public partial class MainWindow : Window
         }
         timeout.Token.ThrowIfCancellationRequested();
         race?.EndListing();
+        // Inspect raw destination listings before skip rules and before creating transfer jobs.
+        // A marker alone cannot prove that the expected payload exists at the right sizes.
+        if (race is not null && apiFiles.Count > 0 && !race.Jobs.Any())
+        {
+            try
+            {
+                var rootListing = await _raceListings.ListAsync(ApplyGlobalProxy(destinationProfile), destination, timeout.Token);
+                if (RaceDestinationVerifier.HasCompleteMarker(rootListing, race))
+                {
+                    var verified = true;
+                    foreach (var directory in apiFiles.GroupBy(file => RemoteParent(file.Destination)))
+                    {
+                        var listing = directory.Key == destination ? rootListing :
+                            await _raceListings.ListAsync(ApplyGlobalProxy(destinationProfile), directory.Key, timeout.Token);
+                        if (!RaceDestinationVerifier.Accepts(directory.Select(file => file.Entry).ToArray(), listing, race))
+                        { verified = false; break; }
+                    }
+                    if (verified)
+                    {
+                        race.DestinationAlreadyComplete = true;
+                        race.DestinationVerified = true;
+                        var message = $"VISIONARY skipped {request.Name}: {request.DstSite} already COMPLETE; destination marker and {apiFiles.Count} files verified";
+                        _raceLog.Write("SKIP", message);
+                        LogText.AppendText(Environment.NewLine + message); LogText.ScrollToEnd();
+                        return new ApiTransferStartResult(request.Name, "SKIPPED", 0, request.SrcSite, request.DstSite, jobIds);
+                    }
+                }
+            }
+            catch (FtpCommandException exception) when (exception.StatusCode == 550) { /* No readable completed destination; proceed with RACE. */ }
+        }
         var selectedFiles = apiFiles.Where(file => race is null || race.NeedsTransfer(file.Entry.FullPath, file.Entry.Size,
             file.Entry.ModifiedAt, RaceJobState)).ToList();
         var queuedEntries = selectedFiles.OrderBy(file => PriorityRank(file.Entry.Name, file.Entry.FullPath))

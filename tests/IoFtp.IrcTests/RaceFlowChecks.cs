@@ -85,6 +85,13 @@ internal static class RaceFlowChecks
         Check(!RaceDestinationVerifier.Accepts(expected, [.. expected, M("COMPLETE"), F("test.rar.missing", 0)], race), "missing overrides target complete");
         Check(!RaceDestinationVerifier.Accepts(expected, [F("test.sfv"), F("test.rar", 50), M("COMPLETE")], race), "partial size rejected");
         Check(RaceDestinationVerifier.Accepts(expected, [.. expected, M("COMPLETE")], race), "verified target accepted");
+        var ninjaMarker = M("[ioNiNJA]-(2.7GB 20F-COMPLETE)-[ioNiNJA]");
+        Check(race.IsCompletionMarker(ninjaMarker), "ioNiNJA metadata COMPLETE recognized before transfer filters");
+        Check(RaceDestinationVerifier.HasCompleteMarker([ninjaMarker], race), "ioNiNJA root marker permits payload verification");
+        Check(!RaceDestinationVerifier.HasCompleteMarker([ninjaMarker, F("test.rar-MISSING", 0)], race), "root missing marker blocks precheck even for nested payloads");
+        Check(RaceDestinationVerifier.Accepts(expected, [.. expected, ninjaMarker], race), "existing ioNiNJA complete payload can skip before queueing");
+        Check(!RaceDestinationVerifier.Accepts(expected, [F("test.sfv"), ninjaMarker], race), "complete marker with absent payload cannot skip");
+        Check(!RaceDestinationVerifier.Accepts(expected, [.. expected, ninjaMarker, F("test.rar-MISSING", 0)], race), "hyphen missing marker prevents existing-complete skip");
         Check(VisionaryRaceState.IsVerificationMetadata(F("test.rar.missing", 0)), "missing markers never copied");
         Check(VisionaryRaceState.IsVerificationMetadata(F(".ioFTPD.verified")), "ledger never copied");
         race.BeginListing();
