@@ -114,7 +114,7 @@ public partial class SiteOptionsWindow : Window
 
     private static bool TryPositive(string text, out int value) => int.TryParse(text, out value) && value > 0;
     private static bool TryNonNegative(string text, out int value) => int.TryParse(text, out value) && value >= 0;
-    private sealed record FxpProtectionChoice(FxpProtectionMode Mode, string Label);
-    private sealed record FxpDataRoleChoice(FxpDataRole Role, string Label);
+    private sealed record FxpProtectionChoice(FxpProtectionMode Mode, string Label) { public override string ToString() => Label; }
+    private sealed record FxpDataRoleChoice(FxpDataRole Role, string Label) { public override string ToString() => Label; }
     private sealed record ProxyModeChoice(ProxyType? Type, string Label);
 }

@@ -20,16 +20,22 @@ internal sealed class OpenSslTlsStream : Stream
     private const int SslCtrlSetTlsExtHostName = 55;
     private const int TlsextNameTypeHostName = 0;
     private const int SslErrorZeroReturn = 6;
+    private const int SslErrorWantRead = 2;
+    private const int SslErrorWantWrite = 3;
+    private readonly Socket _socket;
+    private readonly object _ioGate = new();
 
     private readonly Stream _transport;
     private readonly IntPtr _context;
     private readonly IntPtr _ssl;
     private bool _disposed;
+    private int _disposeStarted;
 
-    private OpenSslTlsStream(Stream transport, IntPtr context, IntPtr ssl,
+    private OpenSslTlsStream(Socket socket, Stream transport, IntPtr context, IntPtr ssl,
         string protocol, string cipher, int cipherBits, X509Certificate2? certificate)
     {
         _transport = transport;
+        _socket = socket;
         _context = context;
         _ssl = ssl;
         Protocol = protocol;
@@ -51,6 +57,8 @@ internal sealed class OpenSslTlsStream : Stream
         bool allowInvalidCertificate, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        using var cancelled = cancellationToken.Register(() => socket.Dispose());
+        Native.ERR_clear_error();
         Native.OPENSSL_init_ssl(0, IntPtr.Zero);
         var method = Native.TLS_client_method();
         var context = Native.SSL_CTX_new(method);
@@ -79,8 +87,14 @@ internal sealed class OpenSslTlsStream : Stream
             var socketValue = unchecked((int)socket.Handle.ToInt64());
             if (Native.SSL_set_fd(ssl, socketValue) != 1)
                 throw CreateException("could not attach the network socket");
-            if (Native.SSL_connect(ssl) != 1)
-                throw CreateException("TLS handshake failed");
+            while (true)
+            {
+                Native.ERR_clear_error();
+                var result = Native.SSL_connect(ssl);
+                if (result == 1) break;
+                var error = Native.SSL_get_error(ssl, result);
+                if (!WaitForRetry(socket, error, cancellationToken)) throw CreateException("TLS handshake failed", error);
+            }
 
             cancellationToken.ThrowIfCancellationRequested();
             var certificate = ReadPeerCertificate(ssl);
@@ -91,7 +105,7 @@ internal sealed class OpenSslTlsStream : Stream
             var bits = Native.SSL_CIPHER_get_bits(cipherHandle, out _);
             var cipher = Marshal.PtrToStringAnsi(Native.SSL_CIPHER_get_name(cipherHandle)) ?? "unknown";
             var protocol = Marshal.PtrToStringAnsi(Native.SSL_get_version(ssl)) ?? "TLS";
-            return new OpenSslTlsStream(transport, context, ssl, protocol, cipher, bits, certificate);
+            return new OpenSslTlsStream(socket, transport, context, ssl, protocol, cipher, bits, certificate);
         }
         catch
         {
@@ -134,32 +148,63 @@ internal sealed class OpenSslTlsStream : Stream
             throw new AuthenticationException($"OpenSSL certificate name does not match {targetHost}.");
     }
 
-    private static AuthenticationException CreateException(string operation)
+    private static bool WaitForRetry(Socket socket, int error, CancellationToken token)
     {
+        if (error is not (SslErrorWantRead or SslErrorWantWrite)) return false;
+        while (true)
+        {
+            token.ThrowIfCancellationRequested();
+            if (socket.Poll(100_000, error == SslErrorWantRead ? SelectMode.SelectRead : SelectMode.SelectWrite)) return true;
+        }
+    }
+
+    private static AuthenticationException CreateException(string operation, int? sslError = null)
+    {
+        var socketError = sslError == 5 ? Native.WSAGetLastError() : 0;
         var error = Native.ERR_get_error();
         var buffer = new byte[512];
         if (error != 0) Native.ERR_error_string_n(error, buffer, (nuint)buffer.Length);
-        var detail = error == 0 ? "unknown OpenSSL error" : System.Text.Encoding.ASCII.GetString(buffer).TrimEnd('\0');
+        var detail = error == 0 ? $"TLS/socket I/O failed (SSL_get_error={sslError?.ToString() ?? "unavailable"}, Winsock={socketError})" : System.Text.Encoding.ASCII.GetString(buffer).TrimEnd('\0');
         return new AuthenticationException($"OpenSSL {operation}: {detail}");
     }
 
     public override int Read(byte[] buffer, int offset, int count)
     {
+        lock (_ioGate) return ReadCore(buffer, offset, count, CancellationToken.None);
+    }
+
+    private int ReadCore(byte[] buffer, int offset, int count, CancellationToken token)
+    {
+        _ = buffer.AsSpan(offset, count);
+        if (count == 0) return 0;
         ObjectDisposedException.ThrowIf(_disposed, this);
         unsafe
         {
             fixed (byte* pointer = &buffer[offset])
             {
-                if (Native.SSL_read_ex(_ssl, (IntPtr)pointer, (nuint)count, out var read) == 1)
-                    return checked((int)read);
-                if (Native.SSL_get_error(_ssl, 0) == SslErrorZeroReturn) return 0;
-                throw CreateException("read failed");
+                while (true)
+                {
+                    token.ThrowIfCancellationRequested();
+                    Native.ERR_clear_error();
+                    var result = Native.SSL_read_ex(_ssl, (IntPtr)pointer, (nuint)count, out var read);
+                    if (result == 1) return checked((int)read);
+                    var error = Native.SSL_get_error(_ssl, result);
+                    if (error == SslErrorZeroReturn) return 0;
+                    if (!WaitForRetry(_socket, error, token)) throw CreateException("read failed", error);
+                }
             }
         }
     }
 
     public override void Write(byte[] buffer, int offset, int count)
     {
+        lock (_ioGate) WriteCore(buffer, offset, count, CancellationToken.None);
+    }
+
+    private void WriteCore(byte[] buffer, int offset, int count, CancellationToken token)
+    {
+        _ = buffer.AsSpan(offset, count);
+        if (count == 0) return;
         ObjectDisposedException.ThrowIf(_disposed, this);
         var written = 0;
         unsafe
@@ -168,8 +213,15 @@ internal sealed class OpenSslTlsStream : Stream
             {
                 while (written < count)
                 {
-                    if (Native.SSL_write_ex(_ssl, (IntPtr)(pointer + written), (nuint)(count - written), out var chunk) != 1)
-                        throw CreateException("write failed");
+                    token.ThrowIfCancellationRequested();
+                    Native.ERR_clear_error();
+                    var result = Native.SSL_write_ex(_ssl, (IntPtr)(pointer + written), (nuint)(count - written), out var chunk);
+                    if (result != 1)
+                    {
+                        var error = Native.SSL_get_error(_ssl, result);
+                        if (WaitForRetry(_socket, error, token)) continue;
+                        throw CreateException("write failed", error);
+                    }
                     written += checked((int)chunk);
                 }
             }
@@ -177,10 +229,20 @@ internal sealed class OpenSslTlsStream : Stream
     }
 
     public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
-        Task.Run(() => { cancellationToken.ThrowIfCancellationRequested(); return Read(buffer, offset, count); }, cancellationToken);
+        Task.Run(() =>
+        {
+            using var cancelled = cancellationToken.Register(() => _socket.Dispose());
+            try { lock (_ioGate) { cancellationToken.ThrowIfCancellationRequested(); return ReadCore(buffer, offset, count, cancellationToken); } }
+            catch (Exception) when (cancellationToken.IsCancellationRequested) { throw new OperationCanceledException(cancellationToken); }
+        }, cancellationToken);
 
     public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
-        Task.Run(() => { cancellationToken.ThrowIfCancellationRequested(); Write(buffer, offset, count); }, cancellationToken);
+        Task.Run(() =>
+        {
+            using var cancelled = cancellationToken.Register(() => _socket.Dispose());
+            try { lock (_ioGate) { cancellationToken.ThrowIfCancellationRequested(); WriteCore(buffer, offset, count, cancellationToken); } }
+            catch (Exception) when (cancellationToken.IsCancellationRequested) { throw new OperationCanceledException(cancellationToken); }
+        }, cancellationToken);
 
     public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
     {
@@ -207,13 +269,15 @@ internal sealed class OpenSslTlsStream : Stream
 
     protected override void Dispose(bool disposing)
     {
-        if (_disposed) return;
+        if (Interlocked.Exchange(ref _disposeStarted, 1) != 0) return;
         _disposed = true;
-        try { Native.SSL_shutdown(_ssl); } catch { }
+        if (disposing) _transport.Dispose();
+        lock (_ioGate)
+        {
         Native.SSL_free(_ssl);
         Native.SSL_CTX_free(_context);
         RemoteCertificate?.Dispose();
-        if (disposing) _transport.Dispose();
+        }
         base.Dispose(disposing);
     }
 
@@ -229,6 +293,7 @@ internal sealed class OpenSslTlsStream : Stream
 
     private static class Native
     {
+        [DllImport("ws2_32", CallingConvention = CallingConvention.Winapi)] internal static extern int WSAGetLastError();
         [DllImport(LibSsl, CallingConvention = CallingConvention.Cdecl)] internal static extern int OPENSSL_init_ssl(ulong options, IntPtr settings);
         [DllImport(LibSsl, CallingConvention = CallingConvention.Cdecl)] internal static extern IntPtr TLS_client_method();
         [DllImport(LibSsl, CallingConvention = CallingConvention.Cdecl)] internal static extern IntPtr SSL_CTX_new(IntPtr method);
@@ -253,6 +318,7 @@ internal sealed class OpenSslTlsStream : Stream
         [DllImport(LibCrypto, CallingConvention = CallingConvention.Cdecl, EntryPoint = "i2d_X509")] internal static extern int i2d_X509(IntPtr certificate, ref IntPtr output);
         [DllImport(LibCrypto, CallingConvention = CallingConvention.Cdecl)] internal static extern void X509_free(IntPtr certificate);
         [DllImport(LibCrypto, CallingConvention = CallingConvention.Cdecl)] internal static extern ulong ERR_get_error();
+        [DllImport(LibCrypto, CallingConvention = CallingConvention.Cdecl)] internal static extern void ERR_clear_error();
         [DllImport(LibCrypto, CallingConvention = CallingConvention.Cdecl)] internal static extern void ERR_error_string_n(ulong error, byte[] buffer, nuint length);
     }
 }

@@ -2,6 +2,12 @@
 
 All notable FluxFTP changes are documented here.
 
+## 1.0.84 — 2026-10-12
+
+- OpenSSL TLS retries WANT_READ/WANT_WRITE during handshake and I/O using socket readiness instead of treating temporary wait states as fatal unknown errors. Per-thread error queues are cleared before operations and SSL_get_error receives the actual result immediately on the same thread.
+- OpenSSL operations are serialized per TLS session; cancellation interrupts socket I/O and disposal waits for operations to exit before freeing native handles. Genuine TLS/socket failures remain fatal, with SSL/Winsock codes when the OpenSSL error queue is empty.
+- Site Options renders FXP protection/data-role labels instead of record debug strings.
+
 ## 1.0.83 — 2026-10-12
 
 - VISIONARY accepts additional releases into a bounded backlog instead of rejecting every request once 32 watches are active. Up to 32 watches run concurrently; waiting watches start as slots are released, with at most 2048 active/waiting watches retained.
