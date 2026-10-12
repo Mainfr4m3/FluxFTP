@@ -16,8 +16,7 @@
         <TextBlock Grid.Row="3" Text="Protocol" VerticalAlignment="Center"/><ComboBox x:Name="ProtocolBox" Grid.Row="3" Grid.Column="1" Margin="0,3" Padding="7,4" SelectionChanged="Protocol_Changed"/>
         <TextBlock Grid.Row="4" Text="Address(es)" VerticalAlignment="Center"/><TextBox x:Name="HostBox" Grid.Row="4" Grid.Column="1" Margin="0,3" ToolTip="One or more addresses separated by spaces. Each may include :port, for example bnc1:5000 bnc2:5000 ftp.site:21"/>
         <TextBlock Grid.Row="5" Text="Port" VerticalAlignment="Center"/><TextBox x:Name="PortBox" Grid.Row="5" Grid.Column="1" Margin="0,3"/>
-        <TextBlock Grid.Row="6" Text="Username" VerticalAlignment="Center"/><TextBox x:Name="UsernameBox" Grid.Row="6" Grid.Column="1" Margin="0,3" ToolTip="A leading / is supported for ioFTPD ghost-login cleanup."/>
-        <CheckBox x:Name="GhostLoginBox" Grid.Row="7" Grid.Column="1" Content="Kill ghost login (/username)" Margin="0,3" ToolTip="Prefix USER with / so ioFTPD can terminate an existing ghost connection for this account."/>
+        <TextBlock Grid.Row="6" Text="Username" VerticalAlignment="Center"/><TextBox x:Name="UsernameBox" Grid.Row="6" Grid.Column="1" Margin="0,3" ToolTip="Enter the username including any server-specific prefix, such as ! for drFTPD."/>
         <TextBlock Grid.Row="8" Text="Password" VerticalAlignment="Center"/><PasswordBox x:Name="PasswordBox" Grid.Row="8" Grid.Column="1" Margin="0,3" Padding="8,5"/>
         <TextBlock Grid.Row="9" Text="Remote path" VerticalAlignment="Center"/><TextBox x:Name="RemotePathBox" Grid.Row="9" Grid.Column="1" Margin="0,3" ToolTip="Remote folder opened after login, for example /MP3"/>
         <CheckBox x:Name="AllowInvalidCertificateBox" Grid.Row="10" Grid.Column="1" Content="Trust invalid TLS certificate" Margin="0,8" ToolTip="Use only for a server you trust, such as a local test server."/>

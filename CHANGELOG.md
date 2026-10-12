@@ -2,6 +2,15 @@
 
 All notable FluxFTP changes are documented here.
 
+## 1.0.78 — 2026-10-12
+
+- RACE-Log updates every second and follows new events after text layout completes. Follow live defaults to enabled for the active log.
+- Scrolling up pauses following while live updates continue; scrolling back to the bottom or enabling Follow live resumes it. Incremental appends preserve text selection and scroll position while reading history.
+
+## 1.0.77 — 2026-10-12
+
+- Removed Kill ghost login from Connection details and Quick Connect. Server-specific username prefixes such as drFTPD's `!` are entered directly and preserved; existing saved usernames are not rewritten.
+
 ## 1.0.76 — 2026-10-12
 
 - Failed jobs are logged and removed from the transfer queue after execution ends. RACE retains hidden skipped state so removed failures are not retried or mistaken for user cancellation.

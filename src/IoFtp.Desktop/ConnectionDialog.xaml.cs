@@ -39,7 +39,6 @@ public partial class ConnectionDialog : Window
             ProtocolBox.SelectedItem = ((ProtocolChoice[])ProtocolBox.ItemsSource).First(choice => choice.Protocol == profile.Protocol);
             HostBox.Text = string.Join(' ', profile.EffectiveAddresses.Select(address => address.ToString()));
             PortBox.Text = profile.Port.ToString();
-            GhostLoginBox.IsChecked = profile.Username.StartsWith('/');
             UsernameBox.Text = profile.Username;
             PasswordBox.Password = profile.Password;
             RemotePathBox.Text = profile.EffectiveOptions.BasePath;
@@ -57,17 +56,6 @@ public partial class ConnectionDialog : Window
             _options = new SiteOptions(defaults.DefaultSlots, defaults.DefaultUploadSlots, defaults.DefaultDownloadSlots,
                 MaxIdleSeconds: defaults.DefaultIdleSeconds);
         }
-        GhostLoginBox.IsChecked = UsernameBox.Text.StartsWith('/');
-        // Only an explicit click may change the username. Saving other site
-        // details must not silently recreate a prefix the user removed.
-        GhostLoginBox.Click += (_, _) =>
-        {
-            var username = UsernameBox.Text.Trim();
-            UsernameBox.Text = GhostLoginBox.IsChecked == true
-                ? (username.Length > 0 && !username.StartsWith('/') ? "/" + username : username)
-                : username.TrimStart('/');
-        };
-        UsernameBox.TextChanged += (_, _) => GhostLoginBox.IsChecked = UsernameBox.Text.StartsWith('/');
         Loaded += (_, _) => HostBox.Focus();
     }
 
