@@ -2,6 +2,12 @@
 
 All notable FluxFTP changes are documented here.
 
+## 1.0.82 — 2026-10-12
+
+- Fix a RACE regression: failed hidden jobs retain Failed state for bounded retry/final recopy instead of being permanently skipped. Failed jobs remain absent from the visible queue.
+- VISIONARY RACE bypasses existing-target size skip rules so partial or growing targets can be repaired and verified.
+- VISIONARY bridge DLL 1.03 retries missing/busy pipes for up to 10 seconds. Pipe listener creation failures are caught and retried; clients that fail to send a request cannot hold the sole pipe indefinitely. Request read timeout does not cancel background races.
+
 ## 1.0.81 — 2026-10-12
 
 - Global Settings > Skiplist adds enable/disable, zero-byte file skipping, empty-directory skipping, folder rule matching, automatic/manual/both modes and skipped-entry color selection. New optional zero/empty filters default to off; existing pattern behavior remains enabled.

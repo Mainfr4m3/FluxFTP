@@ -35,7 +35,7 @@
                     <CheckBox x:Name="SkipSmallerTargetBox" Content="Auto skip when target is smaller (started / partial file)" Margin="0,10,0,4"/>
                     <CheckBox x:Name="SkipSameTargetBox" Content="Auto skip when target is the same size" Margin="0,4"/>
                     <CheckBox x:Name="SkipLargerTargetBox" Content="Auto skip when target is larger" Margin="0,4,0,12"/>
-                    <TextBlock Text="Unchecked: use normal transfer behavior, which may overwrite an existing target. Applies to new FXP/relay attempts, including RACE. Skipped files are logged and removed from the queue." TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" Margin="0,0,0,12"/>
+                    <TextBlock Text="Unchecked: use normal transfer behavior, which may overwrite an existing target. Applies to normal FXP/relay transfers. VISIONARY RACE bypasses these size rules so partial/growing files can be completed and verified. Skipped files are logged and removed from the queue." TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" Margin="0,0,0,12"/>
                     <TextBlock Text="FXP speed monitoring" FontWeight="SemiBold"/>
                     <CheckBox x:Name="FxpSpeedMonitoringBox" Content="Measure live FXP speed and progress" Margin="0,14,0,8"/>
                     <CheckBox x:Name="DownloadMeasurementBox" Content="Download measurement (diagnostic timing)" Margin="0,8,0,8"/>

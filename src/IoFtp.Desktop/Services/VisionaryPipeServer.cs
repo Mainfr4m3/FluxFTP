@@ -27,12 +27,17 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            await using var pipe = new NamedPipeServerStream(PipeName, PipeDirection.InOut, 1,
-                PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
-            try { await pipe.WaitForConnectionAsync(cancellationToken); await HandleAsync(pipe, cancellationToken); }
+            try
+            {
+                await using var pipe = new NamedPipeServerStream(PipeName, PipeDirection.InOut, 1,
+                    PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+                await pipe.WaitForConnectionAsync(cancellationToken);
+                await HandleAsync(pipe, cancellationToken);
+            }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
             catch (IOException exception) { _log?.Invoke($"Visionary pipe: {exception.Message}"); }
             catch (Exception exception) { _log?.Invoke($"Visionary pipe failed: {exception.Message}"); }
+            if (!cancellationToken.IsCancellationRequested) await Task.Delay(25, cancellationToken);
         }
     }
 
@@ -40,7 +45,7 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
     {
         using var reader = new StreamReader(stream, new UTF8Encoding(false), false, 4096, true);
         using var writer = new StreamWriter(stream, new UTF8Encoding(false), 4096, true) { AutoFlush = true };
-        var line = await reader.ReadLineAsync(cancellationToken);
+        var line = await reader.ReadLineAsync(cancellationToken).AsTask().WaitAsync(TimeSpan.FromSeconds(15), cancellationToken);
         if (string.IsNullOrWhiteSpace(line)) { await writer.WriteLineAsync("ERROR Empty request"); return; }
         var fields = line.Split('\t');
         if (fields.Length != 5 || !fields[0].Equals("TRANSFER", StringComparison.OrdinalIgnoreCase) || fields.Skip(1).Any(string.IsNullOrWhiteSpace))

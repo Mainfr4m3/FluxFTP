@@ -57,6 +57,7 @@ internal static class GlobalSettingsChecks
             Check(!FxpExistingFilePolicy.ShouldSkip(new(), 100, null) && !FxpExistingFilePolicy.ShouldSkip(new(), null, 50), "unknown sizes do not skip");
             Check(!FxpExistingFilePolicy.ShouldSkip(new(FxpSkipSmallerTarget: false), 100, 50), "partial FXP target skip can be disabled");
             Check(FxpExistingFilePolicy.ShouldSkip(new(), 100, 0), "zero-byte existing FXP target skipped");
+            Check(!FxpExistingFilePolicy.ShouldSkip(new(), 100, 50, true) && !FxpExistingFilePolicy.ShouldSkip(new(), 100, 100, true), "RACE can repair partial or preallocated existing targets");
             new GlobalSettingsStore(directory).Save(settings with { EnableDownloadMeasurement = true });
             Check(new GlobalSettingsStore(directory).Load().EnableDownloadMeasurement, "download measurement preference persists");
             var session = new SessionStatistics();

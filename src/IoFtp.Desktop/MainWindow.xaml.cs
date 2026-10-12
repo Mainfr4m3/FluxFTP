@@ -1962,14 +1962,14 @@ public partial class MainWindow : Window
                 var destinationProfile = entry.Direction == TransferDirection.ApiFxp ? apiFxpDestination! :
                     entry.Direction == TransferDirection.RelayLeftToRight ? rightProfile! : leftProfile!;
                 await EnsureRemoteDirectoryAsync(destinationSession, RemoteParent(entry.Destination), cancellationToken);
-                if (sourceProfile.Protocol != TransferProtocol.Sftp && destinationProfile.Protocol != TransferProtocol.Sftp &&
+                if (!entry.VisionaryRace && sourceProfile.Protocol != TransferProtocol.Sftp && destinationProfile.Protocol != TransferProtocol.Sftp &&
                     (_settings.FxpSkipSmallerTarget || _settings.FxpSkipSameTarget || _settings.FxpSkipLargerTarget))
                 {
                     var targetSize = await destinationSession.GetSizeAsync(entry.Destination, cancellationToken);
                     if (targetSize is not null)
                     {
                         var sourceSize = await sourceSession.GetSizeAsync(entry.Source, cancellationToken);
-                        if (FxpExistingFilePolicy.ShouldSkip(_settings, sourceSize, targetSize))
+                        if (FxpExistingFilePolicy.ShouldSkip(_settings, sourceSize, targetSize, entry.VisionaryRace))
                         {
                             var reason = $"Existing target auto skipped: {entry.Name}; source={sourceSize} bytes, target={targetSize} bytes.";
                             LogText.AppendText(Environment.NewLine + reason);
@@ -2755,7 +2755,7 @@ public partial class MainWindow : Window
                         LogText.AppendText(Environment.NewLine + $"Failed job skipped and removed: {entry.Name} ({status.Error}).");
                         _raceLog.Write("SKIP", $"Failed job removed: {entry.Id} {entry.Name}; {status.Error}");
                     }
-                    if (entry.VisionaryRace) _hiddenRaceJobStates[entry.Id] = "Skipped";
+                    if (entry.VisionaryRace) _hiddenRaceJobStates[entry.Id] = status.State == TransferWorkState.Failed ? "Failed" : "Skipped";
                     _queue.Remove(entry);
                     _skippedTransferJobs.Remove(entry.Id);
                     _engine.Remove(entry.Id);

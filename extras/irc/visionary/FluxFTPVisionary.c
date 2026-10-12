@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define VERSION "1.02"
+#define VERSION "1.03"
 #define PIPE_PATH "\\\\.\\pipe\\FluxFTP.Visionary.v1"
 typedef struct LOADINFO { DWORD mVersion; HWND mHwnd; BOOL mKeep; BOOL mUnicode; DWORD mBeta; DWORD mBytes; } LOADINFO;
 static DWORD g_capacity = 4096;
@@ -43,11 +43,21 @@ __declspec(dllexport) int __stdcall FluxFTPTransfer(
     section = strtok(input, " "); release = strtok(NULL, " "); source = strtok(NULL, " "); target = strtok(NULL, " ");
     if (!section || !release || !source || !target) { result(data, "ERROR usage: section release source target"); return 3; }
     snprintf(request, sizeof(request), "TRANSFER\t%s\t%s\t%s\t%s\n", section, release, source, target);
-    if (!WaitNamedPipeA(PIPE_PATH, 10000)) {
-        char message[160]; snprintf(message, sizeof(message), "ERROR FluxFTP pipe unavailable (%lu)", GetLastError());
-        result(data, message); return 3;
+    {
+        ULONGLONG deadline = GetTickCount64() + 10000;
+        DWORD pipe_error = ERROR_FILE_NOT_FOUND;
+        pipe = INVALID_HANDLE_VALUE;
+        do {
+            if (WaitNamedPipeA(PIPE_PATH, 250)) {
+                pipe = CreateFileA(PIPE_PATH, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+                if (pipe != INVALID_HANDLE_VALUE) break;
+            }
+            pipe_error = GetLastError();
+            if (pipe_error != ERROR_FILE_NOT_FOUND && pipe_error != ERROR_PIPE_BUSY && pipe_error != ERROR_SEM_TIMEOUT) break;
+            Sleep(25);
+        } while (GetTickCount64() < deadline);
+        if (pipe == INVALID_HANDLE_VALUE) SetLastError(pipe_error);
     }
-    pipe = CreateFileA(PIPE_PATH, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
     if (pipe == INVALID_HANDLE_VALUE) {
         char message[160]; snprintf(message, sizeof(message), "ERROR opening FluxFTP pipe (%lu)", GetLastError());
         result(data, message); return 3;
