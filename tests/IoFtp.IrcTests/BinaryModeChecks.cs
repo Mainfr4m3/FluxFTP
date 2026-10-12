@@ -7,6 +7,7 @@ internal static class BinaryModeChecks
     public static async Task Run()
     {
         await CheckListingLog();
+        await CheckSscnReplies();
         var session = new FtpRemoteSession();
         using var output = new MemoryStream();
         using var writer = new StreamWriter(output, Encoding.ASCII, leaveOpen: true) { AutoFlush = true, NewLine = "\r\n" };
@@ -29,6 +30,35 @@ internal static class BinaryModeChecks
             return;
         }
         throw new Exception("Rejected TYPE I must stop transfer.");
+    }
+
+    private static async Task CheckSscnReplies()
+    {
+        var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        foreach (var command in new[] { "CPSV", "PORT 127,0,0,1,1,1", "STOR file.rar", "RETR file.rar" })
+        {
+            var expected = command == "CPSV" ? 227 : command.StartsWith("PORT") ? 200 : 150;
+            using var input = new MemoryStream(Encoding.ASCII.GetBytes($"220 SSCN:SERVER METHOD\r\n{expected} Actual command reply\r\n"));
+            using var reader = new StreamReader(input);
+            using var output = new MemoryStream();
+            using var writer = new StreamWriter(output, leaveOpen: true) { AutoFlush = true };
+            var session = new FtpRemoteSession();
+            typeof(FtpRemoteSession).GetField("_reader", flags)!.SetValue(session, reader);
+            typeof(FtpRemoteSession).GetField("_writer", flags)!.SetValue(session, writer);
+            var task = (Task)typeof(FtpRemoteSession).GetMethod("FxpCommandAsync", flags)!.Invoke(session, [command, CancellationToken.None])!;
+            await task;
+            var response = task.GetType().GetProperty("Result")!.GetValue(task)!;
+            if ((int)response.GetType().GetProperty("Code")!.GetValue(response)! != expected)
+                throw new Exception("Delayed SSCN reply displaced " + command);
+        }
+        var responseType = typeof(FtpRemoteSession).GetNestedType("FtpResponse", BindingFlags.NonPublic)!;
+        var classifier = typeof(FtpRemoteSession).GetMethod("IsSscnRoleReply", BindingFlags.Static | BindingFlags.NonPublic)!;
+        foreach (var (code, message, accepted) in new[] { (220, "220 SSCN:SERVER METHOD", true), (200, "200 SSCN:CLIENT METHOD", true), (220, "220 Welcome", false), (550, "550 SSCN:SERVER METHOD", false) })
+        {
+            var response = Activator.CreateInstance(responseType, code, message)!;
+            if ((bool)classifier.Invoke(null, [response])! != accepted) throw new Exception("Incorrect SSCN reply classification");
+        }
+        Console.WriteLine("PASS: delayed SSCN 220 replies preserve CPSV/PORT/STOR/RETR responses; greetings and rejections remain distinct.");
     }
 
     private static async Task CheckListingLog()

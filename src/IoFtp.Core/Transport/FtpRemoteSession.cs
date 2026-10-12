@@ -361,7 +361,11 @@ public sealed class FtpRemoteSession : IRemoteSession
         {
             // CPSV makes the passive destination the TLS client for this transfer;
             // the active source must remain in its default TLS server role.
-            if (Capabilities.Contains("SSCN")) EnsureSuccess(await FxpCommandAsync("SSCN OFF", cancellationToken), 200);
+            if (Capabilities.Contains("SSCN"))
+            {
+                var role = await FxpCommandAsync("SSCN OFF", cancellationToken);
+                if (role.Code != 200 && !IsSscnRoleReply(role)) throw new FtpCommandException(role.Code, role.Message);
+            }
             LastFxpNegotiation = "CPSV";
         }
         else if (secureFxp)
@@ -417,12 +421,6 @@ public sealed class FtpRemoteSession : IRemoteSession
     private async Task<TransferStart> StartTransferCommandAsync(string command, CancellationToken cancellationToken)
     {
         var response = await FxpCommandAsync(command, cancellationToken);
-        // Some SSCN implementations acknowledge the selected client/server TLS
-        // role asynchronously. That acknowledgement can arrive immediately before
-        // the transfer reply even though the STOR/RETR command is already active.
-        while (response.Code == 200 && response.Message.Contains("SSCN:", StringComparison.OrdinalIgnoreCase))
-            response = await ReadResponseAsync(cancellationToken);
-
         if (response.Code is 125 or 150) return new TransferStart(response, false);
         // A few FTP daemons suppress the preliminary reply for FXP and answer only
         // after the data connection closes. Treat their final reply as completion.
@@ -1255,8 +1253,18 @@ public sealed class FtpRemoteSession : IRemoteSession
             ProtocolMessage?.Invoke($"< Ignoring delayed ioFTPD CWD event reply before {RedactCommand(command)}.");
             response = await ReadResponseAsync(cancellationToken);
         }
+        var skippedRoleReplies = 0;
+        while (!command.StartsWith("SSCN ", StringComparison.OrdinalIgnoreCase) && IsSscnRoleReply(response) && skippedRoleReplies++ < 4)
+        {
+            ProtocolMessage?.Invoke($"< Ignoring delayed SSCN role reply before {RedactCommand(command)}.");
+            response = await ReadResponseAsync(cancellationToken);
+        }
         return response;
     }
+
+    private static bool IsSscnRoleReply(FtpResponse response) => response.Code is 200 or 220 &&
+        (response.Message.TrimEnd().EndsWith("SSCN:SERVER METHOD", StringComparison.OrdinalIgnoreCase) ||
+         response.Message.TrimEnd().EndsWith("SSCN:CLIENT METHOD", StringComparison.OrdinalIgnoreCase));
 
     private async Task<FtpResponse> ReadResponseAsync(CancellationToken cancellationToken)
     {
