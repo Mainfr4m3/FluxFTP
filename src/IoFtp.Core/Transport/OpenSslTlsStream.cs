@@ -48,6 +48,15 @@ internal sealed class OpenSslTlsStream : Stream
     public string Cipher { get; }
     public int CipherBits { get; }
     public X509Certificate2? RemoteCertificate { get; }
+    public Func<string>? DiagnosticContext { get; set; }
+
+    private AuthenticationException CreateIoException(string operation, int error)
+    {
+        // Capture native error state before evaluating managed diagnostic context.
+        var failure = CreateException(operation, error);
+        return new AuthenticationException(failure.Message + " | " + DiagnosticContext?.Invoke() +
+            $"; TLS={Protocol}; cipher={Cipher}; backend=OpenSSL", failure);
+    }
 
     public static Task<OpenSslTlsStream> AuthenticateAsync(Socket socket, Stream transport,
         string targetHost, bool allowInvalidCertificate, CancellationToken cancellationToken) =>
@@ -190,7 +199,7 @@ internal sealed class OpenSslTlsStream : Stream
                     if (result == 1) return checked((int)read);
                     var error = Native.SSL_get_error(_ssl, result);
                     if (error == SslErrorZeroReturn) return 0;
-                    if (!WaitForRetry(_socket, error, token)) throw CreateException("read failed", error);
+                    if (!WaitForRetry(_socket, error, token)) throw CreateIoException("read failed", error);
                 }
             }
         }
@@ -220,7 +229,7 @@ internal sealed class OpenSslTlsStream : Stream
                     {
                         var error = Native.SSL_get_error(_ssl, result);
                         if (WaitForRetry(_socket, error, token)) continue;
-                        throw CreateException("write failed", error);
+                        throw CreateIoException("write failed", error);
                     }
                     written += checked((int)chunk);
                 }

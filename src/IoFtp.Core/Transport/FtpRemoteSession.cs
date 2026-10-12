@@ -18,6 +18,7 @@ public sealed class FtpRemoteSession : IRemoteSession
     private StreamReader? _reader;
     private StreamWriter? _writer;
     private ConnectionProfile? _profile;
+    private string _lastDiagnosticCommand = "(server greeting)";
     private readonly SemaphoreSlim _operationGate = new(1, 1);
     private readonly List<(string Name, TimeSpan Elapsed)> _lastFxpStageTimings = [];
     private bool _protectData = true;
@@ -878,8 +879,7 @@ public sealed class FtpRemoteSession : IRemoteSession
         if (_useOpenSslFallback)
         {
             var targetHost = string.IsNullOrWhiteSpace(ConnectedHost) ? _profile.Host : ConnectedHost;
-            var openSsl = await OpenSslTlsStream.AuthenticateAsync(socket, stream, targetHost,
-                _profile.AllowInvalidCertificate, cancellationToken);
+            var openSsl = await AuthenticateOpenSslAsync(socket, stream, targetHost, "data", cancellationToken);
             if (Interlocked.Exchange(ref _loggedDataTlsDetails, 1) == 0)
                 LogOpenSslDetails(openSsl, "data");
             return openSsl;
@@ -1072,8 +1072,7 @@ public sealed class FtpRemoteSession : IRemoteSession
         if (_useOpenSslFallback)
         {
             ProtocolMessage?.Invoke($"< TLS control handshake: OpenSSL compatibility fallback; protocols TLS 1.2 + TLS 1.3; SNI {targetHost}");
-            var openSsl = await OpenSslTlsStream.AuthenticateAsync(_controlClient!.Client, _controlStream!, targetHost,
-                _profile!.AllowInvalidCertificate, cancellationToken);
+            var openSsl = await AuthenticateOpenSslAsync(_controlClient!.Client, _controlStream!, targetHost, "control", cancellationToken);
             LogOpenSslDetails(openSsl, "control");
             _controlStream = openSsl;
             return;
@@ -1088,6 +1087,31 @@ public sealed class FtpRemoteSession : IRemoteSession
         }, cancellationToken);
         LogTlsDetails(ssl, "control");
         _controlStream = ssl;
+    }
+
+    private async Task<OpenSslTlsStream> AuthenticateOpenSslAsync(Socket socket, Stream transport,
+        string targetHost, string channel, CancellationToken token)
+    {
+        // Data streams keep the command that opened them; control streams follow subsequent commands.
+        var command = _lastDiagnosticCommand;
+        var site = SingleLine(_profile!.Name);
+        var endpoint = socket.RemoteEndPoint?.ToString() ?? $"{targetHost}:{ConnectedPort}";
+        var route = LastFxpNegotiation;
+        string Context() => $"site={site}; channel={channel}; endpoint={endpoint}; " +
+            $"last-command={SingleLine(channel == "control" ? _lastDiagnosticCommand : command)}; " +
+            $"FXP-route={SingleLine(channel == "control" ? LastFxpNegotiation : route)}";
+        try
+        {
+            var ssl = await OpenSslTlsStream.AuthenticateAsync(socket, transport, targetHost,
+                _profile.AllowInvalidCertificate, token);
+            ssl.DiagnosticContext = Context;
+            return ssl;
+        }
+        catch (AuthenticationException exception)
+        {
+            throw new AuthenticationException(exception.Message + " | " + Context() +
+                "; stage=TLS handshake; TLS=not negotiated; backend=OpenSSL", exception);
+        }
     }
 
     private string GetControlPeerHost()
@@ -1208,9 +1232,18 @@ public sealed class FtpRemoteSession : IRemoteSession
 
     private async Task<FtpResponse> CommandAsync(string command, CancellationToken cancellationToken)
     {
+        // Only transfer/listing paths are useful here; omit other arguments including credentials and SITE commands.
+        _lastDiagnosticCommand = DiagnosticCommand(command);
         ProtocolMessage?.Invoke($"> {RedactCommand(command)}");
         await _writer!.WriteLineAsync(command.AsMemory(), cancellationToken);
         return await ReadResponseAsync(cancellationToken);
+    }
+
+    private static string DiagnosticCommand(string command)
+    {
+        var verb = command.Split(' ', 2)[0].ToUpperInvariant();
+        return verb is "RETR" or "STOR" or "LIST" or "MLSD" or "STAT" or "CWD"
+            ? SingleLine(command) : verb;
     }
 
     private async Task<FtpResponse> FxpCommandAsync(string command, CancellationToken cancellationToken)

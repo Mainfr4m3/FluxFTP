@@ -2126,7 +2126,7 @@ public partial class MainWindow : Window
             var rejection = TransferRejection.Category(exception.Message);
             if (rejection == "DIRECTORY-DENIED" && _raceJobOwners.TryGetValue(entry.Id, out var raceOwner))
                 raceOwner.Stop(FriendlyMessage(exception));
-            _raceLog.Write(rejection ?? "ERROR", $"{entry.Id} {entry.Name}: {exception.GetType().Name}" + (exception is FtpCommandException ftpError ? $" (FTP {ftpError.StatusCode}): {ftpError.Message}" : ""));
+            _raceLog.Write(rejection ?? "ERROR", $"{entry.Id} {entry.Name}: {exception.GetType().Name}: {exception.Message}");
             LogText.AppendText(Environment.NewLine + TransferRejection.FormatFailure(entry.Name, exception is FtpCommandException ? exception.Message : FriendlyMessage(exception)));
             await RunScriptsAsync("TransferFailed", TransferScriptVariables(entry, FriendlyMessage(exception)), true);
             throw;
