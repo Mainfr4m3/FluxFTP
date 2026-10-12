@@ -8,6 +8,18 @@ internal static class RaceFlowChecks
     {
         var checks = 0;
         void Check(bool value, string name) { if (!value) throw new Exception(name); checks++; }
+        Check(new VisionaryRaceOptions().EffectiveTimeout == TimeSpan.FromMinutes(5), "race default lifetime is five minutes");
+        Check(new VisionaryRaceOptions(TimeoutMinutes: 60).EffectiveTimeout == TimeSpan.FromMinutes(5), "legacy timeout capped at five minutes");
+        Check(new VisionaryRaceOptions(TimeoutMinutes: 2).EffectiveTimeout == TimeSpan.FromMinutes(2), "shorter race timeout retained");
+        using (var slots = new RaceWatchSlots(1))
+        using (await slots.EnterAsync(default))
+        using (var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(50)))
+        {
+            var expired = false;
+            try { using var waiting = await slots.EnterAsync(deadline.Token); }
+            catch (OperationCanceledException) { expired = true; }
+            Check(expired, "waiting watch expires without acquiring a slot");
+        }
         var sampleReply = "553- .----== ioNiNJA ==----.\r\n553- | + SAMPLE: Only 1 sample per SAMPLE DIR |\r\n553 `--------------------'";
         Check(TransferRejection.Category(sampleReply) == "SAMPLE", "sample limit blocks relay fallback and XDUPE completion");
         var sampleLog = TransferRejection.FormatFailure("sample.mkv", sampleReply);

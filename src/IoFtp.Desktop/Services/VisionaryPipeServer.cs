@@ -90,19 +90,24 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
     private async Task WatchAsync(ApiTransferRequest request, VisionaryRaceState state, VisionaryRaceOptions options, CancellationToken token)
     {
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
+        lifetime.CancelAfter(options.EffectiveTimeout);
         var label = $"VISIONARY {request.Name}: {request.SrcSite} -> {request.DstSite}";
         IDisposable? slot = null;
         _log?.Invoke(label + " accepted; waiting for a watch slot");
         try
         {
-            slot = await _watchSlots.EnterAsync(token);
-            lifetime.CancelAfter(TimeSpan.FromMinutes(options.TimeoutMinutes));
+            slot = await _watchSlots.EnterAsync(lifetime.Token);
             _log?.Invoke(label + " watching source");
             while (!await _raceStep!(request, state, lifetime.Token))
                 await Task.Delay(TimeSpan.FromSeconds(options.RefreshSeconds), lifetime.Token);
             _log?.Invoke(label + " COMPLETE: final transfers finished");
         }
-        catch (OperationCanceledException) { _log?.Invoke(label + " stopped (cancelled, removed job, or timeout)"); }
+        catch (OperationCanceledException)
+        {
+            _log?.Invoke(label + (lifetime.IsCancellationRequested && !token.IsCancellationRequested
+                ? $" stopped: maximum lifetime {options.EffectiveTimeout.TotalMinutes:0} min reached; removing pending jobs"
+                : " stopped (cancelled or removed job)"));
+        }
         catch (Exception ex) { _log?.Invoke(label + " FAILED: " + ex.Message); }
         finally
         {

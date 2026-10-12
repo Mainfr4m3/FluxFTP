@@ -3385,7 +3385,7 @@ public partial class MainWindow : Window
             RaceDestinationLease.Release(race);
             await Dispatcher.InvokeAsync(() =>
             {
-                foreach (var id in race.Jobs.ToArray())
+                foreach (var id in _raceJobOwners.Where(pair => ReferenceEquals(pair.Value, race)).Select(pair => pair.Key).ToArray())
                     if (_queue.FirstOrDefault(item => item.Id == id) is { State: not "Completed" } entry)
                         RemoveTransferJob(entry.Id);
                 ForgetRaceJobs(race);

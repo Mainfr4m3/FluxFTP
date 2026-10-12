@@ -7,8 +7,10 @@ namespace IoFtp.Desktop.Services;
 
 internal sealed record VisionaryRaceOptions(
     string CompleteFlag = @"(?:^|[\s\[\]()._-])(?:COMPLETE|FINISHED)(?:$|[\s\[\]()._-])|100%",
-    int RefreshSeconds = 3, int TimeoutMinutes = 60, string RushOptionsPath = "")
+    int RefreshSeconds = 3, int TimeoutMinutes = 5, string RushOptionsPath = "")
 {
+    // Bound the entire watch, including admission wait, even with older saved settings.
+    public TimeSpan EffectiveTimeout => TimeSpan.FromMinutes(Math.Clamp(TimeoutMinutes, 1, 5));
     private static string FilePath => Path.Combine(AppContext.BaseDirectory, "FluxFTP-visionary-race.json");
     public static VisionaryRaceOptions Load() => File.Exists(FilePath)
         ? JsonSerializer.Deserialize<VisionaryRaceOptions>(File.ReadAllText(FilePath)) ?? new() : new();
