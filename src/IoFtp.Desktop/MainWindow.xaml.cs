@@ -44,6 +44,7 @@ public partial class MainWindow : Window
     private readonly HashSet<Guid> _skippedTransferJobs = [];
     private readonly Dictionary<Guid, VisionaryRaceState> _raceJobOwners = [];
     private readonly Dictionary<Guid, ConnectionProfile> _raceReadySites = [];
+    private readonly Dictionary<Guid, DateTimeOffset> _raceSlotRetryAt = [];
     private readonly SemaphoreSlim _racePoolGate = new(1, 1);
     private readonly CancellationTokenSource _racePoolStop = new();
     private readonly System.Windows.Threading.DispatcherTimer _racePoolTimer = new() { Interval = TimeSpan.FromSeconds(15) };
@@ -113,6 +114,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         _settings = _settingsStore.Load();
+        ConfigureSkippedItemColors();
         _columnVisibility = new ColumnVisibilityController(_settings.Layout, (key, hidden) =>
         {
             var layout = new Dictionary<string, ViewLayoutSettings>(_settings.Layout ?? []);
@@ -251,7 +253,7 @@ public partial class MainWindow : Window
             else { _remoteSession = session; _rightProfile = profile; RightMode.SelectedIndex = 1; }
             var options = profile.EffectiveOptions;
             _engine.RegisterOrUpdateSite(new SitePolicy(profile.Id, profile.Name,
-                MaxSlots: options.MaxSlots,
+                MaxSlots: TransferSlotLimit(profile),
                 MaxDownloads: options.AllowDownload ? options.MaxDownloadSlots : 0,
                 MaxUploads: options.AllowUpload ? options.MaxUploadSlots : 0,
                 Priority: options.Priority,
@@ -1306,6 +1308,7 @@ public partial class MainWindow : Window
                     LogText.ScrollToEnd();
                     return;
                 }
+                if (SkipRuleMatcher.Applies(_settings, false) && _settings.SkipEmptyDirectories && !children.Any(child => child.Name is not ("." or ".."))) continue;
                 await EnsureRemoteDirectoryAsync(destination, folder.Destination, timeout.Token);
                 foreach (var child in children)
                 {
@@ -1314,7 +1317,7 @@ public partial class MainWindow : Window
                     {
                         if (!ShouldSkip(child.Name, true)) pending.Push((child.FullPath, target));
                     }
-                    else if (!ShouldSkip(child.Name)) { files.Add((child, target)); fileCount++; }
+                    else if (!ShouldSkip(child.Name, size: child.Size)) { files.Add((child, target)); fileCount++; }
                 }
             }
             if (startImmediately) await WarmWorkersForDirectionAsync(direction, files.Count, timeout.Token);
@@ -1498,6 +1501,7 @@ public partial class MainWindow : Window
                     LogText.ScrollToEnd();
                     return;
                 }
+                if (SkipRuleMatcher.Applies(_settings, false) && _settings.SkipEmptyDirectories && !children.Any(child => child.Name is not ("." or ".."))) continue;
                 Directory.CreateDirectory(folder.Destination);
                 foreach (var child in children)
                 {
@@ -1507,7 +1511,7 @@ public partial class MainWindow : Window
                     {
                         if (!ShouldSkip(child.Name, true)) pending.Push((child.FullPath, target));
                     }
-                    else if (!ShouldSkip(child.Name)) files.Add((child, target));
+                    else if (!ShouldSkip(child.Name, size: child.Size)) files.Add((child, target));
                 }
             }
             if (startImmediately) await WarmWorkersForDirectionAsync(direction, files.Count, timeout.Token);
@@ -1537,6 +1541,7 @@ public partial class MainWindow : Window
             while (pending.Count > 0)
             {
                 var folder = pending.Pop();
+                if (SkipRuleMatcher.Applies(_settings, false) && _settings.SkipEmptyDirectories && !Directory.EnumerateFileSystemEntries(folder.Source).Any()) continue;
                 await EnsureRemoteDirectoryAsync(destination, folder.Destination, timeout.Token);
                 foreach (var child in Directory.EnumerateFileSystemEntries(folder.Source))
                 {
@@ -1546,7 +1551,7 @@ public partial class MainWindow : Window
                     {
                         if (!ShouldSkip(name, true)) pending.Push((child, target));
                     }
-                    else if (!ShouldSkip(name)) files.Add((new FileInfo(child), target));
+                    else if (!ShouldSkip(name, size: new FileInfo(child).Length)) files.Add((new FileInfo(child), target));
                 }
             }
             if (startImmediately) await WarmWorkersForDirectionAsync(direction, files.Count, timeout.Token);
@@ -1565,8 +1570,22 @@ public partial class MainWindow : Window
 
     private int PriorityRank(string name, string sourcePath) => TransferFilePriority.Rank(name, sourcePath, _settings);
 
-    private bool ShouldSkip(string name, bool isDirectory = false) =>
-        SkipRuleMatcher.ShouldSkip(_settings, name, isDirectory, "Transfer");
+    private bool ShouldSkip(string name, bool isDirectory = false, bool automatic = false, long? size = null) =>
+        SkipRuleMatcher.ShouldSkip(_settings, name, isDirectory, "Transfer", automatic, size);
+
+    private void ConfigureSkippedItemColors()
+    {
+        foreach (var list in new[] { LocalList, RemoteList })
+        {
+            var binding = new MultiBinding { Converter = new SkippedEntryColorConverter(() => _settings, () => FindResource("TextBrush")) };
+            binding.Bindings.Add(new Binding("Name"));
+            binding.Bindings.Add(new Binding("IsDirectory"));
+            binding.Bindings.Add(new Binding("SortSize"));
+            var style = new Style(typeof(ListViewItem), list.ItemContainerStyle);
+            style.Setters.Add(new Setter(Control.ForegroundProperty, binding));
+            list.ItemContainerStyle=style;
+        }
+    }
 
     private static Task EnsureRemoteDirectoryAsync(FtpRemoteSession session, string path, CancellationToken token)
         => TransferRejection.EnsureDirectoryAsync(NormalizeRemotePath(path), session.ExecuteDirectoryProbeAsync, token);
@@ -1769,8 +1788,18 @@ public partial class MainWindow : Window
     {
         var work = new List<TransferWorkItem>();
         var profiles = new ProfileStore().Load().ToDictionary(profile => profile.Id);
-        foreach (var entry in entries)
+        foreach (var entry in entries.ToArray())
         {
+            var automatic = entry.VisionaryRace || entry.Direction is TransferDirection.ApiFxp or TransferDirection.ApiDownload;
+            if (ShouldSkip(entry.Name, automatic: automatic))
+            {
+                entry.State = "Skipped";
+                if (entry.VisionaryRace) _hiddenRaceJobStates[entry.Id] = "Skipped";
+                _queue.Remove(entry);
+                _raceLog.Write("SKIP", $"Skip list removed job {entry.Id}: {entry.Name}");
+                LogText.AppendText(Environment.NewLine + "Skip list: " + entry.Name);
+                continue;
+            }
             var (sourceSite, destinationSite) = SitesFor(entry.Direction);
             sourceSite ??= entry.SourceProfileId;
             destinationSite ??= entry.DestinationProfileId;
@@ -2145,16 +2174,47 @@ public partial class MainWindow : Window
         finally { if (_sessionWorkers.TryRemove(worker, out _)) _sessionStatistics.WorkerClosed(); }
     }
 
+    private int TransferSlotLimit(ConnectionProfile profile)
+    {
+        var options = profile.EffectiveOptions;
+        if (!_settings.EnableVisionaryBridge || !_raceReadySites.ContainsKey(profile.Id)) return options.MaxSlots;
+        // One shared listing/verifier connection, plus open panes and the
+        // maximum concurrent per-transfer monitors when enabled.
+        var auxiliary = 1 + (_leftProfile?.Id == profile.Id && _leftRemoteSession?.IsConnected == true ? 1 : 0)
+            + (_rightProfile?.Id == profile.Id && _remoteSession?.IsConnected == true ? 1 : 0)
+            + (_settings.EnableFxpSpeedMonitoring ? Math.Max(options.MaxUploadSlots, options.MaxDownloadSlots) : 0);
+        return RaceSlotBudget.Transfers(options.MaxSlots,
+            options.AllowUpload ? options.MaxUploadSlots : 0,
+            options.AllowDownload ? options.MaxDownloadSlots : 0, auxiliary);
+    }
+
     private async Task MaintainRaceSlotsAsync(CancellationToken token)
     {
         await _racePoolGate.WaitAsync(token);
         try
         {
-            foreach (var profile in _raceReadySites.Values.ToArray())
+            var currentProfiles = new ProfileStore().Load().ToDictionary(profile => profile.Id);
+            foreach (var previous in _raceReadySites.Values.ToArray())
             {
                 if (_workerPoolShuttingDown) return;
+                if (!currentProfiles.TryGetValue(previous.Id, out var current))
+                {
+                    _raceReadySites.Remove(previous.Id);
+                    await DisposePooledWorkersAsync(previous.Id);
+                    continue;
+                }
+                var profile = ApplyGlobalProxy(current);
+                if (profile != previous) _raceSlotRetryAt.Remove(profile.Id);
+                _raceReadySites[profile.Id] = profile;
                 await DisposeStalePooledWorkersAsync(profile);
+                var limit = TransferSlotLimit(profile);
+                var options = profile.EffectiveOptions;
+                _engine.RegisterOrUpdateSite(new SitePolicy(profile.Id, profile.Name, limit,
+                    options.AllowDownload ? Math.Min(limit, options.MaxDownloadSlots) : 0,
+                    options.AllowUpload ? Math.Min(limit, options.MaxUploadSlots) : 0, options.Priority));
                 var pool = _workerPool.GetOrAdd(profile, _ => new ConcurrentBag<PooledWorker>());
+                while (_sessionWorkers.Count(pair => pair.Value.Id == profile.Id) > limit && pool.TryTake(out var excess))
+                    await DisposeTransferWorkerAsync(excess.Session);
                 var idle = pool.Count;
                 var leases = new List<PooledWorker>();
                 for (var i = 0; i < idle && pool.TryTake(out var pooled); i++) leases.Add(pooled);
@@ -2180,14 +2240,25 @@ public partial class MainWindow : Window
                     foreach (var abandoned in leases.Where(pooled => !released.Contains(pooled.Session)))
                         await ReleaseWorkerAsync(profile, abandoned.Session, false);
                 }
-                var live = _sessionWorkers.Count(pair => pair.Value == profile);
-                var missing = Math.Max(0, profile.EffectiveOptions.MaxSlots - live);
+                if (_raceSlotRetryAt.GetValueOrDefault(profile.Id) > DateTimeOffset.UtcNow) continue;
+                var live = _sessionWorkers.Count(pair => pair.Value.Id == profile.Id);
+                var missing = Math.Max(0, limit - live);
                 for (var i = 0; i < missing; i++)
                 {
                     using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
                     timeout.CancelAfter(TimeSpan.FromSeconds(15));
-                    var worker = await CreateTransferWorkerAsync(profile, timeout.Token);
-                    await ReleaseWorkerAsync(profile, worker, true);
+                    try
+                    {
+                        var worker = await CreateTransferWorkerAsync(profile, timeout.Token);
+                        await ReleaseWorkerAsync(profile, worker, true);
+                        _raceSlotRetryAt.Remove(profile.Id);
+                    }
+                    catch (Exception exception) when (!token.IsCancellationRequested)
+                    {
+                        _raceSlotRetryAt[profile.Id] = DateTimeOffset.UtcNow.AddMinutes(1);
+                        LogText.AppendText(Environment.NewLine + $"RACE slots for {profile.Name}: login rejected; waiting 60s before replenishing ({FriendlyMessage(exception)}).");
+                        break;
+                    }
                 }
             }
         }
@@ -2457,7 +2528,15 @@ public partial class MainWindow : Window
     {
         // Maintenance temporarily owns idle sessions. Wait for their return
         // rather than opening extra connections while the bag is drained.
-        await _racePoolGate.WaitAsync(cancellationToken);
+        while (true)
+        {
+            await _racePoolGate.WaitAsync(cancellationToken);
+            var retry = _raceSlotRetryAt.GetValueOrDefault(profile.Id);
+            var hasIdle = _workerPool.TryGetValue(profile, out var available) && !available.IsEmpty;
+            if (hasIdle || retry <= DateTimeOffset.UtcNow) break;
+            _racePoolGate.Release();
+            await Task.Delay(retry - DateTimeOffset.UtcNow > TimeSpan.Zero ? retry - DateTimeOffset.UtcNow : TimeSpan.Zero, cancellationToken);
+        }
         try
         {
         await DisposeStalePooledWorkersAsync(profile);
@@ -2480,7 +2559,12 @@ public partial class MainWindow : Window
             }
             await DisposeTransferWorkerAsync(session);
         }
-        return await CreateTransferWorkerAsync(profile, cancellationToken);
+        try { return await CreateTransferWorkerAsync(profile, cancellationToken); }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested && _raceReadySites.ContainsKey(profile.Id))
+        {
+            _raceSlotRetryAt[profile.Id] = DateTimeOffset.UtcNow.AddMinutes(1);
+            throw;
+        }
         }
         finally { _racePoolGate.Release(); }
     }
@@ -3085,6 +3169,7 @@ public partial class MainWindow : Window
         if (dialog.ShowDialog() == true && dialog.Settings is not null)
         {
             _settings = dialog.Settings;
+            ConfigureSkippedItemColors();
             if (!_settings.EnableFxpSpeedMonitoring)
                 foreach (var monitoring in _fxpMonitoring.Values) monitoring.Cancel();
             var priorityProfiles = new ProfileStore().Load().ToDictionary(profile => profile.Id);
@@ -3213,7 +3298,7 @@ public partial class MainWindow : Window
                     foreach (var profile in new ProfileStore().Load())
                     {
                         var options = profile.EffectiveOptions;
-                        _engine.RegisterOrUpdateSite(new SitePolicy(profile.Id, profile.Name, options.MaxSlots, options.MaxDownloadSlots, options.MaxUploadSlots, options.Priority));
+                        _engine.RegisterOrUpdateSite(new SitePolicy(profile.Id, profile.Name, TransferSlotLimit(profile), options.MaxDownloadSlots, options.MaxUploadSlots, options.Priority));
                     }
                 }
                 catch { LogText.AppendText($"{Environment.NewLine}IRC settings saved; reopen the site selector to refresh the view."); }
@@ -3337,13 +3422,15 @@ public partial class MainWindow : Window
             {
                 if (!_raceReadySites.TryGetValue(profile.Id, out var ready) || ready != profile) needsWarmup = true;
                 _raceReadySites[profile.Id] = profile;
+                if (TransferSlotLimit(profile) == 0)
+                    throw new InvalidOperationException($"No RACE transfer slots available for {profile.Name}. Max slots must leave room for listing, open panes and enabled monitoring; check Site Options.");
             }
             if (needsWarmup) await MaintainRaceSlotsAsync(_racePoolStop.Token);
         }
         foreach (var profile in new[] { sourceProfile, destinationProfile })
         {
             var options = profile.EffectiveOptions;
-            _engine.RegisterOrUpdateSite(new SitePolicy(profile.Id, profile.Name, options.MaxSlots, options.MaxDownloadSlots, options.MaxUploadSlots, options.Priority));
+            _engine.RegisterOrUpdateSite(new SitePolicy(profile.Id, profile.Name, TransferSlotLimit(profile), options.MaxDownloadSlots, options.MaxUploadSlots, options.Priority));
         }
         var sourceBase = NormalizeRemotePath(request.SrcSection is not null ? ResolveApiSection(request.SrcSite, request.SrcSection) : request.SrcPath ?? "/");
         var destinationBase = NormalizeRemotePath(request.DstSection is not null ? ResolveApiSection(request.DstSite, request.DstSection) : request.DstPath ?? "/");
@@ -3385,10 +3472,12 @@ public partial class MainWindow : Window
             var nuke = NukeDetector.DetectDirectory(RemoteLeaf(sourceDirectory), children);
             if (nuke.IsNuked)
                 throw new InvalidOperationException($"Nuke detection blocked automated transfer: {sourceDirectory} ({nuke.Display}).");
-            race?.InspectListing(children, sourceDirectory == source, sourceDirectory, child => !ShouldSkip(child.Name, child.IsDirectory));
+            race?.InspectListing(children, sourceDirectory == source, sourceDirectory, child => !ShouldSkip(child.Name, child.IsDirectory, true));
+            if (SkipRuleMatcher.Applies(_settings, true) && _settings.SkipEmptyDirectories && !children.Any(child => child.Name is not ("." or ".."))) return;
             foreach (var child in children)
             {
-                if (child.Name is "." or ".." || ShouldSkip(child.Name, child.IsDirectory)) continue;
+                if (child.Name is "." or ".." || ShouldSkip(child.Name, child.IsDirectory, true,
+                    race is null || race.IsFinal(child.FullPath) ? child.Size : null)) continue;
                 if (race is not null && (race.IsCompletionMarker(child) || VisionaryRaceState.IsVerificationMetadata(child))) continue;
                 var childDestination = NormalizeRemotePath($"{destinationDirectory}/{child.Name}");
                 if (child.IsDirectory) await QueueDirectory(child.FullPath, childDestination);
@@ -3426,14 +3515,12 @@ public partial class MainWindow : Window
         ScheduleBatch(queuedEntries);
         if (race is not null && race.Finished(RaceJobState))
         {
-            await using var targetSession = new FtpRemoteSession();
-            await targetSession.ConnectAsync(ApplyGlobalProxy(destinationProfile), timeout.Token);
             var verified = true;
             foreach (var directory in apiFiles.Where(file => !race.IsSkipped(file.Entry.FullPath, RaceJobState)).GroupBy(file => RemoteParent(file.Destination)))
             {
                 try
                 {
-                    var listing = await targetSession.ListAsync(directory.Key, timeout.Token);
+                    var listing = await _raceListings.ListAsync(ApplyGlobalProxy(destinationProfile), directory.Key, timeout.Token);
                     if (!RaceDestinationVerifier.Accepts(directory.Select(file => file.Entry).ToArray(), listing, race)) verified = false;
                 }
                 catch (FtpCommandException exception) when (exception.StatusCode == 550) { verified = false; }
@@ -3457,7 +3544,7 @@ public partial class MainWindow : Window
         localRoot = Path.GetFullPath(Environment.ExpandEnvironmentVariables(localRoot)); Directory.CreateDirectory(localRoot);
         var remote = NormalizeRemotePath(request.RemoteSection is not null ? ResolveApiSection(profile.Name, request.RemoteSection) : request.RemotePath ?? "/");
         var options = profile.EffectiveOptions;
-        _engine.RegisterOrUpdateSite(new SitePolicy(profile.Id, profile.Name, options.MaxSlots, options.MaxDownloadSlots, options.MaxUploadSlots, options.Priority));
+        _engine.RegisterOrUpdateSite(new SitePolicy(profile.Id, profile.Name, TransferSlotLimit(profile), options.MaxDownloadSlots, options.MaxUploadSlots, options.Priority));
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(5)); await using var session = new FtpRemoteSession(); await session.ConnectAsync(ApplyGlobalProxy(profile), timeout.Token);
         var queued = 0;
         var downloadFiles = new List<(RemoteEntry Entry, string Destination)>();
@@ -3469,7 +3556,7 @@ public partial class MainWindow : Window
                 throw new InvalidOperationException($"Nuke detection blocked automated download: {sourceDirectory} ({nuke.Display}).");
             foreach (var child in children)
             {
-                if (child.Name is "." or ".." || ShouldSkip(child.Name, child.IsDirectory)) continue;
+                if (child.Name is "." or ".." || ShouldSkip(child.Name, child.IsDirectory, true, child.Size)) continue;
                 var destination = Path.Combine(destinationDirectory, child.Name);
                 if (child.IsDirectory) { if (request.Recursive) await QueueDirectory(child.FullPath, destination); }
                 else downloadFiles.Add((child, destination));

@@ -39,6 +39,10 @@ public partial class GlobalSettingsWindow : Window
         foreach (var category in TransferFilePriority.Categories(s.TransferCategoryOrder)) PriorityCategoriesList.Items.Add(category);
         PriorityCategoriesList.SelectedIndex = 0;
         SkipPatternsBox.Text=s.SkipPatterns;
+        EnableSkipListBox.IsChecked=s.EnableSkipList; SkipZeroByteBox.IsChecked=s.SkipZeroByteFiles;
+        SkipEmptyDirectoryBox.IsChecked=s.SkipEmptyDirectories; ApplySkipFoldersBox.IsChecked=s.ApplySkipListToFolders;
+        SkipModeBox.ItemsSource = new[] { "Both", "Auto", "Manual" }; SkipModeBox.SelectedItem=s.SkipTransferMode;
+        SkippedColorBox.Text=s.SkippedItemColor;
         ApiPasswordBox.Password=s.ApiPassword;
         MinimizeToTrayBox.IsChecked=s.MinimizeToTray;
         LegendModeBox.SelectedItem=s.LegendBarMode; if (LegendModeBox.SelectedIndex < 0) LegendModeBox.SelectedItem="Compact";
@@ -53,6 +57,8 @@ public partial class GlobalSettingsWindow : Window
     private void Save_Click(object sender, RoutedEventArgs e)
     {
         ErrorText.Text = "";
+        try { _ = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(SkippedColorBox.Text); }
+        catch { ErrorText.Text="Choose a valid skipped-item color, such as #7F9FBF."; return; }
         Dictionary<string, ViewLayoutSettings> layout;
         try { layout = _layoutEditor.Read(); }
         catch (ArgumentException exception) { ErrorText.Text = exception.Message; return; }
@@ -73,7 +79,10 @@ public partial class GlobalSettingsWindow : Window
             EnableDownloadMeasurement = DownloadMeasurementBox.IsChecked == true,
             FxpSkipSmallerTarget = SkipSmallerTargetBox.IsChecked == true,
             FxpSkipSameTarget = SkipSameTargetBox.IsChecked == true,
-            FxpSkipLargerTarget = SkipLargerTargetBox.IsChecked == true };
+            FxpSkipLargerTarget = SkipLargerTargetBox.IsChecked == true,
+            EnableSkipList=EnableSkipListBox.IsChecked==true, SkipZeroByteFiles=SkipZeroByteBox.IsChecked==true,
+            SkipEmptyDirectories=SkipEmptyDirectoryBox.IsChecked==true, ApplySkipListToFolders=ApplySkipFoldersBox.IsChecked==true,
+            SkipTransferMode=SkipModeBox.SelectedItem?.ToString() ?? "Both", SkippedItemColor=SkippedColorBox.Text.Trim() };
         try { new GlobalSettingsStore().Save(Settings); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException)
         { Settings = null; ErrorText.Text = "Could not save settings to disk. Check write access and free space; your edits are still here. Please try Save again."; return; }
@@ -141,6 +150,48 @@ public partial class GlobalSettingsWindow : Window
     {
         if (DialogResult != true) ThemeManager.Apply(_originalTheme);
     }
+    private SkipListPackage ReadSkipPackage() => new(SkipPatternsBox.Text, _advancedSkipRules.ToArray(),
+        EnableSkipListBox.IsChecked==true, SkipZeroByteBox.IsChecked==true, SkipEmptyDirectoryBox.IsChecked==true,
+        ApplySkipFoldersBox.IsChecked==true, SkipModeBox.SelectedItem?.ToString() ?? "Both", SkippedColorBox.Text.Trim());
+
+    private void SkippedColor_Click(object sender, RoutedEventArgs e)
+    {
+        using var picker = new System.Windows.Forms.ColorDialog();
+        if (picker.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+            SkippedColorBox.Text=$"#{picker.Color.R:X2}{picker.Color.G:X2}{picker.Color.B:X2}";
+    }
+
+    private void ImportSkipList_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog { Title="Import skip list", Filter="FluxFTP skip list (*.flux-skip.json)|*.flux-skip.json|All JSON files (*.json)|*.json" };
+        if (dialog.ShowDialog(this)!=true) return;
+        try
+        {
+            var package=JsonSerializer.Deserialize<SkipListPackage>(File.ReadAllText(dialog.FileName)) ?? throw new InvalidDataException("Empty skip list.");
+            package.Validate();
+            _ = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(package.Color);
+            SkipPatternsBox.Text=package.Patterns; _advancedSkipRules=[.. package.Rules ?? []];
+            EnableSkipListBox.IsChecked=package.Enabled; SkipZeroByteBox.IsChecked=package.ZeroByteFiles;
+            SkipEmptyDirectoryBox.IsChecked=package.EmptyDirectories; ApplySkipFoldersBox.IsChecked=package.ApplyToFolders;
+            SkipModeBox.SelectedItem=package.Mode; SkippedColorBox.Text=package.Color;
+            ErrorText.Text="Skip list imported into this dialog. Save to apply.";
+        }
+        catch (Exception exception) { ErrorText.Text="Skip list import failed: "+exception.Message; }
+    }
+
+    private void ExportSkipList_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog=new SaveFileDialog { Title="Export skip list", Filter="FluxFTP skip list (*.flux-skip.json)|*.flux-skip.json", FileName="FluxFTP.flux-skip.json", AddExtension=true };
+        if(dialog.ShowDialog(this)!=true) return;
+        try
+        {
+            var package=ReadSkipPackage(); package.Validate();
+            File.WriteAllText(dialog.FileName, JsonSerializer.Serialize(package,new JsonSerializerOptions { WriteIndented=true }));
+            ErrorText.Text="Skip list exported.";
+        }
+        catch(Exception exception) { ErrorText.Text="Skip list export failed: "+exception.Message; }
+    }
+
     private void AdvancedSkiplist_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new AdvancedSkiplistWindow(_advancedSkipRules) { Owner = this };

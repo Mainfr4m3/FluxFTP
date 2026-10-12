@@ -37,7 +37,7 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
     private sealed record PayloadSnapshot(string Signature, DateTimeOffset Changed, bool Complete);
     private readonly Dictionary<string, PayloadSnapshot> _payloads = new(StringComparer.Ordinal);
     private readonly VisionaryTransferProfiles _profiles = profiles ?? VisionaryTransferProfiles.Load(options.RushOptionsPath);
-    private bool IsFinal(string path) => _profiles.ForDirectory(Parent(path)) is null ? SourceComplete :
+    public bool IsFinal(string path) => _profiles.ForDirectory(Parent(path)) is null ? SourceComplete :
         _payloads.TryGetValue(Parent(path), out var payload) && payload.Complete;
     private static string Parent(string path) => path[..Math.Max(0, path.LastIndexOf('/'))];
     public bool AllowsFile(RemoteEntry file) => _profiles.ForDirectory(Parent(file.FullPath))?.Allows(file) ?? true;

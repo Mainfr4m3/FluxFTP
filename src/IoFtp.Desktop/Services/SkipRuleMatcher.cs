@@ -5,8 +5,14 @@ namespace IoFtp.Desktop.Services;
 
 internal static class SkipRuleMatcher
 {
-    public static bool ShouldSkip(GlobalSettings settings, string name, bool isDirectory = false, string scope = "Allround")
+    public static bool Applies(GlobalSettings settings, bool automatic) => settings.EnableSkipList &&
+        (settings.SkipTransferMode == "Both" || settings.SkipTransferMode == (automatic ? "Auto" : "Manual"));
+
+    public static bool ShouldSkip(GlobalSettings settings, string name, bool isDirectory = false, string scope = "Allround", bool automatic = false, long? size = null)
     {
+        if (!Applies(settings, automatic)) return false;
+        if (!isDirectory && settings.SkipZeroByteFiles && size == 0) return true;
+        if (isDirectory && !settings.ApplySkipListToFolders) return false;
         foreach (var rule in settings.AdvancedSkipRules ?? [])
         {
             if (string.IsNullOrWhiteSpace(rule.Pattern) || !TypeMatches(rule.EntryType, isDirectory) || !ScopeMatches(rule.Scope, scope))
@@ -15,10 +21,11 @@ internal static class SkipRuleMatcher
             try
             {
                 matches = rule.Regex
-                    ? Regex.IsMatch(name, rule.Pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+                    ? Regex.IsMatch(name, rule.Pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100))
                     : System.IO.Enumeration.FileSystemName.MatchesSimpleExpression(rule.Pattern, name, true);
             }
             catch (ArgumentException) { continue; }
+            catch (RegexMatchTimeoutException) { continue; }
             if (matches) return rule.Action.Equals("Deny", StringComparison.OrdinalIgnoreCase);
         }
 

@@ -2,6 +2,18 @@
 
 All notable FluxFTP changes are documented here.
 
+## 1.0.81 — 2026-10-12
+
+- Global Settings > Skiplist adds enable/disable, zero-byte file skipping, empty-directory skipping, folder rule matching, automatic/manual/both modes and skipped-entry color selection. New optional zero/empty filters default to off; existing pattern behavior remains enabled.
+- File panes highlight matching entries. Manual recursive transfers and API/PRE/VISIONARY filtering honor the selected mode; unfinished zero-byte RACE sources are not prematurely skipped.
+- Skiplist JSON import/export includes patterns, advanced rules and options. Advanced provides Add/Edit/Delete and validates regex; runtime regex matching has a timeout.
+
+## 1.0.80 — 2026-10-12
+
+- RACE pool limits refresh from current FluxFTP Site Options and reserve capacity for a shared listing/verifier connection, open panes and enabled monitoring. Directional limits cap prewarming; smaller budgets close excess idle sessions.
+- RACE destination verification shares the serialized listing service instead of opening an additional connection for every check.
+- Failed RACE slot creation waits 60 seconds before reconnecting. Worker rental observes this backoff instead of repeatedly opening rejected logins.
+
 ## 1.0.79 — 2026-10-12
 
 - VISIONARY bridge races prewarm each participating site's configured total transfer slots on first use. Idle connections receive NOOP keepalives every 15 seconds and failed idle slots are replenished; active transfers retain exclusive ownership of their connections.

@@ -24,6 +24,14 @@ public partial class AdvancedSkiplistWindow : Window
         RulesGrid.ScrollIntoView(rule);
     }
 
+    private void Edit_Click(object sender, RoutedEventArgs e)
+    {
+        if (RulesGrid.SelectedItem is not EditableRule rule) return;
+        RulesGrid.ScrollIntoView(rule);
+        RulesGrid.CurrentCell = new System.Windows.Controls.DataGridCellInfo(rule, RulesGrid.Columns[0]);
+        RulesGrid.BeginEdit();
+    }
+
     private void Remove_Click(object sender, RoutedEventArgs e)
     {
         if (RulesGrid.SelectedItem is EditableRule rule) _rules.Remove(rule);
@@ -52,6 +60,8 @@ public partial class AdvancedSkiplistWindow : Window
                 Normalize(rule.Action, "Allow", "Deny"),
                 string.IsNullOrWhiteSpace(rule.Scope) ? "Allround" : rule.Scope.Trim()))
             .ToArray();
+        try { new Services.SkipListPackage(Rules: Rules.ToArray()).Validate(); }
+        catch (ArgumentException exception) { RuleStatus.Text=exception.Message; return; }
         DialogResult = true;
     }
 

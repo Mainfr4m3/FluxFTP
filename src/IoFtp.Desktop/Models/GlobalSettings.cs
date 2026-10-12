@@ -50,7 +50,13 @@ public sealed record GlobalSettings(
     bool EnableDownloadMeasurement = false,
     bool FxpSkipSmallerTarget = true,
     bool FxpSkipSameTarget = true,
-    bool FxpSkipLargerTarget = true);
+    bool FxpSkipLargerTarget = true,
+    bool EnableSkipList = true,
+    bool SkipZeroByteFiles = false,
+    bool SkipEmptyDirectories = false,
+    bool ApplySkipListToFolders = true,
+    string SkipTransferMode = "Both",
+    string SkippedItemColor = "#7F9FBF");
 
 public sealed record ViewLayoutSettings(string[]? HiddenColumns = null, string SortBy = "Name",
     bool Descending = false, string FontFamily = "", double FontSize = 0, bool Bold = false);

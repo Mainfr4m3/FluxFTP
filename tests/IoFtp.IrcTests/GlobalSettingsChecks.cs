@@ -33,6 +33,25 @@ internal static class GlobalSettingsChecks
             Check(!savedLayout["Right"].Descending && savedLayout["Queue"].SortBy == "ProgressPercent", "view layouts remain independent");
             Check(new GlobalSettings().Layout is null, "old settings retain theme and default sorting");
             Check(!new GlobalSettings().EnableDownloadMeasurement, "download measurement disabled by default");
+            var skipOptions = new GlobalSettings(SkipPatterns: "*.nfo", SkipZeroByteFiles: true);
+            Check(SkipRuleMatcher.ShouldSkip(skipOptions, "test.nfo"), "skip list enabled");
+            Check(!SkipRuleMatcher.ShouldSkip(skipOptions with { EnableSkipList=false }, "test.nfo", size: 0), "disabled skip list bypasses zero and patterns");
+            Check(!SkipRuleMatcher.ShouldSkip(skipOptions with { ApplySkipListToFolders=false }, "test.nfo", true), "folder matching can be disabled");
+            Check(SkipRuleMatcher.ShouldSkip(skipOptions, "test.rar", size:0) && !SkipRuleMatcher.ShouldSkip(skipOptions, "test.rar", size:null), "only known zero-byte files skipped");
+            Check(!SkipRuleMatcher.ShouldSkip(skipOptions with { SkipTransferMode="Auto" }, "test.nfo") && SkipRuleMatcher.ShouldSkip(skipOptions with { SkipTransferMode="Auto" }, "test.nfo", automatic:true), "automatic skip mode");
+            Check(SkipRuleMatcher.ShouldSkip(skipOptions with { SkipTransferMode="Manual" }, "test.nfo") && !SkipRuleMatcher.ShouldSkip(skipOptions with { SkipTransferMode="Manual" }, "test.nfo", automatic:true), "manual skip mode");
+            var skipPackage = new SkipListPackage("*.nfo", [new("(?i)^sample$", true, "Directory", "Deny", "Transfer")], Mode:"Auto");
+            skipPackage.Validate();
+            var packageReloaded=System.Text.Json.JsonSerializer.Deserialize<SkipListPackage>(System.Text.Json.JsonSerializer.Serialize(skipPackage))!;
+            Check(packageReloaded.Mode=="Auto" && packageReloaded.Rules![0].Regex && packageReloaded.Patterns=="*.nfo", "skip list package round trip");
+            var invalidRegexRejected=false;
+            try { new SkipListPackage(Rules:[new("[", true)]).Validate(); } catch(ArgumentException) { invalidRegexRejected=true; }
+            Check(invalidRegexRejected, "invalid imported regex rejected");
+            Check(RaceSlotBudget.Transfers(4, 2, 2, 1) == 3, "RACE leaves one slot for shared listing and verification");
+            Check(RaceSlotBudget.Transfers(4, 2, 2, 2) == 2, "RACE accounts for a browsing connection");
+            Check(RaceSlotBudget.Transfers(2, 1, 1, 1) == 1, "lowered RACE total reduces pool capacity");
+            Check(RaceSlotBudget.Transfers(1, 1, 1, 1) == 0, "no spare transfer slot does not overcommit");
+            Check(RaceSlotBudget.Transfers(10, 1, 2, 1) == 3, "RACE directional limits cap prewarming");
             Check(FxpExistingFilePolicy.ShouldSkip(new(), 100, 50), "partial FXP target skipped by default");
             Check(FxpExistingFilePolicy.ShouldSkip(new(), 100, 100) && FxpExistingFilePolicy.ShouldSkip(new(), 100, 150), "same/larger FXP targets skipped by default");
             Check(!FxpExistingFilePolicy.ShouldSkip(new(), 100, null) && !FxpExistingFilePolicy.ShouldSkip(new(), null, 50), "unknown sizes do not skip");
