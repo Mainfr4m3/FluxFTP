@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../../src/IoFtp.Desktop/Services/RaceWatchSlots.cs" Link="RaceWatchSlots.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/SkipListPackage.cs" Link="SkipListPackage.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/RaceSlotBudget.cs" Link="RaceSlotBudget.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/FxpExistingFilePolicy.cs" Link="FxpExistingFilePolicy.cs" />

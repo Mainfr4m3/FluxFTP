@@ -2,6 +2,11 @@
 
 All notable FluxFTP changes are documented here.
 
+## 1.0.83 — 2026-10-12
+
+- VISIONARY accepts additional releases into a bounded backlog instead of rejecting every request once 32 watches are active. Up to 32 watches run concurrently; waiting watches start as slots are released, with at most 2048 active/waiting watches retained.
+- Watch timeouts begin on admission rather than while waiting. Shutdown cancels pending watches, and duplicate/overlapping destination protection remains active.
+
 ## 1.0.82 — 2026-10-12
 
 - Fix a RACE regression: failed hidden jobs retain Failed state for bounded retry/final recopy instead of being permanently skipped. Failed jobs remain absent from the visible queue.

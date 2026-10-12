@@ -14,6 +14,7 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
     private Task? _listener;
     private readonly Func<ApiTransferRequest, VisionaryRaceState, CancellationToken, Task<bool>>? _raceStep;
     private readonly Dictionary<string, Task> _races = new(StringComparer.OrdinalIgnoreCase);
+    private readonly RaceWatchSlots _watchSlots = new(32);
 
     public VisionaryPipeServer(Func<ApiTransferRequest, Task<object>> startTransfer, Action<string>? log = null,
         Func<ApiTransferRequest, VisionaryRaceState, CancellationToken, Task<bool>>? raceStep = null)
@@ -64,12 +65,12 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
                 if (_races.Any(pair => !pair.Value.IsCompleted && Overlapping(pair.Key, key)))
                     throw new InvalidOperationException("An overlapping release/subdirectory race already writes this destination. Use the existing watch.");
                 foreach (var completed in _races.Where(pair => pair.Value.IsCompleted).Select(pair => pair.Key).ToArray()) _races.Remove(completed);
-                if (_races.Count >= 32) throw new InvalidOperationException("32 races are already active.");
+                if (_races.Count >= 2048) throw new InvalidOperationException("VISIONARY backlog is full (2048 active/waiting watches). Try again after watches finish.");
                 var options = VisionaryRaceOptions.Load();
                 var state = new VisionaryRaceState(options);
                 var request = new ApiTransferRequest(fields[3], null, fields[1], fields[4], null, fields[1], fields[2]);
                 _races[key] = WatchAsync(request, state, options, cancellationToken);
-                await writer.WriteLineAsync("OK WATCHING " + fields[2] + " — progress and errors are in the FluxFTP log");
+                await writer.WriteLineAsync("OK ACCEPTED " + fields[2] + " — queued or watching; progress is in the FluxFTP log");
                 return;
             }
             var response = await _startTransfer(new(fields[3], null, fields[1], fields[4], null, fields[1], fields[2]));
@@ -89,11 +90,14 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
     private async Task WatchAsync(ApiTransferRequest request, VisionaryRaceState state, VisionaryRaceOptions options, CancellationToken token)
     {
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
-        lifetime.CancelAfter(TimeSpan.FromMinutes(options.TimeoutMinutes));
         var label = $"VISIONARY {request.Name}: {request.SrcSite} -> {request.DstSite}";
-        _log?.Invoke(label + " watching source");
+        IDisposable? slot = null;
+        _log?.Invoke(label + " accepted; waiting for a watch slot");
         try
         {
+            slot = await _watchSlots.EnterAsync(token);
+            lifetime.CancelAfter(TimeSpan.FromMinutes(options.TimeoutMinutes));
+            _log?.Invoke(label + " watching source");
             while (!await _raceStep!(request, state, lifetime.Token))
                 await Task.Delay(TimeSpan.FromSeconds(options.RefreshSeconds), lifetime.Token);
             _log?.Invoke(label + " COMPLETE: final transfers finished");
@@ -104,7 +108,11 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
         {
             // Let the UI cancel this race's pending jobs even when cancellation occurred during the delay.
             lifetime.Cancel();
-            try { await _raceStep!(request, state, lifetime.Token); } catch (Exception) { }
+            if (slot is not null)
+            {
+                try { await _raceStep!(request, state, lifetime.Token); } catch (Exception) { }
+                slot.Dispose();
+            }
         }
     }
 
@@ -113,6 +121,7 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
         _cancellation.Cancel();
         if (_listener is not null) try { await _listener; } catch (OperationCanceledException) { }
         await Task.WhenAll(_races.Values);
+        _watchSlots.Dispose();
         _cancellation.Dispose();
     }
 }

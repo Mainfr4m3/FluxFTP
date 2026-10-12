@@ -33,6 +33,19 @@ internal static class GlobalSettingsChecks
             Check(!savedLayout["Right"].Descending && savedLayout["Queue"].SortBy == "ProgressPercent", "view layouts remain independent");
             Check(new GlobalSettings().Layout is null, "old settings retain theme and default sorting");
             Check(!new GlobalSettings().EnableDownloadMeasurement, "download measurement disabled by default");
+            using (var raceSlots = new RaceWatchSlots(1))
+            {
+                var firstSlot = raceSlots.EnterAsync(CancellationToken.None).GetAwaiter().GetResult();
+                var waitingSlot = raceSlots.EnterAsync(CancellationToken.None);
+                Check(!waitingSlot.IsCompleted, "new race watch queues when active capacity is full");
+                firstSlot.Dispose(); firstSlot.Dispose();
+                using var admitted = waitingSlot.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+                using var cancelled = new CancellationTokenSource();
+                var cancelledSlot = raceSlots.EnterAsync(cancelled.Token); cancelled.Cancel();
+                var cancellationObserved=false;
+                try { cancelledSlot.GetAwaiter().GetResult(); } catch(OperationCanceledException) { cancellationObserved=true; }
+                Check(cancellationObserved, "waiting race watch can be cancelled without occupying a slot");
+            }
             var skipOptions = new GlobalSettings(SkipPatterns: "*.nfo", SkipZeroByteFiles: true);
             Check(SkipRuleMatcher.ShouldSkip(skipOptions, "test.nfo"), "skip list enabled");
             Check(!SkipRuleMatcher.ShouldSkip(skipOptions with { EnableSkipList=false }, "test.nfo", size: 0), "disabled skip list bypasses zero and patterns");
