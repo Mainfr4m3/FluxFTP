@@ -25,7 +25,7 @@ public sealed record GlobalSettings(
     int MaxLocalDownloadSlots = 1,
     int MaxLocalUploadSlots = 1,
     string PriorityPatterns = "*.nfo\n*.sfv",
-    string SkipPatterns = "",
+    string SkipPatterns = ".ioFTPD.verified\n[ioNiNJA]-(*F-COMPLETE)-[ioNiNJA]\n[ioNiNJA]-(V_*)-[ioNiNJA]",
     string ApiPassword = "",
     bool MinimizeToTray = false,
     string LegendBarMode = "Compact",
@@ -43,4 +43,11 @@ public sealed record GlobalSettings(
     bool EnableVisionaryBridge = false,
     bool SerializeLocalTransfers = true,
     string TransferCategoryOrder = "SFV\nMain files\nSample\nProof\nNFO",
-    bool EnableFxpSpeedMonitoring = false);
+    bool EnableFxpSpeedMonitoring = false,
+    Dictionary<string, ViewLayoutSettings>? Layout = null,
+    bool MetadataSkipDefaultsApplied = false,
+    bool VideoMetadataSkipDefaultsApplied = false,
+    bool EnableDownloadMeasurement = false);
+
+public sealed record ViewLayoutSettings(string[]? HiddenColumns = null, string SortBy = "Name",
+    bool Descending = false, string FontFamily = "", double FontSize = 0, bool Bold = false);

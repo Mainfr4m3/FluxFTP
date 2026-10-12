@@ -13,7 +13,7 @@ internal static class LocalDownloadChecks
             await File.WriteAllBytesAsync(partial, [1, 2]);
             var previous = SynchronizationContext.Current;
             var context = new SynchronizationContext();
-            Task transfer;
+            Task<LocalDownload.Measurement> transfer;
             try
             {
                 SynchronizationContext.SetSynchronizationContext(context);
@@ -28,7 +28,10 @@ internal static class LocalDownloadChecks
                 }, null, CancellationToken.None);
             }
             finally { SynchronizationContext.SetSynchronizationContext(previous); }
-            await transfer.WaitAsync(TimeSpan.FromSeconds(10));
+            var measurement = await transfer.WaitAsync(TimeSpan.FromSeconds(10));
+            if (measurement.Bytes != 1 || measurement.ResumeOffset != 2 || measurement.ElapsedSeconds < 0 ||
+                measurement.FlushSeconds < 0 || measurement.FinalizeSeconds < 0)
+                throw new Exception("Download measurement must count new bytes separately from resumed bytes.");
             if (File.Exists(partial) || !(await File.ReadAllBytesAsync(path)).SequenceEqual(new byte[] { 1, 2, 3 }))
                 throw new Exception("Completed download was not finalized correctly.");
             using var cancellation = new CancellationTokenSource();

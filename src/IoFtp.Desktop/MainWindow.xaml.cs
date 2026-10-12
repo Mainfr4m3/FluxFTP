@@ -43,6 +43,10 @@ public partial class MainWindow : Window
     private readonly GlobalTransferEngine _engine;
     private readonly GlobalSettingsStore _settingsStore = new();
     private readonly WindowLayoutStore _layoutStore = new();
+    private readonly ColumnVisibilityController _columnVisibility;
+    private readonly SessionStatistics _sessionStatistics = new();
+    private readonly TotalStatisticsStore _totalStatistics = new();
+    private readonly ConcurrentDictionary<FtpRemoteSession, byte> _sessionWorkers = new();
     private ApiServer? _apiServer;
     private IrcManager? _ircService;
     private readonly SemaphoreSlim _ircRestartGate = new(1, 1);
@@ -101,8 +105,25 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        _reverseFxpPairs = _fxpRouteStore.LoadReverseRoutes();
         _settings = _settingsStore.Load();
+        _columnVisibility = new ColumnVisibilityController(_settings.Layout, (key, hidden) =>
+        {
+            var layout = new Dictionary<string, ViewLayoutSettings>(_settings.Layout ?? []);
+            var current = layout.GetValueOrDefault(key) ?? new(SortBy: key == "Queue" ? "" : "Name");
+            layout[key] = current with { HiddenColumns = hidden };
+            var updated = _settings with { Layout = layout };
+            _settingsStore.Save(updated);
+            _settings = updated;
+        });
+        void ReportColumnError(string message) => LogText.AppendText(Environment.NewLine + message);
+        _columnVisibility.Attach(LocalList, "Left", () => FitFileColumns(LocalList), ReportColumnError);
+        _columnVisibility.Attach(RemoteList, "Right", () => FitFileColumns(RemoteList), ReportColumnError);
+        _columnVisibility.Attach(QueueList, "Queue", FitQueueColumns, ReportColumnError);
+        var migratedLayout = new Dictionary<string, ViewLayoutSettings>(_settings.Layout ?? []);
+        foreach (var key in new[] { "Left", "Right", "Queue" })
+            if (!migratedLayout.ContainsKey(key)) migratedLayout[key] = new(_columnVisibility.Hidden(key), key == "Queue" ? "" : "Name");
+        _settings = _settings with { Layout = migratedLayout };
+        _reverseFxpPairs = _fxpRouteStore.LoadReverseRoutes();
         LogText.Text = $"FluxFTP {UpdateCheckService.CurrentVersion} started.{Environment.NewLine}No network connections have been opened.";
         _engine = new GlobalTransferEngine(new DesktopTransferExecutor(this));
         _engine.ConfigureLocalSlots(_settings.MaxLocalDownloadSlots, _settings.MaxLocalUploadSlots, _settings.SerializeLocalTransfers);
@@ -112,6 +133,7 @@ public partial class MainWindow : Window
         ReloadQuickSites(RightQuickSites);
         ReloadLocalDrives();
         LoadQueue();
+        ApplyViewLayouts();
         foreach (var entry in _queue) TrackRaceEntry(entry);
         _raceLog.Write("SESSION", "FluxFTP " + UpdateCheckService.CurrentVersion + " started");
         _raceLogTimer.Tick += (_, _) =>
@@ -518,36 +540,107 @@ public partial class MainWindow : Window
         ApplyCurrentSort(LocalList, _leftSortProperty, _leftSortDirection, LeftNameHeader, LeftSizeHeader, LeftModifiedHeader);
     }
 
-    private void LeftHeader_Click(object sender, RoutedEventArgs e) =>
+    private void LeftHeader_Click(object sender, RoutedEventArgs e)
+    {
         SortList(LocalList, (GridViewColumnHeader)sender, ref _leftSortProperty, ref _leftSortDirection,
             LeftNameHeader, LeftSizeHeader, LeftModifiedHeader);
+        SaveViewSort("Left", _leftSortProperty, _leftSortDirection);
+    }
 
-    private void RightHeader_Click(object sender, RoutedEventArgs e) =>
+    private void RightHeader_Click(object sender, RoutedEventArgs e)
+    {
         SortList(RemoteList, (GridViewColumnHeader)sender, ref _rightSortProperty, ref _rightSortDirection,
             RightNameHeader, RightSizeHeader, RightModifiedHeader);
+        SaveViewSort("Right", _rightSortProperty, _rightSortDirection);
+    }
 
-    private void QueueHeader_Click(object sender, RoutedEventArgs e) =>
+    private void QueueHeader_Click(object sender, RoutedEventArgs e)
+    {
         SortList(QueueList, (GridViewColumnHeader)sender, ref _queueSortProperty, ref _queueSortDirection,
             QueueStateHeader, QueueNameHeader, QueueSourceHeader, QueueDestinationHeader, QueueProgressHeader);
+        SaveViewSort("Queue", _queueSortProperty, _queueSortDirection);
+    }
+
+    private void SaveViewSort(string key, string property, ListSortDirection direction)
+    {
+        var layout = new Dictionary<string, ViewLayoutSettings>(_settings.Layout ?? []);
+        layout[key] = (layout.GetValueOrDefault(key) ?? new()) with { SortBy = property, Descending = direction == ListSortDirection.Descending };
+        var updated = _settings with { Layout = layout };
+        try { _settingsStore.Save(updated); _settings = updated; }
+        catch (Exception exception) { LogText.AppendText(Environment.NewLine + "Could not save sorting: " + exception.Message); }
+    }
+
+    private void ApplyViewLayouts()
+    {
+        var layout = _settings.Layout ?? [];
+        _columnVisibility.Apply(layout);
+        foreach (var (key, list) in new[] { ("Left", LocalList), ("Right", RemoteList), ("Queue", QueueList) })
+        {
+            var settings = layout.GetValueOrDefault(key) ?? new(SortBy: key == "Queue" ? "" : "Name");
+            if (string.IsNullOrWhiteSpace(settings.FontFamily)) list.ClearValue(Control.FontFamilyProperty);
+            else list.FontFamily = new System.Windows.Media.FontFamily(settings.FontFamily);
+            if (settings.FontSize == 0 || !double.IsFinite(settings.FontSize)) list.ClearValue(Control.FontSizeProperty);
+            else list.FontSize = Math.Clamp(settings.FontSize, 8, 40);
+            if (settings.Bold) list.FontWeight = FontWeights.Bold;
+            else list.ClearValue(Control.FontWeightProperty);
+            var allowed = key == "Queue" ? new[] { "", "State", "Name", "Source", "Destination", "ProgressPercent" }
+                : new[] { "Name", "SortSize", "SortModified", "Attributes", "Status" };
+            var property = allowed.Contains(settings.SortBy) ? settings.SortBy : allowed[0];
+            var direction = settings.Descending ? ListSortDirection.Descending : ListSortDirection.Ascending;
+            if (key == "Left")
+            {
+                _leftSortProperty = property; _leftSortDirection = direction;
+                ApplyCurrentSort(list, property, direction, LeftNameHeader, LeftSizeHeader, LeftModifiedHeader);
+            }
+            else if (key == "Right")
+            {
+                _rightSortProperty = property; _rightSortDirection = direction;
+                ApplyCurrentSort(list, property, direction, RightNameHeader, RightSizeHeader, RightModifiedHeader);
+            }
+            else
+            {
+                _queueSortProperty = property; _queueSortDirection = direction;
+                ApplyCurrentSort(list, property, direction, QueueStateHeader, QueueNameHeader, QueueSourceHeader, QueueDestinationHeader, QueueProgressHeader);
+            }
+        }
+    }
 
     private void FileList_SizeChanged(object sender, SizeChangedEventArgs e)
     {
-        // Keep Size, Modified and Attributes visible at every DPI setting;
-        // the Name column receives the remaining panel width.
-        var width = Math.Max(120, e.NewSize.Width - 90 - 150 - 110 - 150 - 24);
-        if (ReferenceEquals(sender, LocalList)) LeftNameColumn.Width = width;
-        else if (ReferenceEquals(sender, RemoteList)) RightNameColumn.Width = width;
+        FitFileColumns((ListView)sender);
+    }
+
+    private void FitFileColumns(ListView list)
+    {
+        if (list.View is not GridView view) return;
+        var name = ReferenceEquals(list, LocalList) ? LeftNameColumn : RightNameColumn;
+        if (name is null || !view.Columns.Contains(name)) return;
+        var otherWidth = view.Columns.Where(column => column != name)
+            .Sum(column => double.IsFinite(column.Width) ? column.Width : column.ActualWidth);
+        name.Width = Math.Max(120, list.ActualWidth - otherWidth - 24);
     }
 
     private void QueueList_SizeChanged(object sender, SizeChangedEventArgs e)
     {
-        var available = Math.Max(620, e.NewSize.Width - 28);
-        QueueStateColumn.Width = 82;
-        QueueProgressColumn.Width = Math.Clamp(available * 0.20, 170, 220);
-        var paths = Math.Max(420, available - QueueStateColumn.Width - QueueProgressColumn.Width);
-        QueueNameColumn.Width = Math.Max(140, paths * 0.30);
-        QueueSourceColumn.Width = Math.Max(140, paths * 0.35);
-        QueueDestinationColumn.Width = Math.Max(140, paths * 0.35);
+        FitQueueColumns();
+    }
+
+    private void FitQueueColumns()
+    {
+        if (QueueList?.View is not GridView view || QueueStateColumn is null || QueueProgressColumn is null) return;
+        var available = Math.Max(0, QueueList.ActualWidth - 28);
+        var fixedWidth = 0.0;
+        if (view.Columns.Contains(QueueStateColumn)) { QueueStateColumn.Width = 82; fixedWidth += 82; }
+        if (view.Columns.Contains(QueueProgressColumn))
+        {
+            QueueProgressColumn.Width = Math.Clamp(available * 0.20, 170, 220);
+            fixedWidth += QueueProgressColumn.Width;
+        }
+        var paths = new[] { (QueueNameColumn, 0.30), (QueueSourceColumn, 0.35), (QueueDestinationColumn, 0.35) }
+            .Where(pair => view.Columns.Contains(pair.Item1)).ToArray();
+        var weight = paths.Sum(pair => pair.Item2);
+        foreach (var (column, proportion) in paths)
+            column.Width = Math.Max(140, (available - fixedWidth) * proportion / weight);
     }
 
     private void LegendBar_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -581,10 +674,10 @@ public partial class MainWindow : Window
     private static void ApplyCurrentSort(ListView list, string property, ListSortDirection direction,
         params GridViewColumnHeader[] headers)
     {
-        if (string.IsNullOrWhiteSpace(property) || list.ItemsSource is null) return;
+        if (list.ItemsSource is null) return;
         var view = CollectionViewSource.GetDefaultView(list.ItemsSource);
         view.SortDescriptions.Clear();
-        view.SortDescriptions.Add(new SortDescription(property, direction));
+        if (!string.IsNullOrWhiteSpace(property)) view.SortDescriptions.Add(new SortDescription(property, direction));
         foreach (var item in headers)
         {
             var label = item.Tag?.ToString() switch
@@ -1730,6 +1823,7 @@ public partial class MainWindow : Window
                 if (!ruleResult.Accepted) throw new InvalidOperationException($"Site rules blocked transfer: {ruleResult.Message}");
             }
             entry.State = "Transferring";
+            long sessionNewBytes = entry.TotalBytes;
             entry.StartedAt ??= DateTimeOffset.Now;
             SaveQueue();
             await RunScriptsAsync("BeforeTransfer", TransferScriptVariables(entry, "Starting"), false);
@@ -1789,9 +1883,19 @@ public partial class MainWindow : Window
             {
                 var session = entry.Direction == TransferDirection.ApiDownload ? apiWorker! : entry.Direction == TransferDirection.Download ? rightWorker! : leftWorker!;
                 var source = entry.Source;
-                await LocalDownload.RunAsync(entry.Destination,
+                var measureDownload = _settings.EnableDownloadMeasurement;
+                session.EnableDownloadMeasurement = measureDownload;
+                var measurement = await LocalDownload.RunAsync(entry.Destination,
                     (output, offset) => session.DownloadAsync(source, output, offset, progress, cancellationToken),
                     progress, cancellationToken);
+                entry.BytesTransferred = measurement.ResumeOffset + measurement.Bytes;
+                sessionNewBytes = measurement.Bytes;
+                if (measureDownload)
+                {
+                var diagnostic = FormattableString.Invariant($"Download measurement: {entry.Name} | new bytes={measurement.Bytes}; resume={measurement.ResumeOffset}; total={measurement.ElapsedSeconds:F3}s; average={measurement.Bytes / 1000000.0 / Math.Max(measurement.ElapsedSeconds, 0.001):F2} MB/s; flush={measurement.FlushSeconds:F3}s; rename={measurement.FinalizeSeconds:F3}s | {session.LastDownloadMeasurement}");
+                LogText.AppendText(Environment.NewLine + diagnostic);
+                _raceLog.Write("DOWNLOAD-MEASURE", diagnostic);
+                }
                 AppendTransferIntegrityNotices(entry, ("source", session));
             }
             else if (entry.Direction is TransferDirection.Upload or TransferDirection.UploadToLeft)
@@ -1800,6 +1904,7 @@ public partial class MainWindow : Window
                 await EnsureRemoteDirectoryAsync(session, RemoteParent(entry.Destination), cancellationToken);
                 await using var input = new FileStream(entry.Source, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, true);
                 var offset = Math.Min(entry.BytesTransferred, input.Length); input.Seek(offset, SeekOrigin.Begin);
+                sessionNewBytes = input.Length - offset;
                 await session.UploadAsync(entry.Destination, input, offset, progress, cancellationToken);
                 AppendTransferIntegrityNotices(entry, ("destination", session));
             }
@@ -1870,6 +1975,7 @@ public partial class MainWindow : Window
                         AppendTransferIntegrityNotices(entry, ("source", sourceSession), ("destination", destinationSession));
                         LogText.AppendText($"{Environment.NewLine}Direct FXP completed via {sourceSession.LastFxpNegotiation}: {entry.Name}");
                         entry.State = "Completed";
+                        RecordSessionCompletion(entry, sessionNewBytes);
                         await RunScriptsAsync("AfterTransfer", TransferScriptVariables(entry, "Completed"), true);
                         reuseWorkers = true;
                         return;
@@ -1894,18 +2000,18 @@ public partial class MainWindow : Window
                         LogText.AppendText($"{Environment.NewLine}Direct FXP rejected ({FriendlyMessage(fxpException)}). Reconnecting for client relay…");
                         if (entry.Direction == TransferDirection.ApiFxp)
                         {
-                            if (apiFxpSourceWorker is not null) await apiFxpSourceWorker.DisposeAsync();
-                            if (apiFxpDestinationWorker is not null) await apiFxpDestinationWorker.DisposeAsync();
-                            apiFxpSourceWorker = await CreateWorkerAsync(apiFxpSource!, cancellationToken);
-                            apiFxpDestinationWorker = await CreateWorkerAsync(apiFxpDestination!, cancellationToken);
+                            if (apiFxpSourceWorker is not null) await DisposeTransferWorkerAsync(apiFxpSourceWorker);
+                            if (apiFxpDestinationWorker is not null) await DisposeTransferWorkerAsync(apiFxpDestinationWorker);
+                            apiFxpSourceWorker = await CreateTransferWorkerAsync(apiFxpSource!, cancellationToken);
+                            apiFxpDestinationWorker = await CreateTransferWorkerAsync(apiFxpDestination!, cancellationToken);
                             sourceSession = apiFxpSourceWorker; destinationSession = apiFxpDestinationWorker;
                         }
                         else
                         {
-                            if (leftWorker is not null) await leftWorker.DisposeAsync();
-                            if (rightWorker is not null) await rightWorker.DisposeAsync();
-                            leftWorker = await CreateWorkerAsync(leftProfile!, cancellationToken);
-                            rightWorker = await CreateWorkerAsync(rightProfile!, cancellationToken);
+                            if (leftWorker is not null) await DisposeTransferWorkerAsync(leftWorker);
+                            if (rightWorker is not null) await DisposeTransferWorkerAsync(rightWorker);
+                            leftWorker = await CreateTransferWorkerAsync(leftProfile!, cancellationToken);
+                            rightWorker = await CreateTransferWorkerAsync(rightProfile!, cancellationToken);
                             sourceSession = entry.Direction == TransferDirection.RelayLeftToRight ? leftWorker : rightWorker;
                             destinationSession = entry.Direction == TransferDirection.RelayLeftToRight ? rightWorker : leftWorker;
                         }
@@ -1927,6 +2033,7 @@ public partial class MainWindow : Window
                 finally { if (File.Exists(temporary)) File.Delete(temporary); }
             }
             entry.State = "Completed";
+            RecordSessionCompletion(entry, sessionNewBytes);
             LogText.AppendText($"{Environment.NewLine}Transfer completed: {entry.Name}");
             await RunScriptsAsync("AfterTransfer", TransferScriptVariables(entry, "Completed"), true);
             reuseWorkers = true;
@@ -1974,6 +2081,33 @@ public partial class MainWindow : Window
         var values = session.LastFxpStageTimings.Select(stage =>
             $"{stage.Name} {(stage.Elapsed.TotalSeconds >= 1 ? $"{stage.Elapsed.TotalSeconds:0.00}s" : $"{stage.Elapsed.TotalMilliseconds:0}ms")}");
         LogText.AppendText($"{Environment.NewLine}FXP timings: {string.Join(" | ", values)}");
+    }
+
+    private void RecordSessionCompletion(QueueEntryView entry, long newBytes)
+    {
+        var kind = entry.Direction switch
+        {
+            TransferDirection.Download or TransferDirection.DownloadFromLeft or TransferDirection.ApiDownload => "Download",
+            TransferDirection.Upload or TransferDirection.UploadToLeft => "Upload",
+            TransferDirection.LocalCopy => "Local",
+            _ => "FXP"
+        };
+        _sessionStatistics.Complete(kind, newBytes);
+        _totalStatistics.Complete(kind, newBytes);
+        if (_totalStatistics.LastError is { } error) LogText.AppendText(Environment.NewLine + error);
+    }
+
+    private async Task<FtpRemoteSession> CreateTransferWorkerAsync(ConnectionProfile profile, CancellationToken token)
+    {
+        var worker = await CreateWorkerAsync(profile, token);
+        if (_sessionWorkers.TryAdd(worker, 0)) _sessionStatistics.WorkerCreated();
+        return worker;
+    }
+
+    private async Task DisposeTransferWorkerAsync(FtpRemoteSession worker)
+    {
+        try { await worker.DisposeAsync(); }
+        finally { if (_sessionWorkers.TryRemove(worker, out _)) _sessionStatistics.WorkerClosed(); }
     }
 
     private void AppendTransferIntegrityNotices(QueueEntryView entry,
@@ -2242,22 +2376,22 @@ public partial class MainWindow : Window
         while (pool.TryTake(out var pooled))
         {
             var session = pooled.Session;
-            if (!session.IsConnected) { await session.DisposeAsync(); continue; }
-            if (DateTimeOffset.UtcNow - pooled.ReturnedAt < WorkerHealthCheckInterval) return session;
+            if (!session.IsConnected) { await DisposeTransferWorkerAsync(session); continue; }
+            if (DateTimeOffset.UtcNow - pooled.ReturnedAt < WorkerHealthCheckInterval) { _sessionStatistics.PoolHit(); return session; }
             try
             {
                 var response = await session.ExecuteCommandAsync("NOOP", cancellationToken);
-                if (response.StatusCode is >= 200 and < 300) return session;
+                if (response.StatusCode is >= 200 and < 300) { _sessionStatistics.PoolHit(); return session; }
             }
             catch (Exception) when (!cancellationToken.IsCancellationRequested) { }
             catch
             {
-                await session.DisposeAsync();
+                await DisposeTransferWorkerAsync(session);
                 throw;
             }
-            await session.DisposeAsync();
+            await DisposeTransferWorkerAsync(session);
         }
-        return await CreateWorkerAsync(profile, cancellationToken);
+        return await CreateTransferWorkerAsync(profile, cancellationToken);
     }
 
     private async Task WarmWorkersForDirectionAsync(TransferDirection direction, int fileCount, CancellationToken cancellationToken)
@@ -2292,7 +2426,7 @@ public partial class MainWindow : Window
             if (missing == 0) return;
             var sessions = await Task.WhenAll(Enumerable.Range(0, missing).Select(async _ =>
             {
-                try { return await CreateWorkerAsync(pair.Key, cancellationToken); }
+                try { return await CreateTransferWorkerAsync(pair.Key, cancellationToken); }
                 catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
                 {
                     LogText.Dispatcher.Invoke(() => LogText.AppendText(
@@ -2312,7 +2446,7 @@ public partial class MainWindow : Window
         if (session is null) return;
         if (!reusable || !session.IsConnected || _workerPoolShuttingDown || profile is null)
         {
-            await session.DisposeAsync();
+            await DisposeTransferWorkerAsync(session);
             return;
         }
         _workerPool.GetOrAdd(profile, _ => new ConcurrentBag<PooledWorker>())
@@ -2325,7 +2459,7 @@ public partial class MainWindow : Window
         foreach (var pair in pools)
         {
             if (!_workerPool.TryRemove(pair.Key, out var pool)) continue;
-            while (pool.TryTake(out var pooled)) await pooled.Session.DisposeAsync();
+            while (pool.TryTake(out var pooled)) await DisposeTransferWorkerAsync(pooled.Session);
         }
     }
 
@@ -2336,7 +2470,7 @@ public partial class MainWindow : Window
         foreach (var profile in staleProfiles)
         {
             if (!_workerPool.TryRemove(profile, out var pool)) continue;
-            while (pool.TryTake(out var pooled)) await pooled.Session.DisposeAsync();
+            while (pool.TryTake(out var pooled)) await DisposeTransferWorkerAsync(pooled.Session);
         }
     }
 
@@ -2662,8 +2796,23 @@ public partial class MainWindow : Window
         var running = _queue.Where(item => item.State == "Transferring").ToList();
         var speed = running.Sum(item => item.SpeedBytesPerSecond); var bytes = _queue.Sum(item => item.BytesTransferred);
         var fxp = _queue.Where(item => item.Direction.ToString().StartsWith("Relay", StringComparison.Ordinal)).ToList();
+        var total = _totalStatistics.Snapshot();
         var rows = new List<MetricRow>
         {
+            new("All-time transferred", FormatSize(total.Uploaded + total.Downloaded + total.Fxp + total.Local), $"Tracked since {total.StartedAt.LocalDateTime:yyyy-MM-dd HH:mm}; survives restart and queue clearing"),
+            new("All-time uploaded", FormatSize(total.Uploaded), "Successful uploads; newly transferred bytes"),
+            new("All-time downloaded", FormatSize(total.Downloaded), "Successful downloads; resume offsets excluded"),
+            new("All-time FXP / relay", FormatSize(total.Fxp), "Successful server-to-server files counted once"),
+            new("All-time local copies", FormatSize(total.Local), "Successful disk-to-disk copies"),
+            new("All-time completed files", total.Completed.ToString(), _totalStatistics.LastError ?? "Saved after each successful transfer; totals are shared across all sites"),
+            new("Session running", $"{(long)_sessionStatistics.Uptime.TotalHours} h {_sessionStatistics.Uptime.Minutes} min", "Since this FluxFTP process started; resets on restart"),
+            new("Session uploaded", FormatSize(_sessionStatistics.Uploaded), "New bytes from successful uploads"),
+            new("Session downloaded", FormatSize(_sessionStatistics.Downloaded), "New bytes from successful downloads; resumed bytes excluded"),
+            new("Session FXP / relay", FormatSize(_sessionStatistics.Fxp), "Successful server-to-server files, counted once per file"),
+            new("Session local copies", FormatSize(_sessionStatistics.Local), "Successful disk-to-disk copies"),
+            new("Session completed files", _sessionStatistics.Completed.ToString(), "Independent of saved or cleared queue history"),
+            new("Transfer workers created / closed", $"{_sessionStatistics.Created} / {_sessionStatistics.Closed}", "Connected transfer sessions; excludes browsing and monitoring"),
+            new("Transfer connection pool", _workerPool.Values.Sum(pool => pool.Count).ToString(), $"Idle connections; tracked live: {_sessionWorkers.Count}; reuse hits: {_sessionStatistics.Hits}"),
             new("Configured sites", profiles.Count.ToString(), $"Login slots: {profiles.Sum(site => site.EffectiveOptions.MaxSlots)}"),
             new("Connected panes", connected.ToString(), $"Left: {(_leftRemoteSession?.IsConnected == true ? "online" : "offline")}   Right: {(_remoteSession?.IsConnected == true ? "online" : "offline")}"),
             new("Transfer jobs", _queue.Count.ToString(), $"Queued/active: {active}"),
@@ -2820,6 +2969,7 @@ public partial class MainWindow : Window
                  status.Item.DestinationSiteId is { } destination ? priorityProfiles.GetValueOrDefault(destination) : null]));
             _engine.UpdateFilePriorities(ranks);
             ThemeManager.Apply(_settings.Theme);
+            ApplyViewLayouts();
             ConfigureTrayIcon();
             UpdateLegendBar();
             _engine.ConfigureLocalSlots(_settings.MaxLocalDownloadSlots, _settings.MaxLocalUploadSlots, _settings.SerializeLocalTransfers);
@@ -2827,6 +2977,17 @@ public partial class MainWindow : Window
             await RestartApiServerAsync();
             await RestartIrcAsync();
         }
+    }
+
+    private string GetIrcStatistics(string kind)
+    {
+        if (kind == "pool") return $"FluxFTP pool: Created {_sessionStatistics.Created}, closed {_sessionStatistics.Closed}, idle {_workerPool.Values.Sum(pool => pool.Count)}, live {_sessionWorkers.Count}, reuse hits {_sessionStatistics.Hits}. Transfer connections only; this session.";
+        if (kind == "total")
+        {
+            var total = _totalStatistics.Snapshot();
+            return $"FluxFTP total since {total.StartedAt.LocalDateTime:yyyy-MM-dd}: Uploaded {FormatSize(total.Uploaded)}, Downloaded {FormatSize(total.Downloaded)}, FXP/relay {FormatSize(total.Fxp)}, Local {FormatSize(total.Local)}, Completed {total.Completed}." + (_totalStatistics.LastError is null ? "" : " WARNING: totals storage error; check Metrics.");
+        }
+        return $"FluxFTP session: Running {(long)_sessionStatistics.Uptime.TotalHours}h {_sessionStatistics.Uptime.Minutes}m; Uploaded {FormatSize(_sessionStatistics.Uploaded)}, Downloaded {FormatSize(_sessionStatistics.Downloaded)}, FXP/relay {FormatSize(_sessionStatistics.Fxp)}, Local {FormatSize(_sessionStatistics.Local)}, Completed {_sessionStatistics.Completed}, active {_queue.Count(item => item.State == "Transferring")}.";
     }
 
     private async Task CheckForUpdatesAsync()
@@ -2916,6 +3077,8 @@ public partial class MainWindow : Window
         }), setupCommand: async (command, stillAuthorized) => await Dispatcher.InvokeAsync(() =>
         {
             if (!stillAuthorized()) return "ERROR: IRC identity changed; command cancelled.";
+            if (command.Split(' ', 2)[0].Equals("!flux", StringComparison.OrdinalIgnoreCase))
+                return IrcStatisticsCommands.Execute(command, GetIrcStatistics);
             var result = setup.Execute(command);
             if (result.StartsWith("OK:", StringComparison.Ordinal))
             {

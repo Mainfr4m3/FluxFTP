@@ -16,6 +16,7 @@ public partial class GlobalSettingsWindow : Window
     private readonly ThemeSettings _originalTheme;
     private readonly bool _visionaryBridge;
     private readonly IrcSettings _ircSettings;
+    private readonly LayoutSettingsEditor _layoutEditor;
     public GlobalSettings? Settings { get; private set; }
     public GlobalSettingsWindow(GlobalSettings s)
     {
@@ -30,6 +31,7 @@ public partial class GlobalSettingsWindow : Window
         LocalPathBox.Text=s.LocalDownloadPath; LocalDownloadsBox.Text=$"{s.MaxLocalDownloadSlots}"; LocalUploadsBox.Text=$"{s.MaxLocalUploadSlots}";
         SerializeLocalBox.IsChecked = s.SerializeLocalTransfers;
         FxpSpeedMonitoringBox.IsChecked = s.EnableFxpSpeedMonitoring;
+        DownloadMeasurementBox.IsChecked = s.EnableDownloadMeasurement;
         PriorityPatternsBox.Text=s.PriorityPatterns;
         foreach (var category in TransferFilePriority.Categories(s.TransferCategoryOrder)) PriorityCategoriesList.Items.Add(category);
         PriorityCategoriesList.SelectedIndex = 0;
@@ -41,12 +43,16 @@ public partial class GlobalSettingsWindow : Window
         CheckUpdatesBox.IsChecked=s.CheckForUpdatesAtStartup;
         UpdateStatusText.Text=$"Installed version: {UpdateCheckService.CurrentVersion}";
         LoadTheme(_originalTheme);
+        _layoutEditor = new LayoutSettingsEditor(LayoutPanel, s.Layout);
 
         Closing += RestoreThemeWhenCanceled;
     }
     private void Save_Click(object sender, RoutedEventArgs e)
     {
         ErrorText.Text = "";
+        Dictionary<string, ViewLayoutSettings> layout;
+        try { layout = _layoutEditor.Read(); }
+        catch (ArgumentException exception) { ErrorText.Text = exception.Message; return; }
         var boxes = new[] { PortFromBox, PortToBox, ApiPortBox, ExpirationBox, StarterBox, RuntimeBox, JobHistoryBox, TransferHistoryBox, LogHistoryBox, SlotsBox, UploadsBox, DownloadsBox, DefaultIdleBox, LocalDownloadsBox, LocalUploadsBox, ProxyPortBox };
         if (boxes.Any(box => !int.TryParse(box.Text, out _))) { ErrorText.Text="All numeric settings must be whole numbers."; return; }
         int N(System.Windows.Controls.TextBox b)=>int.Parse(b.Text);
@@ -60,7 +66,8 @@ public partial class GlobalSettingsWindow : Window
         Settings = new GlobalSettings(BindBox.Text.Trim(),N(PortFromBox),N(PortToBox),ApiEnabledBox.IsChecked==true,N(ApiPortBox),ApiLocalBox.IsChecked==true,N(ExpirationBox),N(StarterBox),N(RuntimeBox),N(JobHistoryBox),N(TransferHistoryBox),N(LogHistoryBox),UsernameBox.Text.Trim(),N(SlotsBox),N(UploadsBox),N(DownloadsBox),((ProtocolChoice)ProtocolBox.SelectedItem).Protocol,N(DefaultIdleBox),LocalPathBox.Text.Trim(),N(LocalDownloadsBox),N(LocalUploadsBox),PriorityPatternsBox.Text.Trim(),SkipPatternsBox.Text.Trim(),ApiPasswordBox.Password,MinimizeToTrayBox.IsChecked==true,LegendModeBox.SelectedItem?.ToString() ?? "Compact",(ProxyType)(ProxyTypeBox.SelectedItem ?? ProxyType.None),ProxyHostBox.Text.Trim(),N(ProxyPortBox),ProxyUsernameBox.Text.Trim(),ProxyPasswordBox.Password,ProxyDnsBox.IsChecked==true,ProxyDataBox.IsChecked==true,CheckUpdatesBox.IsChecked==true, _advancedSkipRules.ToArray(), theme, irc);
         Settings = Settings with { EnableVisionaryBridge = _visionaryBridge, SerializeLocalTransfers = SerializeLocalBox.IsChecked == true,
             TransferCategoryOrder = string.Join("\n", PriorityCategoriesList.Items.Cast<string>()),
-            EnableFxpSpeedMonitoring = FxpSpeedMonitoringBox.IsChecked == true };
+            EnableFxpSpeedMonitoring = FxpSpeedMonitoringBox.IsChecked == true, Layout = layout, MetadataSkipDefaultsApplied = true, VideoMetadataSkipDefaultsApplied = true,
+            EnableDownloadMeasurement = DownloadMeasurementBox.IsChecked == true };
         try { new GlobalSettingsStore().Save(Settings); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException)
         { Settings = null; ErrorText.Text = "Could not save settings to disk. Check write access and free space; your edits are still here. Please try Save again."; return; }

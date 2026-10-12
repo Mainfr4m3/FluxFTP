@@ -19,6 +19,65 @@ internal static class GlobalSettingsChecks
             var path = Path.Combine(directory, "settings.json");
             Check(!File.ReadAllText(path).Contains(irc.Password), "secret protected on disk");
             Check(new GlobalSettingsStore(directory).Load().TransferCategoryOrder == settings.TransferCategoryOrder, "transfer category order survives restart");
+            var layout = new Dictionary<string, ViewLayoutSettings>
+            {
+                ["Left"] = new(["Attributes", "Status"], "SortSize", true, "Consolas", 14, true),
+                ["Right"] = new(["Modified"], "Name", false),
+                ["Queue"] = new(["Source"], "ProgressPercent", true)
+            };
+            new GlobalSettingsStore(directory).Save(settings with { Layout = layout });
+            var savedLayout = new GlobalSettingsStore(directory).Load().Layout!;
+            Check(savedLayout["Left"].HiddenColumns!.SequenceEqual(layout["Left"].HiddenColumns!), "hidden columns survive restart");
+            Check(savedLayout["Left"].Descending && savedLayout["Left"].SortBy == "SortSize", "sort property and direction survive restart");
+            Check(savedLayout["Left"].FontFamily == "Consolas" && savedLayout["Left"].FontSize == 14 && savedLayout["Left"].Bold, "view typography survives restart");
+            Check(!savedLayout["Right"].Descending && savedLayout["Queue"].SortBy == "ProgressPercent", "view layouts remain independent");
+            Check(new GlobalSettings().Layout is null, "old settings retain theme and default sorting");
+            Check(!new GlobalSettings().EnableDownloadMeasurement, "download measurement disabled by default");
+            new GlobalSettingsStore(directory).Save(settings with { EnableDownloadMeasurement = true });
+            Check(new GlobalSettingsStore(directory).Load().EnableDownloadMeasurement, "download measurement preference persists");
+            var session = new SessionStatistics();
+            System.Threading.Tasks.Parallel.For(0, 1000, _ =>
+            {
+                session.Complete("Download", 10); session.WorkerCreated(); session.PoolHit(); session.WorkerClosed();
+            });
+            session.Complete("Upload", 30); session.Complete("FXP", 40); session.Complete("Local", 50);
+            Check(session.Downloaded == 10000 && session.Uploaded == 30 && session.Fxp == 40 && session.Local == 50 && session.Completed == 1003,
+                "thread-safe independent session transfer counters");
+            Check(session.Created == 1000 && session.Closed == 1000 && session.Hits == 1000, "session pool counters");
+            Check(new SessionStatistics().Completed == 0 && new SessionStatistics().Downloaded == 0, "new session resets totals");
+            Check(IrcStatisticsCommands.Execute("!flux stats", kind => kind) == "session", "IRC session stats route");
+            Check(IrcStatisticsCommands.Execute("!FLUX STATS TOTAL", kind => kind) == "total", "IRC total stats route ignores case");
+            Check(IrcStatisticsCommands.Execute("!flux stats pool", kind => kind) == "pool", "IRC pool stats route");
+            var adminSite = new IoFtp.Core.Models.ConnectionProfile(Guid.NewGuid(), "Admin", "example.test", 21, "admin", IoFtp.Core.Models.TransferProtocol.FtpsExplicit);
+            Check(IrcFtpAccess.ConfigurationError(adminSite with { AllowInvalidCertificate = true })!.Contains("invalid certificates"), "IRC certificate exception has specific diagnostic");
+            Check(IrcFtpAccess.ConfigurationError(adminSite with { AllowInvalidCertificate = false }) is null, "verified FTPS authority accepted");
+            Check(IrcFtpAccess.ConfigurationError(null)!.Contains("unavailable"), "missing IRC authority has specific diagnostic");
+            Check(IrcStatisticsCommands.Execute("!flux stats reset", _ => throw new Exception("Invalid stats request reached snapshot")).StartsWith("ERROR:"), "IRC unknown stats option rejected");
+            var totalDirectory = Path.Combine(directory, "totals");
+            var totals = new TotalStatisticsStore(totalDirectory);
+            totals.Complete("Download", 100); totals.Complete("Upload", 200); totals.Complete("FXP", 300); totals.Complete("Local", 400);
+            var totalReloaded = new TotalStatisticsStore(totalDirectory).Snapshot();
+            Check(totalReloaded is { Downloaded: 100, Uploaded: 200, Fxp: 300, Local: 400, Completed: 4 }, "all-time totals survive restart");
+            new TotalStatisticsStore(totalDirectory).Complete("Download", 50);
+            Check(new TotalStatisticsStore(totalDirectory).Snapshot().Downloaded == 150, "next session adds to existing totals");
+            File.WriteAllText(Path.Combine(totalDirectory, "total-statistics.json"), "invalid json");
+            var recoveredTotals = new TotalStatisticsStore(totalDirectory);
+            Check(recoveredTotals.Snapshot().Completed == 4 && recoveredTotals.LastError is not null, "corrupt totals recover from backup with warning");
+            new GlobalSettingsStore(directory).Save(settings with { SkipPatterns = "*.message", MetadataSkipDefaultsApplied = false });
+            var skipSettings = new GlobalSettingsStore(directory).Load();
+            Check(SkipRuleMatcher.ShouldSkip(skipSettings, "[ioNiNJA]-(2.7GB 20F-COMPLETE)-[ioNiNJA]", true, "Transfer"), "COMPLETE directory skipped");
+            Check(SkipRuleMatcher.ShouldSkip(skipSettings, "[ioninja]-(850MB 5F-COMPLETE)-[ioninja]", true, "Transfer"), "COMPLETE size/count and case variations skipped");
+            Check(SkipRuleMatcher.ShouldSkip(skipSettings, ".ioFTPD.verified", false, "Transfer"), "verification file skipped");
+            Check(SkipRuleMatcher.ShouldSkip(skipSettings, "[ioNiNJA]-(V_MPEG4;ISO;AVC @ 7 647 Kbps. 1920x1080 16 9-E-AC-3 @ 224 Kbps)-[ioNiNJA]", true, "Transfer"), "video metadata with semicolons skipped");
+            Check(SkipRuleMatcher.ShouldSkip(skipSettings, "[ioninja]-(V_MPEGH;ISO;HEVC @ 15000 Kbps. 3840x2160)-[ioninja]", true, "Transfer"), "video codec and resolution variations skipped");
+            new GlobalSettingsStore(directory).Save(skipSettings with { SkipPatterns = "*.message", VideoMetadataSkipDefaultsApplied = false });
+            var videoMigrated = new GlobalSettingsStore(directory).Load();
+            Check(videoMigrated.SkipPatterns.Contains("[ioNiNJA]-(V_*)-[ioNiNJA]") && !videoMigrated.SkipPatterns.Contains(".ioFTPD.verified"), "video migration preserves previously removed metadata rules");
+            Check(SkipRuleMatcher.ShouldSkip(skipSettings, "release.message", false, "Transfer"), "existing skip patterns retained");
+            Check(!SkipRuleMatcher.ShouldSkip(skipSettings, "release.rar", false, "Transfer") &&
+                !SkipRuleMatcher.ShouldSkip(skipSettings, "[ioNiNJA]-(20F-INCOMPLETE)-[ioNiNJA]", true, "Transfer"), "normal files and unrelated directories preserved");
+            new GlobalSettingsStore(directory).Save(skipSettings with { SkipPatterns = "*.message" });
+            Check(new GlobalSettingsStore(directory).Load().SkipPatterns == "*.message", "user can remove metadata rules after migration");
             Check(!new GlobalSettingsStore(directory).Load().EnableFxpSpeedMonitoring, "FXP monitoring disabled by default");
             new GlobalSettingsStore(directory).Save(settings with { EnableFxpSpeedMonitoring = false });
             Check(!new GlobalSettingsStore(directory).Load().EnableFxpSpeedMonitoring, "disabled FXP monitoring survives restart");

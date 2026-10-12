@@ -20,11 +20,22 @@ internal sealed class GlobalSettingsStore
     {
         try
         {
-            if (File.Exists(_path)) return Unprotect(JsonSerializer.Deserialize<GlobalSettings>(File.ReadAllText(_path)) ?? new());
-            if (!File.Exists(_oldPath)) return new();
-            var migrated = Unprotect(JsonSerializer.Deserialize<GlobalSettings>(File.ReadAllText(_oldPath)) ?? new()); Save(migrated); return migrated;
+            if (File.Exists(_path)) return AddMetadataSkipDefaults(Unprotect(JsonSerializer.Deserialize<GlobalSettings>(File.ReadAllText(_path)) ?? new()));
+            if (!File.Exists(_oldPath)) return AddMetadataSkipDefaults(new());
+            var migrated = AddMetadataSkipDefaults(Unprotect(JsonSerializer.Deserialize<GlobalSettings>(File.ReadAllText(_oldPath)) ?? new())); Save(migrated); return migrated;
         }
-        catch { return new(); }
+        catch { return AddMetadataSkipDefaults(new()); }
+    }
+
+    private static GlobalSettings AddMetadataSkipDefaults(GlobalSettings settings)
+    {
+        if (settings.MetadataSkipDefaultsApplied && settings.VideoMetadataSkipDefaultsApplied) return settings;
+        var patterns = settings.SkipPatterns.Split(['\r', '\n', ',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var defaults = new List<string>();
+        if (!settings.MetadataSkipDefaultsApplied) defaults.AddRange([".ioFTPD.verified", "[ioNiNJA]-(*F-COMPLETE)-[ioNiNJA]"]);
+        if (!settings.VideoMetadataSkipDefaultsApplied) defaults.Add("[ioNiNJA]-(V_*)-[ioNiNJA]");
+        var missing = defaults.Where(pattern => !patterns.Contains(pattern, StringComparer.OrdinalIgnoreCase)).ToArray();
+        return settings with { SkipPatterns = string.Join("\n", new[] { settings.SkipPatterns.TrimEnd() }.Concat(missing).Where(value => value.Length > 0)), MetadataSkipDefaultsApplied = true, VideoMetadataSkipDefaultsApplied = true };
     }
     public void Save(GlobalSettings settings)
     {

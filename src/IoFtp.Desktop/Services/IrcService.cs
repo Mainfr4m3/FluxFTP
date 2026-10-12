@@ -184,17 +184,22 @@ internal sealed class IrcService : IAsyncDisposable
                         continue;
                     }
                     var setup = command is not ("!login" or "!op" or "!news" or "!announces");
-                    if (setup && (!request.Private || !_settings.UseTls))
+                    if (setup && ((!request.Private && command != "!flux") || !_settings.UseTls))
                     {
                         await Notice(request.Nick, "ERROR: Setup commands require a private message and a TLS connection to FluxFTP.");
                         continue;
                     }
                     using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
                     timeout.CancelAfter(TimeSpan.FromSeconds(30));
-                    var profile = _loadProfile()
-                        ?? throw new InvalidOperationException("Admin site unavailable.");
-                    if (profile.Protocol is not (TransferProtocol.FtpsExplicit or TransferProtocol.FtpsImplicit) || profile.AllowInvalidCertificate)
-                        throw new InvalidOperationException("A verified FTPS site is required.");
+                    var profile = _loadProfile();
+                    var authorityError = IrcFtpAccess.ConfigurationError(profile);
+                    if (authorityError is not null)
+                    {
+                        _log("IRC admin verification blocked: " + authorityError);
+                        if (Current(request) && !request.Automatic) await Notice(request.Nick, authorityError);
+                        continue;
+                    }
+                    if (profile is null) continue;
                     profile = profile with { Proxy = profile.Proxy ?? new ProxyConfiguration(_global.ProxyType, _global.ProxyHost, _global.ProxyPort,
                         _global.ProxyUsername, _global.ProxyPassword, _global.ProxyDns, _global.ProxyDataConnections) };
                     string? user = null;

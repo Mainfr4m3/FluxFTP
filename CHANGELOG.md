@@ -2,6 +2,56 @@
 
 All notable FluxFTP changes are documented here.
 
+## 1.0.75 — 2026-10-12
+
+- IRC admin verification recognizes the standard ioFTPD SITE USER table with UserName and Flags on the same row. Successful replies still require exactly one recognized flags field containing 1 or M; taglines, ambiguous fields and error replies remain rejected.
+
+## 1.0.74 — 2026-10-12
+
+- IRC reports specific configuration errors for missing admin sites, non-FTPS admin sites and enabled invalid-certificate exceptions, rather than a generic SITE USER error. Existing verification requirements are preserved.
+
+## 1.0.73 — 2026-10-12
+
+- IRC supports `!flux stats`, `!flux stats total` and `!flux stats pool`, using the same session, saved totals and transfer-connection pool counters as Metrics.
+- Statistics requests work in private messages or the configured control channel over TLS, retain existing FTP admin verification and identity checks, and reply privately by NOTICE.
+
+## 1.0.72 — 2026-10-12
+
+- Metrics adds saved all-time totals across all sites: uploads, downloads, FXP/relay, local copies, combined bytes and completed files. Tracking starts with this version, remains separate from session/queue counters and survives application restarts.
+- Totals save after successful transfers using atomic file replacement and a backup. Failed saves and backup recovery are reported; resumed existing bytes and failed/partial attempts are excluded.
+
+## 1.0.71 — 2026-10-12
+
+- Metrics tracks process uptime, successfully uploaded/downloaded/FXP-relayed/local-copy bytes and completed files independently of queue history. Resume offsets are excluded from client-transfer totals; partial or failed attempts are not included. Session counters reset on application restart.
+- Metrics also shows connected transfer workers created/closed, current idle connection pool size, tracked live workers and successful pool reuse hits. Browsing and monitoring connections are excluded.
+- Global Settings > FXP can enable Download measurement for new downloads. Diagnostics default to off, bypassing detailed read/write timing and per-file measurement logging.
+
+## 1.0.70 — 2026-10-12
+
+- Download diagnostics record per-file elapsed time, newly downloaded bytes, resume offset, average MB/s, flush and rename time in Connection Log and RACE log (`DOWNLOAD-MEASURE`).
+- FTP/FTPS diagnostics also measure network reads (including TLS processing), destination writes, progress reporting and setup/completion overhead. SFTP reports total timing; SSH.NET owns its internal data loop. Timings include OS buffering and do not measure physical disk throughput or isolate TLS CPU time.
+- Completed local downloads update the final byte counter before recording completion.
+
+## 1.0.69 — 2026-10-12
+
+- Transfer skip defaults also exclude ioNiNJA video metadata markers matching `[ioNiNJA]-(V_*)-[ioNiNJA]`, regardless of codec, bitrate or resolution. Existing settings receive the new editable pattern once.
+
+## 1.0.68 — 2026-10-12
+
+- Default transfer skip patterns exclude `.ioFTPD.verified` and ioNiNJA COMPLETE marker folders such as `[ioNiNJA]-(2.7GB 20F-COMPLETE)-[ioNiNJA]` from recursive folder transfers, including FXP and PRE/race jobs.
+- Existing settings receive these patterns once while retaining custom rules. Patterns remain editable under Global Settings > Skiplist.
+
+## 1.0.67 — 2026-10-12
+
+- Global Settings > Layout configures visible columns, sorting column/direction and font family, size and weight independently for both file panes and Transfer queue.
+- Layout changes apply immediately after Save and persist across restarts. Header sorting and column context menus update the same settings; existing column preferences are retained.
+- File and queue typography can inherit the theme, and queue sorting can return to the original queue order.
+
+## 1.0.66 — 2026-10-12
+
+- Right-click column headers in either file pane or Transfer queue to show or hide columns. The existing row context menus also provide a Columns submenu and Show all columns.
+- Column visibility is saved independently for each pane and the queue. At least one column remains visible, and automatic sizing allocates available space to the remaining columns.
+
 ## 1.0.65 — 2026-10-12
 
 - Connection Log omits directory rows from successful multiline STAT replies. Reply headers, completion lines and errors remain visible; full listing data remains available to the directory parser and protocol details.

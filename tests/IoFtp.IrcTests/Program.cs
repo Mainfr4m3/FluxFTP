@@ -134,6 +134,11 @@ void Check(bool value, string name)
 }
 
 Check(IrcProtocol.IsAdmin(new(200, "200-Flags: 1A\r\n200 End")), "SiteOp");
+Check(IrcProtocol.IsAdmin(new(200, "200-| UserName........: khaz              Flags.............: 31MTHL         |\r\n200 Command successful.")), "ioFTPD table admin");
+Check(!IrcProtocol.IsAdmin(new(200, "200-| UserName........: khaz              Flags.............: 3THL         |")), "ioFTPD table non-admin");
+Check(!IrcProtocol.IsAdmin(new(200, "200-| Tagline.........: Flags.............: 1M |")), "ioFTPD table tagline cannot grant authority");
+Check(!IrcProtocol.IsAdmin(new(200, "200-| UserName........: khaz Flags.............: 31MTHL |\r\n200-Flags: 3")), "mixed duplicate flags rejected");
+Check(!IrcProtocol.IsAdmin(new(550, "550-| UserName........: khaz Flags.............: 31MTHL |")), "ioFTPD table failure cannot grant authority");
 Check(IrcProtocol.IsAdmin(new(200, "200-\u001b[31mFlags: M\u001b[0m")), "Master with ANSI color");
 Check(!IrcProtocol.IsAdmin(new(200, "Flags: V3\nUser: Master1")), "non-admin");
 Check(!IrcProtocol.IsAdmin(new(550, "Flags: 1")), "FTP error is not authority");

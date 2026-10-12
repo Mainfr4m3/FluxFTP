@@ -632,14 +632,66 @@ public sealed class FtpRemoteSession : IRemoteSession
         return parsedListing;
     }
 
-    public Task DownloadAsync(string remotePath, Stream destination, long offset, IProgress<long>? progress, CancellationToken cancellationToken) =>
-        _sftpSession is not null ? _sftpSession.DownloadAsync(remotePath, destination, offset, progress, cancellationToken) :
-        TransferAsync($"RETR {remotePath}", offset, async data =>
+    public string? LastDownloadMeasurement { get; private set; }
+    public bool EnableDownloadMeasurement { get; set; }
+
+    public async Task DownloadAsync(string remotePath, Stream destination, long offset, IProgress<long>? progress, CancellationToken cancellationToken)
+    {
+        LastDownloadMeasurement = null;
+        if (!EnableDownloadMeasurement)
         {
-            var buffer = new byte[64 * 1024]; long total = offset; int read;
-            while ((read = await data.ReadAsync(buffer, cancellationToken)) > 0)
-            { await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken); total += read; progress?.Report(total); }
-        }, cancellationToken);
+            if (_sftpSession is not null) await _sftpSession.DownloadAsync(remotePath, destination, offset, progress, cancellationToken);
+            else await TransferAsync($"RETR {remotePath}", offset, async data =>
+            {
+                var buffer = new byte[64 * 1024]; long total = offset; int read;
+                while ((read = await data.ReadAsync(buffer, cancellationToken)) > 0)
+                {
+                    await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                    total += read; progress?.Report(total);
+                }
+            }, cancellationToken);
+            return;
+        }
+        if (_sftpSession is not null)
+        {
+            await _sftpSession.DownloadAsync(remotePath, destination, offset, progress, cancellationToken);
+            LastDownloadMeasurement = "SFTP: separate read/write timing unavailable (SSH.NET owns the data loop).";
+            return;
+        }
+        var elapsed = Stopwatch.StartNew();
+        long reads = 0, writes = 0, reporting = 0, bytes = 0, chunks = 0;
+        var completed = false;
+        try
+        {
+            await TransferAsync($"RETR {remotePath}", offset, async data =>
+            {
+                var buffer = new byte[64 * 1024];
+                while (true)
+                {
+                    var started = Stopwatch.GetTimestamp();
+                    var read = await data.ReadAsync(buffer, cancellationToken);
+                    reads += Stopwatch.GetTimestamp() - started;
+                    if (read == 0) break;
+                    started = Stopwatch.GetTimestamp();
+                    await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                    writes += Stopwatch.GetTimestamp() - started;
+                    bytes += read; chunks++;
+                    started = Stopwatch.GetTimestamp();
+                    progress?.Report(offset + bytes);
+                    reporting += Stopwatch.GetTimestamp() - started;
+                }
+            }, cancellationToken);
+            completed = true;
+        }
+        finally
+        {
+            var seconds = elapsed.Elapsed.TotalSeconds;
+            var readSeconds = (double)reads / Stopwatch.Frequency;
+            var writeSeconds = (double)writes / Stopwatch.Frequency;
+            var reportSeconds = (double)reporting / Stopwatch.Frequency;
+            LastDownloadMeasurement = FormattableString.Invariant($"{(completed ? "Completed" : "Interrupted")}; bytes={bytes}; resume={offset}; elapsed={seconds:F3}s; read/network+TLS={readSeconds:F3}s; destination-write={writeSeconds:F3}s; progress={reportSeconds:F3}s; setup/completion+other={Math.Max(0, seconds - readSeconds - writeSeconds - reportSeconds):F3}s; average={bytes / 1000000.0 / Math.Max(seconds, 0.001):F2} MB/s; chunks={chunks}; buffer=65536; encrypted={_protectData}. Read time includes network wait and TLS processing; write time may include OS buffering.");
+        }
+    }
 
     public Task UploadAsync(string remotePath, Stream source, long offset, IProgress<long>? progress, CancellationToken cancellationToken) =>
         _sftpSession is not null ? _sftpSession.UploadAsync(remotePath, source, offset, progress, cancellationToken) :

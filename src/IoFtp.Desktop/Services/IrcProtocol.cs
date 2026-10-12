@@ -58,6 +58,12 @@ internal static class IrcProtocol
         // Accept a labelled ioFTPD flags field, never numbers or flag letters elsewhere in a reply.
         var clean = Regex.Replace(result.Message, @"\x1b\[[0-9;]*m", "");
         var matches = Regex.Matches(clean, @"(?im)^\s*(?:\d{3}[- ])?\s*Flags\s*:\s*([A-Za-z0-9]+)\s*$");
-        return matches.Count == 1 && matches[0].Groups[1].Value.Any(c => c is '1' or 'M');
+        // ioFTPD's stock user template places the flags in the second column
+        // of the UserName row. Anchor the entire row, so taglines and other
+        // free-text fields cannot grant authority by mentioning Flags.
+        var tableMatches = Regex.Matches(clean, @"(?im)^\s*(?:\d{3}[- ])?\s*\|\s*UserName\.+:\s*[A-Za-z0-9_.-]+\s+Flags\.+:\s*([A-Za-z0-9]+)\s*\|\s*$");
+        if (matches.Count + tableMatches.Count != 1) return false;
+        var flags = matches.Count == 1 ? matches[0].Groups[1].Value : tableMatches[0].Groups[1].Value;
+        return flags.Any(c => c is '1' or 'M');
     }
 }
