@@ -8,6 +8,7 @@ using IoFtp.Desktop.Models;
 using IoFtp.Desktop.Services;
 
 var assertions = 0;
+if (args.FirstOrDefault() == "--site-compatibility-checks") { await SiteCompatibilityChecks.Run(); return; }
 if (args.FirstOrDefault() == "--race-timing-checks")
 {
     long tick = 1000;

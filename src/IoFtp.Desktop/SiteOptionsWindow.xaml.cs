@@ -22,6 +22,13 @@ public partial class SiteOptionsWindow : Window
         CeprBox.IsChecked = options.CeprSupported;
         XdupeBox.IsChecked = options.UseXdupe;
         OpenSslTlsBox.IsChecked = options.UseOpenSslTls;
+        TextEncodingBox.ItemsSource = new[] { "Auto — detect UTF-8 / Windows-1252", "Force UTF-8", "Windows-1252 (legacy ANSI)" };
+        TextEncodingBox.SelectedIndex = (int)options.TextEncoding;
+        AuthCommandBox.ItemsSource = new[] { "Auto — AUTH TLS, then AUTH SSL", "AUTH TLS", "AUTH SSL (TLS handshake)" };
+        AuthCommandBox.SelectedIndex = (int)options.AuthCommand;
+        Utf8LoginBox.IsChecked = options.Utf8Login;
+        EarlyPbszBox.IsChecked = options.PbszBeforeLogin;
+        Tls12OnlyBox.IsChecked = options.Tls12Only;
         FxpProtectionBox.ItemsSource = new[]
         {
             new FxpProtectionChoice(FxpProtectionMode.AutoSecure, "Auto — secure FXP (TLS)"),
@@ -91,7 +98,9 @@ public partial class SiteOptionsWindow : Window
             BrokenPasvBox.IsChecked == true
                 ? FxpDataRole.Active
                 : (FxpDataRoleBox.SelectedItem as FxpDataRoleChoice)?.Role ?? FxpDataRole.Auto,
-            OpenSslTlsBox.IsChecked == true, ImportedSkipBox.Text, ImportedPriorityBox.Text, VisionaryRulesBox.Text);
+            OpenSslTlsBox.IsChecked == true, ImportedSkipBox.Text, ImportedPriorityBox.Text, VisionaryRulesBox.Text,
+            (FtpTextEncoding)Math.Max(0, TextEncodingBox.SelectedIndex), Utf8LoginBox.IsChecked == true,
+            (FtpAuthCommand)Math.Max(0, AuthCommandBox.SelectedIndex), EarlyPbszBox.IsChecked == true, Tls12OnlyBox.IsChecked == true);
         SiteProxy = proxyType switch
         {
             null => null,

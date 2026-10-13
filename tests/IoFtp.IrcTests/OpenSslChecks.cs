@@ -46,7 +46,7 @@ internal static class OpenSslChecks
             client.Client.Blocking=false;
             var type = typeof(FtpRemoteSession).Assembly.GetType("IoFtp.Core.Transport.OpenSslTlsStream")!;
             var task = (Task)type.GetMethod("AuthenticateAsync",BindingFlags.Public|BindingFlags.Static)!
-                .Invoke(null,[client.Client,transport,"localhost",true,timeout.Token])!;
+                .Invoke(null,[client.Client,transport,"localhost",true,timeout.Token,false])!;
             await task.WaitAsync(timeout.Token);
             using var stream = (Stream)task.GetType().GetProperty("Result")!.GetValue(task)!;
             type.GetProperty("DiagnosticContext")!.SetValue(stream,

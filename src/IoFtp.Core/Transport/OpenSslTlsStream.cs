@@ -59,11 +59,11 @@ internal sealed class OpenSslTlsStream : Stream
     }
 
     public static Task<OpenSslTlsStream> AuthenticateAsync(Socket socket, Stream transport,
-        string targetHost, bool allowInvalidCertificate, CancellationToken cancellationToken) =>
-        Task.Run(() => Authenticate(socket, transport, targetHost, allowInvalidCertificate, cancellationToken), cancellationToken);
+        string targetHost, bool allowInvalidCertificate, CancellationToken cancellationToken, bool tls12Only = false) =>
+        Task.Run(() => Authenticate(socket, transport, targetHost, allowInvalidCertificate, cancellationToken, tls12Only), cancellationToken);
 
     private static OpenSslTlsStream Authenticate(Socket socket, Stream transport, string targetHost,
-        bool allowInvalidCertificate, CancellationToken cancellationToken)
+        bool allowInvalidCertificate, CancellationToken cancellationToken, bool tls12Only)
     {
         cancellationToken.ThrowIfCancellationRequested();
         using var cancelled = cancellationToken.Register(() => socket.Dispose());
@@ -79,6 +79,7 @@ internal sealed class OpenSslTlsStream : Stream
             // Keep TLS 1.0/1.1 disabled. SECLEVEL=1 broadens TLS 1.2 cipher
             // interoperability without enabling anonymous, export or null ciphers.
             Native.SSL_CTX_ctrl(context, SslCtrlSetMinProtoVersion, Tls12Version, IntPtr.Zero);
+            if (tls12Only) Native.SSL_CTX_ctrl(context, SslCtrlSetMaxProtoVersion, Tls12Version, IntPtr.Zero);
             if (Native.SSL_CTX_set_cipher_list(context,
                     "DEFAULT:@SECLEVEL=1") != 1)
                 throw CreateException("could not configure the compatibility cipher list");

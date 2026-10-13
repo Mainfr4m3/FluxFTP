@@ -46,7 +46,7 @@ public sealed class FtpRemoteSession : IRemoteSession
 
     public async Task ConnectAsync(ConnectionProfile profile, CancellationToken cancellationToken)
     {
-        _tls12Only = false;
+        _tls12Only = profile.EffectiveOptions.Tls12Only;
         _useOpenSslFallback = profile.EffectiveOptions.UseOpenSslTls;
         if (_useOpenSslFallback)
         {
@@ -84,7 +84,7 @@ public sealed class FtpRemoteSession : IRemoteSession
     {
         _lastTlsPolicyErrors = SslPolicyErrors.None;
         _loggedDataTlsDetails = 0;
-        _controlEncoding = Encoding.ASCII;
+        _controlEncoding = profile.EffectiveOptions.Utf8Login ? new UTF8Encoding(false) : Encoding.ASCII;
 
         if (profile.Protocol == TransferProtocol.Sftp)
         {
@@ -116,8 +116,9 @@ public sealed class FtpRemoteSession : IRemoteSession
 
         if (profile.Protocol == TransferProtocol.FtpsExplicit)
         {
-            var authResponse = await CommandAsync("AUTH TLS", cancellationToken);
-            if (authResponse.Code is not (234 or 334))
+            var authCommand = profile.EffectiveOptions.AuthCommand == FtpAuthCommand.Ssl ? "AUTH SSL" : "AUTH TLS";
+            var authResponse = await CommandAsync(authCommand, cancellationToken);
+            if (authResponse.Code is not (234 or 334) && profile.EffectiveOptions.AuthCommand == FtpAuthCommand.Auto)
             {
                 // Some older FTP daemons label explicit TLS as AUTH SSL even
                 // though the following SChannel handshake negotiates TLS 1.2.
@@ -136,6 +137,8 @@ public sealed class FtpRemoteSession : IRemoteSession
             CreateTextStreams();
         }
 
+        var earlyPbsz = profile.EffectiveOptions.PbszBeforeLogin && UsesTlsControl;
+        if (earlyPbsz) EnsureSuccess(await CommandAsync("PBSZ 0", cancellationToken), 200);
         var username = string.IsNullOrWhiteSpace(profile.Username) ? "anonymous" : profile.Username;
         var password = string.IsNullOrWhiteSpace(profile.Username) ? "fluxftp@localhost" : profile.Password;
         var userResponse = await CommandAsync($"USER {username}", cancellationToken);
@@ -148,7 +151,7 @@ public sealed class FtpRemoteSession : IRemoteSession
         // while glFTPD and ioFTPD accept this standards-compatible ordering too.
         if (profile.Protocol is TransferProtocol.FtpsExplicit or TransferProtocol.FtpsImplicit)
         {
-            EnsureSuccess(await CommandAsync("PBSZ 0", cancellationToken), 200);
+            if (!earlyPbsz) EnsureSuccess(await CommandAsync("PBSZ 0", cancellationToken), 200);
             var privateProtection = await CommandAsync("PROT P", cancellationToken);
             if (privateProtection.Code is >= 200 and < 300)
             {
@@ -195,13 +198,14 @@ public sealed class FtpRemoteSession : IRemoteSession
         // reader/writer before any directory or transfer commands are issued.
         // This preserves characters such as typographic apostrophes in RETR,
         // STOR, CWD and other pathname-bearing commands.
-        if (capabilities.Contains("UTF8"))
+        if (profile.EffectiveOptions.TextEncoding == FtpTextEncoding.Utf8 ||
+            (profile.EffectiveOptions.TextEncoding == FtpTextEncoding.Auto && capabilities.Contains("UTF8")))
         {
             var utf8Options = await CommandAsync("OPTS UTF8 ON", cancellationToken);
             if (utf8Options.Code is >= 200 and < 300)
                 ProtocolMessage?.Invoke("< FTP control encoding: UTF-8 enabled (OPTS UTF8 ON accepted).");
             else
-                ProtocolMessage?.Invoke($"< FTP control encoding: UTF-8 enabled (advertised by FEAT; OPTS returned {utf8Options.Code}).");
+                ProtocolMessage?.Invoke($"< FTP control encoding: UTF-8 enabled (selected or advertised; OPTS returned {utf8Options.Code}).");
 
             _controlEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
             RecreateTextStreams();
@@ -216,7 +220,7 @@ public sealed class FtpRemoteSession : IRemoteSession
             _controlEncoding = Encoding.GetEncoding(1252,
                 EncoderFallback.ExceptionFallback, DecoderFallback.ReplacementFallback);
             RecreateTextStreams();
-            ProtocolMessage?.Invoke("< FTP control encoding: Windows-1252 compatibility mode (UTF8 not advertised).");
+            ProtocolMessage?.Invoke("< FTP control encoding: Windows-1252 compatibility mode (selected or UTF8 not advertised).");
         }
     }
 
@@ -927,9 +931,9 @@ public sealed class FtpRemoteSession : IRemoteSession
         return ssl;
     }
 
-    private static async Task<string> ReadListingDataAsync(Stream stream, CancellationToken cancellationToken)
+    private async Task<string> ReadListingDataAsync(Stream stream, CancellationToken cancellationToken)
     {
-        using var reader = new StreamReader(stream, Encoding.UTF8, false, 1024, true);
+        using var reader = new StreamReader(stream, _controlEncoding, false, 1024, true);
         var result = new StringBuilder();
         var buffer = new char[4096];
         try
@@ -1135,7 +1139,7 @@ public sealed class FtpRemoteSession : IRemoteSession
         try
         {
             var ssl = await OpenSslTlsStream.AuthenticateAsync(socket, transport, targetHost,
-                _profile.AllowInvalidCertificate, token);
+                _profile.AllowInvalidCertificate, token, _tls12Only);
             ssl.DiagnosticContext = Context;
             return ssl;
         }
