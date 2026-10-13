@@ -8,6 +8,22 @@ internal static class RaceFlowChecks
     {
         var checks = 0;
         void Check(bool value, string name) { if (!value) throw new Exception(name); checks++; }
+        foreach (var pattern in new[] { VisionaryRaceOptions.DefaultCompleteFlag, VisionaryRaceOptions.LegacyCompleteFlag })
+        {
+            var markerRace = new VisionaryRaceState(new(CompleteFlag: pattern));
+            RemoteEntry Mark(string name) => new(name, "/release/" + name, true, null, null);
+            foreach (var name in new[] { "[##::::::::::::] - 15% Complete - [CR]", "99.9% Complete", "99,9% Complete", "0% COMPLETE", "1100% Complete", "NOT COMPLETE", "INCOMPLETE" })
+            {
+                Check(markerRace.IsCompletionMetadata(Mark(name)), "progress/incomplete marker excluded from transfer: " + name);
+                Check(!markerRace.IsCompletionMarker(Mark(name)), "progress never proves completion: " + name);
+                markerRace.BeginListing(); markerRace.InspectListing([Mark(name)], true, "/release"); markerRace.EndListing();
+                Check(!markerRace.SourceComplete, "partial marker cannot finalize source: " + name);
+            }
+            foreach (var name in new[] { "[COMPLETED @ 2026-10-13][ OKAY ][ 42278791kB]", "100% Complete", "100,0% Complete", "[CR] - ( 1788M 13F - COMPLETE ) - [CR]" })
+                Check(markerRace.IsCompletionMarker(Mark(name)), "Rush completion marker accepted: " + name);
+            Check(!RaceDestinationVerifier.HasCompleteMarker([Mark("COMPLETE"), Mark("15% Complete")], markerRace), "contradictory progress marker blocks destination acceptance");
+        }
+        Check(TransferRejection.Category("550 file.rar: File locking failed.") == "FILE-LOCKED", "ioFTPD locking failure blocks relay fallback");
         Check(new VisionaryRaceOptions().EffectiveTimeout == TimeSpan.FromMinutes(5), "race default lifetime is five minutes");
         Check(new VisionaryRaceOptions(TimeoutMinutes: 60).EffectiveTimeout == TimeSpan.FromMinutes(5), "legacy timeout capped at five minutes");
         Check(new VisionaryRaceOptions(TimeoutMinutes: 2).EffectiveTimeout == TimeSpan.FromMinutes(2), "shorter race timeout retained");

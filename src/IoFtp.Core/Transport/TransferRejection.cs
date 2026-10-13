@@ -22,6 +22,7 @@ public static class TransferRejection
         if (Regex.IsMatch(text, @"SAMPLE:\s*Only\s+1\s+sample\s+per\s+SAMPLE\s+DIR\b", RegexOptions.IgnoreCase)) return "SAMPLE";
         if (Regex.IsMatch(text, @"\[(?:NUKE|NUKED)\]|\bNUKE(?:D)?\s*(?:[:/]|detection\b|release\b)|\brelease\s+(?:is\s+)?nuked\b", RegexOptions.IgnoreCase)) return "NUKE";
         if (Regex.IsMatch(text, @"\bFile is being uploaded\b", RegexOptions.IgnoreCase)) return "UPLOAD-IN-PROGRESS";
+        if (Regex.IsMatch(text, @"\bFile locking failed\b", RegexOptions.IgnoreCase)) return "FILE-LOCKED";
         if (Regex.IsMatch(text, @"\[DupeCheck\]|\bDUPE\s*:|\bduplicate\s+(?:file|directory|release)\b|\bThis file looks like a dupe\b|\bRequested action not taken\.\s*File exists\b", RegexOptions.IgnoreCase)) return "DUPE";
         if (Regex.IsMatch(text, @"\bRelease blocked by section deny filter\b|\bMKD Denied by dirscript\b", RegexOptions.IgnoreCase)) return "DIRECTORY-DENIED";
         return null;

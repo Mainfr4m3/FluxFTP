@@ -1,14 +1,17 @@
 using System.IO;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Globalization;
 using IoFtp.Core.Abstractions;
 
 namespace IoFtp.Desktop.Services;
 
 internal sealed record VisionaryRaceOptions(
-    string CompleteFlag = @"(?:^|[\s\[\]()._-])(?:COMPLETE|FINISHED)(?:$|[\s\[\]()._-])|100%",
+    string CompleteFlag = VisionaryRaceOptions.DefaultCompleteFlag,
     int RefreshSeconds = 3, int TimeoutMinutes = 5, string RushOptionsPath = "")
 {
+    public const string LegacyCompleteFlag = @"(?:^|[\s\[\]()._-])(?:COMPLETE|FINISHED)(?:$|[\s\[\]()._-])|100%";
+    public const string DefaultCompleteFlag = @"(?:^|[\s\[\]()._-])(?:COMPLETED?|FINISHED)(?:$|[\s\[\]()._-])|(?<![\d.,])100(?:[.,]0+)?\s*%";
     // Bound the entire watch, including admission wait, even with older saved settings.
     public TimeSpan EffectiveTimeout => TimeSpan.FromMinutes(Math.Clamp(TimeoutMinutes, 1, 5));
     private static string FilePath => Path.Combine(AppContext.BaseDirectory, "FluxFTP-visionary-race.json");
@@ -19,7 +22,8 @@ internal sealed record VisionaryRaceOptions(
         if (RefreshSeconds is < 1 or > 60 || TimeoutMinutes is < 1 or > 1440)
             throw new ArgumentException("Refresh must be 1–60 seconds; timeout must be 1–1440 minutes.");
         if (string.IsNullOrWhiteSpace(CompleteFlag)) throw new ArgumentException("A completeflag pattern is required.");
-        var regex = new Regex(CompleteFlag, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
+        var regex = new Regex(CompleteFlag == LegacyCompleteFlag ? DefaultCompleteFlag : CompleteFlag,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
         if (regex.IsMatch("")) throw new ArgumentException("completeflag must not match empty text.");
         return regex;
     }
@@ -70,8 +74,20 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
         entry.Name.EndsWith(".missing", StringComparison.OrdinalIgnoreCase) || entry.Name.EndsWith(".bad", StringComparison.OrdinalIgnoreCase) ||
         entry.Name.StartsWith("(iNCOMPLETE)", StringComparison.OrdinalIgnoreCase);
     public IEnumerable<Guid> Jobs => _files.Values.Select(file => file.Job);
-    public bool IsCompletionMarker(RemoteEntry entry) => _profiles.ForDirectory(Parent(entry.FullPath)) is null &&
-        (entry.IsDirectory || entry.Size == 0) && CompleteFlag.IsMatch(entry.Name);
+    public bool IsCompletionMetadata(RemoteEntry entry) => (entry.IsDirectory || entry.Size == 0) &&
+        (CompleteFlag.IsMatch(entry.Name) || Regex.IsMatch(entry.Name, @"\b(?:INCOMPLETE|UNFINISHED)\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100)));
+    public bool IsCompletionMarker(RemoteEntry entry)
+    {
+        if (!IsCompletionMetadata(entry) || !CompleteFlag.IsMatch(entry.Name)) return false;
+        if (Regex.IsMatch(entry.Name, @"\b(?:INCOMPLETE|UNFINISHED)\b|\bNOT[\s_-]+(?:COMPLETED?|FINISHED)\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100))) return false;
+        foreach (Match percent in Regex.Matches(entry.Name, @"(?<![\d.,])(?<value>\d+(?:[.,]\d+)?)\s*%",
+            RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100)))
+            if (!decimal.TryParse(percent.Groups["value"].Value.Replace(',', '.'), NumberStyles.AllowDecimalPoint,
+                CultureInfo.InvariantCulture, out var value) || value != 100) return false;
+        return true;
+    }
     public void InspectListing(IEnumerable<RemoteEntry> children, bool releaseRoot, string? directory = null, Func<RemoteEntry, bool>? includeFile = null)
     {
         var entries = children.ToArray();
@@ -83,6 +99,7 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
         if (profile is null)
         {
             var markerComplete = entries.Any(IsCompletionMarker) && !entries.Any(entry =>
+                IsCompletionMetadata(entry) && !IsCompletionMarker(entry) ||
                 entry.Name.EndsWith("-MISSING", StringComparison.OrdinalIgnoreCase) ||
                 entry.Name.EndsWith(".missing", StringComparison.OrdinalIgnoreCase) || entry.Name.EndsWith(".bad", StringComparison.OrdinalIgnoreCase));
             if (releaseRoot) SourceComplete = markerComplete;
