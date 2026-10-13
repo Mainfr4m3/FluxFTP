@@ -40,7 +40,22 @@ internal static class ProfileStoreChecks
             File.WriteAllLines(path, File.ReadAllLines(path).Select(line => line.StartsWith("Password=") ? "Password=dpapi:invalid" : line));
             store.Load();
             Check(File.ReadAllText(path).Contains("Password=dpapi:invalid"), "unreadable secret retained");
-            Console.WriteLine("ProfileStore: 14 checks passed.");
+            // Exercise the actual INI store, including a new store instance as after restart.
+            foreach (var encoding in Enum.GetValues<FtpTextEncoding>())
+            foreach (var auth in Enum.GetValues<FtpAuthCommand>())
+            foreach (var enabled in new[] { false, true })
+            {
+                var options = profile.EffectiveOptions with { TextEncoding = encoding, AuthCommand = auth,
+                    Utf8Login = enabled, PbszBeforeLogin = enabled, Tls12Only = enabled, UseOpenSslTls = enabled };
+                store.Save([profile with { Options = options }]);
+                Check(new ProfileStore(directory).Load().Single().EffectiveOptions == options, "TLS/encoding INI round trip");
+            }
+            var newKeys = new[] { "TextEncoding=", "Utf8Login=", "AuthCommand=", "PbszBeforeLogin=", "Tls12Only=" };
+            File.WriteAllLines(path, File.ReadAllLines(path).Where(line => !newKeys.Any(key => line.StartsWith(key))));
+            var oldOptions = new ProfileStore(directory).Load().Single().EffectiveOptions;
+            Check(oldOptions.TextEncoding == FtpTextEncoding.Auto && oldOptions.AuthCommand == FtpAuthCommand.Auto &&
+                !oldOptions.Utf8Login && !oldOptions.PbszBeforeLogin && !oldOptions.Tls12Only, "older INI compatibility defaults");
+            Console.WriteLine("ProfileStore: 33 checks passed, including TLS/encoding INI persistence and older files.");
         }
         finally { Directory.Delete(directory, true); }
     }

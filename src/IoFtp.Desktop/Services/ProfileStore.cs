@@ -87,6 +87,11 @@ internal sealed class ProfileStore
             Write(text, "FxpProtection", options.FxpProtection);
             Write(text, "FxpDataRole", options.FxpDataRole);
             Write(text, "UseOpenSslTls", options.UseOpenSslTls);
+            Write(text, "TextEncoding", options.TextEncoding);
+            Write(text, "Utf8Login", options.Utf8Login);
+            Write(text, "AuthCommand", options.AuthCommand);
+            Write(text, "PbszBeforeLogin", options.PbszBeforeLogin);
+            Write(text, "Tls12Only", options.Tls12Only);
             Write(text, "ProxyMode", profile.Proxy is null ? "Inherit" : profile.Proxy.Type == ProxyType.None ? "None" : "Custom");
             if (profile.Proxy is not null)
             {
@@ -125,7 +130,9 @@ internal sealed class ProfileStore
                 Get(values, "BlockTransfersFrom"), Get(values, "BlockTransfersTo"), Bool(values, "SecureFileListings", true), Bool(values, "NeedsPret"), Bool(values, "CeprSupported"), Bool(values, "UseXdupe"), Get(values, "Affils"),
                 EnumValue(values, "FxpProtection", FxpProtectionMode.AutoSecure),
                 EnumValue(values, "FxpDataRole", FxpDataRole.Auto),
-                Bool(values, "UseOpenSslTls"), Get(values, "ImportedSkipRules"), Get(values, "ImportedPriorityRules"), Get(values, "VisionaryRules"));
+                Bool(values, "UseOpenSslTls"), Get(values, "ImportedSkipRules"), Get(values, "ImportedPriorityRules"), Get(values, "VisionaryRules"),
+                EnumValue(values, "TextEncoding", FtpTextEncoding.Auto), Bool(values, "Utf8Login"),
+                EnumValue(values, "AuthCommand", FtpAuthCommand.Auto), Bool(values, "PbszBeforeLogin"), Bool(values, "Tls12Only"));
             var proxyMode = Get(values, "ProxyMode", "Inherit");
             ProxyConfiguration? proxy = proxyMode.Equals("Inherit", StringComparison.OrdinalIgnoreCase) ? null
                 : proxyMode.Equals("None", StringComparison.OrdinalIgnoreCase) ? new ProxyConfiguration(ProxyType.None)
