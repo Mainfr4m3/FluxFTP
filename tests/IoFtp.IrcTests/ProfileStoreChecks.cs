@@ -55,7 +55,20 @@ internal static class ProfileStoreChecks
             var oldOptions = new ProfileStore(directory).Load().Single().EffectiveOptions;
             Check(oldOptions.TextEncoding == FtpTextEncoding.Auto && oldOptions.AuthCommand == FtpAuthCommand.Auto &&
                 !oldOptions.Utf8Login && !oldOptions.PbszBeforeLogin && !oldOptions.Tls12Only, "older INI compatibility defaults");
-            Console.WriteLine("ProfileStore: 33 checks passed, including TLS/encoding INI persistence and older files.");
+            var beforeFailure = File.ReadAllBytes(path);
+            var attributes = File.GetAttributes(path);
+            try
+            {
+                File.SetAttributes(path, attributes | FileAttributes.ReadOnly);
+                try { store.Save([profile with { Name = "must not overwrite" }]); throw new Exception("Read-only save incorrectly succeeded"); }
+                catch (IOException exception) { Check(exception.Message.Contains(path), "save error includes file path"); }
+                Check(File.ReadAllBytes(path).SequenceEqual(beforeFailure), "failed save preserves previous sites");
+                Check(!Directory.GetFiles(directory, "*.tmp").Any(), "failed save cleans temporary file");
+            }
+            finally { File.SetAttributes(path, attributes); }
+            store.Save([profile]);
+            Check(store.Load().Single().Name == profile.Name, "save recovers after permission fix");
+            Console.WriteLine("ProfileStore: 37 checks passed, including read-only save failure, original file preservation and recovery.");
         }
         finally { Directory.Delete(directory, true); }
     }

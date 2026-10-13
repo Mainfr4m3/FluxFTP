@@ -195,9 +195,23 @@ internal sealed class ProfileStore
         try
         {
             File.WriteAllText(temporary, text, new UTF8Encoding(false));
-            File.Move(temporary, path, true);
+            for (var attempt = 0; ; attempt++)
+            {
+                try { File.Move(temporary, path, true); break; }
+                catch (IOException exception) when (attempt < 3 && (exception.HResult & 0xffff) is 32 or 33)
+                { System.Threading.Thread.Sleep(75 * (attempt + 1)); }
+            }
         }
-        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new IOException($"Could not save site settings to '{path}'. Check that the file is not read-only, the folder allows file replacement and no other program locks it. Existing settings were not replaced. {exception.Message}", exception);
+        }
+        finally
+        {
+            // Cleanup must not hide the original save error.
+            try { if (File.Exists(temporary)) File.Delete(temporary); }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { }
+        }
     }
 
     public void PromoteAddress(Guid profileId, string host, int port)

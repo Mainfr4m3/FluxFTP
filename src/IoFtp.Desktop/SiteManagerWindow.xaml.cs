@@ -14,6 +14,7 @@ public partial class SiteManagerWindow : Window
 {
     private readonly ProfileStore _store = new();
     private readonly ObservableCollection<ConnectionProfile> _profiles;
+    private ConnectionProfile[] _savedProfiles = [];
     public ConnectionProfile? SelectedProfile { get; private set; }
     private void SortSites_Click(object sender, RoutedEventArgs e)
     {
@@ -28,6 +29,7 @@ public partial class SiteManagerWindow : Window
     {
         InitializeComponent();
         _profiles = new ObservableCollection<ConnectionProfile>(_store.Load());
+        _savedProfiles = _profiles.ToArray();
         SitesList.ItemsSource = _profiles;
     }
 
@@ -37,7 +39,7 @@ public partial class SiteManagerWindow : Window
         if (dialog.ShowDialog() == true && dialog.Profile is not null)
         {
             if (DescriptionConflict(dialog.Profile)) return;
-            _profiles.Add(dialog.Profile); Save(); SitesList.SelectedItem = dialog.Profile;
+            _profiles.Add(dialog.Profile); if (Save()) SitesList.SelectedItem = dialog.Profile;
         }
     }
 
@@ -48,7 +50,7 @@ public partial class SiteManagerWindow : Window
         if (dialog.ShowDialog() == true && dialog.Profile is not null)
         {
             if (DescriptionConflict(dialog.Profile, profile.Id)) return;
-            var index = _profiles.IndexOf(profile); _profiles[index] = dialog.Profile; Save(); SitesList.SelectedIndex = index;
+            var index = _profiles.IndexOf(profile); _profiles[index] = dialog.Profile; if (Save()) SitesList.SelectedIndex = index;
         }
     }
 
@@ -77,7 +79,7 @@ public partial class SiteManagerWindow : Window
         if (SitesList.SelectedItem is not ConnectionProfile profile) return;
         var dialog = new SiteOptionsWindow(profile) { Owner = this };
         if (dialog.ShowDialog() == true && dialog.Options is not null)
-        { var index = _profiles.IndexOf(profile); _profiles[index] = profile with { Options = dialog.Options, Proxy = dialog.SiteProxy }; Save(); SitesList.SelectedIndex = index; }
+        { var index = _profiles.IndexOf(profile); _profiles[index] = profile with { Options = dialog.Options, Proxy = dialog.SiteProxy }; if (Save()) SitesList.SelectedIndex = index; }
     }
 
     private void Connect_Click(object sender, RoutedEventArgs e)
@@ -162,6 +164,7 @@ public partial class SiteManagerWindow : Window
                     if (dialog.SelectedVisionaryFiles.Count > 0) VisionaryImportInventory.Link(dialog.SelectedVisionaryFiles);
                 });
             _profiles.Clear(); foreach (var profile in plannedProfiles) _profiles.Add(profile);
+            _savedProfiles = _profiles.ToArray();
             MessageBox.Show($"Imported {importedSites} FTPRush site(s), {importedBookmarks} bookmark(s).\n" +
                 $"Processed {dialog.SelectedSections.Count} section path(s) with {(dialog.ReplaceExisting ? "replace" : "skip existing")} policy; linked {dialog.SelectedVisionaryFiles.Count} VISIONARY rule files.\n" +
                 $"Existing rules and section prechecks are preserved. Passwords stored by FluxFTP use Windows DPAPI.\nBackup: {backup}",
@@ -191,7 +194,7 @@ public partial class SiteManagerWindow : Window
             var dialog = new FtpRushImportWindow("FlashFXP", imported, _profiles) { Owner = this };
             if (dialog.ShowDialog() != true) return;
             foreach (var profile in dialog.SelectedProfiles) _profiles.Add(profile);
-            Save();
+            if (!Save()) return;
             MessageBox.Show($"Imported {dialog.SelectedProfiles.Count} FlashFXP site(s). Passwords are now protected with Windows DPAPI.",
                 "FlashFXP Import", MessageBoxButton.OK, MessageBoxImage.Information);
         }
@@ -201,7 +204,25 @@ public partial class SiteManagerWindow : Window
         }
     }
 
-    private void Save() => _store.Save(_profiles);
+    private bool Save()
+    {
+        var selectedId = (SitesList.SelectedItem as ConnectionProfile)?.Id;
+        try
+        {
+            _store.Save(_profiles);
+            _savedProfiles = _profiles.ToArray();
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            _profiles.Clear();
+            foreach (var profile in _savedProfiles) _profiles.Add(profile);
+            SitesList.SelectedItem = _profiles.FirstOrDefault(profile => profile.Id == selectedId);
+            MessageBox.Show(this, exception.Message + "\nChanges were not saved. Correct the file access problem and try again.",
+                "FluxFTP — site settings not saved", MessageBoxButton.OK, MessageBoxImage.Error);
+            return false;
+        }
+    }
 
     private static bool IsSameSite(ConnectionProfile left, ConnectionProfile right) =>
         left.Name.Equals(right.Name, StringComparison.OrdinalIgnoreCase) ||
