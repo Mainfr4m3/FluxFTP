@@ -38,6 +38,7 @@ internal sealed record VisionaryRaceOptions(
 
 internal sealed class VisionaryRaceState(VisionaryRaceOptions options, VisionaryTransferProfiles? profiles = null, Func<DateTimeOffset>? utcNow = null)
 {
+    public RaceStartTrace? StartTrace { get; set; }
     private sealed record Tracked(Guid Job, long? Size, DateTimeOffset? Modified, bool Final, int Attempts);
     private readonly Dictionary<string, Tracked> _files = new(StringComparer.Ordinal);
     private sealed record PayloadSnapshot(string Signature, DateTimeOffset Changed, bool Complete);
@@ -53,6 +54,8 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
     public Regex CompleteFlag { get; } = options.Validate();
     public bool SourceComplete { get; set; }
     public bool SourceAvailable { get; set; }
+    public bool SourceAnnouncedComplete { get; set; }
+    public bool DestinationAnnouncedComplete { get; set; }
     public bool DestinationVerified { get; set; }
     public bool DestinationAlreadyComplete { get; private set; }
     public void ConfirmDestinationComplete() { DestinationAlreadyComplete = true; DestinationVerified = true; }
@@ -102,10 +105,12 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
         var profile = _profiles.ForDirectory(directory);
         if (profile is null || profile.MarkerBased)
         {
-            var markerComplete = entries.Any(IsCompletionMarker) && !entries.Any(entry =>
+            var markerComplete = (entries.Any(IsCompletionMarker) || SourceAnnouncedComplete &&
+                entries.Any(entry => !entry.IsDirectory && !IsVerificationMetadata(entry) && !IsCompletionMetadata(entry))) && !entries.Any(entry =>
                 IsCompletionMetadata(entry) && !IsCompletionMarker(entry) ||
                 entry.Name.EndsWith("-MISSING", StringComparison.OrdinalIgnoreCase) ||
-                entry.Name.EndsWith(".missing", StringComparison.OrdinalIgnoreCase) || entry.Name.EndsWith(".bad", StringComparison.OrdinalIgnoreCase));
+                entry.Name.EndsWith(".missing", StringComparison.OrdinalIgnoreCase) || entry.Name.EndsWith(".bad", StringComparison.OrdinalIgnoreCase) ||
+                SourceAnnouncedComplete && !entry.IsDirectory && !IsVerificationMetadata(entry) && !IsCompletionMetadata(entry) && entry.Size == 0);
             if (releaseRoot) SourceComplete = markerComplete;
             if (entries.Any(entry => !entry.IsDirectory && !IsVerificationMetadata(entry) &&
                 !new[] { ".nfo", ".m3u", ".jpg", ".png", ".txt" }.Contains(Path.GetExtension(entry.Name).ToLowerInvariant())) || entries.Any(IsCompletionMarker))

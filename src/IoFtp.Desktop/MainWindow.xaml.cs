@@ -1848,6 +1848,7 @@ public partial class MainWindow : Window
 
     private async Task ExecuteScheduledAsync(QueueEntryView entry, CancellationToken cancellationToken)
     {
+        entry.StartTrace?.Mark("scheduler-started", $"job={entry.Id}; file={entry.Name}");
         var needsLeft = entry.Direction is TransferDirection.UploadToLeft or TransferDirection.DownloadFromLeft or TransferDirection.RelayLeftToRight or TransferDirection.RelayRightToLeft;
         var needsRight = entry.Direction is TransferDirection.Download or TransferDirection.Upload or TransferDirection.RelayLeftToRight or TransferDirection.RelayRightToLeft;
         var profiles = new ProfileStore().Load();
@@ -1873,6 +1874,14 @@ public partial class MainWindow : Window
         FtpRemoteSession? apiWorker = null;
         FtpRemoteSession? apiFxpSourceWorker = null; FtpRemoteSession? apiFxpDestinationWorker = null;
         var reuseWorkers = false;
+        var traceSubscriptions = new List<(FtpRemoteSession Session, Action<string> Handler)>();
+        void TraceWorker(FtpRemoteSession worker, string role)
+        {
+            if (entry.StartTrace is null) return;
+            Action<string> handler = message => entry.StartTrace.Protocol(role, message, $"job={entry.Id}; file={entry.Name}");
+            worker.ProtocolMessage += handler;
+            traceSubscriptions.Add((worker, handler));
+        }
         try
         {
             var ruleDestination = entry.Direction switch
@@ -1895,8 +1904,8 @@ public partial class MainWindow : Window
             if (needsLeft) leftWorker = await RentWorkerAsync(leftProfile!, cancellationToken);
             if (needsRight) rightWorker = await RentWorkerAsync(rightProfile!, cancellationToken);
             if (apiProfile is not null) apiWorker = await RentWorkerAsync(apiProfile, cancellationToken);
-            if (apiFxpSource is not null) apiFxpSourceWorker = await RentWorkerAsync(apiFxpSource, cancellationToken);
-            if (apiFxpDestination is not null) apiFxpDestinationWorker = await RentWorkerAsync(apiFxpDestination, cancellationToken);
+            if (apiFxpSource is not null) { entry.StartTrace?.Mark("source-worker-wait"); apiFxpSourceWorker = await RentWorkerAsync(apiFxpSource, cancellationToken); entry.StartTrace?.Mark("source-worker-ready"); TraceWorker(apiFxpSourceWorker, "source"); }
+            if (apiFxpDestination is not null) { entry.StartTrace?.Mark("destination-worker-wait"); apiFxpDestinationWorker = await RentWorkerAsync(apiFxpDestination, cancellationToken); entry.StartTrace?.Mark("destination-worker-ready"); TraceWorker(apiFxpDestinationWorker, "destination"); }
             var speedTimer = Stopwatch.StartNew();
             var speedSampleAt = TimeSpan.Zero;
             long speedSampleBytes = 0;
@@ -2092,7 +2101,9 @@ public partial class MainWindow : Window
                             if (apiFxpSourceWorker is not null) await DisposeTransferWorkerAsync(apiFxpSourceWorker);
                             if (apiFxpDestinationWorker is not null) await DisposeTransferWorkerAsync(apiFxpDestinationWorker);
                             apiFxpSourceWorker = await CreateTransferWorkerAsync(apiFxpSource!, cancellationToken);
+                            entry.StartTrace?.Mark("relay-fallback"); TraceWorker(apiFxpSourceWorker, "relay-source");
                             apiFxpDestinationWorker = await CreateTransferWorkerAsync(apiFxpDestination!, cancellationToken);
+                            entry.StartTrace?.Mark("relay-fallback"); TraceWorker(apiFxpDestinationWorker, "relay-destination");
                             sourceSession = apiFxpSourceWorker; destinationSession = apiFxpDestinationWorker;
                         }
                         else
@@ -2157,6 +2168,7 @@ public partial class MainWindow : Window
         }
         finally
         {
+            foreach (var subscription in traceSubscriptions) subscription.Session.ProtocolMessage -= subscription.Handler;
             await ReleaseWorkerAsync(leftProfile, leftWorker, reuseWorkers);
             await ReleaseWorkerAsync(rightProfile, rightWorker, reuseWorkers);
             await ReleaseWorkerAsync(apiProfile, apiWorker, reuseWorkers);
@@ -3306,7 +3318,11 @@ public partial class MainWindow : Window
         var routing = new IrcRoutingStore();
         var rules = new SiteRuleStore();
         var catcher = new IrcCatcher(site => rules.Load().Where(f => f.Site.Equals(site, StringComparison.OrdinalIgnoreCase)).SelectMany(f => f.Sections.Select(s => s.Name)).ToArray(),
-            entry => _raceLog.Write("ANNOUNCE", $"{entry.Site} {entry.Event} [{entry.Section}] {entry.Release} | {entry.Network}/{entry.Channel}"));
+            entry =>
+            {
+                _raceLog.Write("ANNOUNCE", $"{entry.Site} {entry.Event} [{entry.Section}] {entry.Release} | {entry.Network}/{entry.Channel}");
+                if (entry.Event is "DONE" or "COMPLETE") RaceCompletionSignals.Shared.Record(entry.Site, entry.Section, entry.Release);
+            });
         var setup = new IrcSetupCommands(() => new ProfileStore().Load(), profiles => new ProfileStore().Save(profiles), rules, _settings.Irc.AdminSiteId, routing, catcher, _settings.Irc.NetworkName);
         _ircService = new IrcManager(_settings, message => Dispatcher.BeginInvoke(() =>
         {
@@ -3421,6 +3437,7 @@ public partial class MainWindow : Window
 
     private async Task<object> StartApiTransferCoreAsync(ApiTransferRequest request, VisionaryRaceState? race = null, CancellationToken cancellationToken = default) => await await Dispatcher.InvokeAsync(async () =>
     {
+        race?.StartTrace?.Mark("ui-entered");
         race?.ThrowIfStopped();
         if (string.IsNullOrWhiteSpace(request.SrcSite) || string.IsNullOrWhiteSpace(request.DstSite) || string.IsNullOrWhiteSpace(request.Name))
             throw new ArgumentException("src_site, dst_site and name are required for FXP jobs.");
@@ -3454,7 +3471,7 @@ public partial class MainWindow : Window
                 if (TransferSlotLimit(profile) == 0)
                     throw new InvalidOperationException($"No RACE transfer slots available for {profile.Name}. Max slots must leave room for listing, open panes and enabled monitoring; check Site Options.");
             }
-            if (needsWarmup) await MaintainRaceSlotsAsync(_racePoolStop.Token);
+            if (needsWarmup) { race.StartTrace?.Mark("pool-warmup-start"); await MaintainRaceSlotsAsync(_racePoolStop.Token); race.StartTrace?.Mark("pool-warmup-ready"); }
         }
         foreach (var profile in new[] { sourceProfile, destinationProfile })
         {
@@ -3464,6 +3481,11 @@ public partial class MainWindow : Window
         var sourceBase = NormalizeRemotePath(request.SrcSection is not null ? ResolveApiSection(request.SrcSite, request.SrcSection) : request.SrcPath ?? "/");
         var destinationBase = NormalizeRemotePath(request.DstSection is not null ? ResolveApiSection(request.DstSite, request.DstSection) : request.DstPath ?? "/");
         var source = NormalizeRemotePath($"{sourceBase}/{request.Name}"); var destination = NormalizeRemotePath($"{destinationBase}/{request.Name}");
+        if (race is not null)
+        {
+            race.SourceAnnouncedComplete = RaceCompletionSignals.Shared.Has(sourceProfile.Name, request.SrcSection ?? sourceBase, ruleRelease);
+            race.DestinationAnnouncedComplete = RaceCompletionSignals.Shared.Has(destinationProfile.Name, request.DstSection ?? destinationBase, ruleRelease);
+        }
         var siteRules = new SiteRuleStore().EvaluateDestination(request.DstSite, destination, request.DstSection, ruleRelease);
         if (!siteRules.Accepted) throw new InvalidOperationException($"Site rules blocked transfer: {siteRules.Message}");
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -3478,6 +3500,7 @@ public partial class MainWindow : Window
         var itemName = race is not null ? RemoteLeaf(source) : request.Name;
         race?.BeginListing();
         IReadOnlyList<RemoteEntry> parentEntries;
+        race?.StartTrace?.Mark("source-listing-start");
         try { parentEntries = await ListSourceAsync(itemParent); }
         catch (FtpCommandException exception) when (race is not null && request.Name.Contains('/') && exception.StatusCode == 550)
         { return new ApiTransferStartResult(request.Name, "WAITING", 0, request.SrcSite, request.DstSite, []); }
@@ -3523,12 +3546,15 @@ public partial class MainWindow : Window
         }
         timeout.Token.ThrowIfCancellationRequested();
         race?.EndListing();
+        race?.StartTrace?.Mark("source-inventory-ready", $"eligible-files={apiFiles.Count}");
+        if (apiFiles.Count > 0) race?.StartTrace?.Mark("first-eligible-payload", $"files={apiFiles.Count}");
         // Inspect raw destination listings before skip rules and before creating transfer jobs.
         // A marker alone cannot prove that the expected payload exists at the right sizes.
         if (race is not null && apiFiles.Count > 0)
         {
             try
             {
+                race.StartTrace?.Mark("destination-check-start");
                 var rootListing = await _raceListings.ListAsync(ApplyGlobalProxy(destinationProfile), destination, timeout.Token);
                 if (RaceDestinationVerifier.HasCompleteMarker(rootListing, race))
                 {
@@ -3556,6 +3582,7 @@ public partial class MainWindow : Window
             }
             catch (FtpCommandException exception) when (exception.StatusCode == 550) { /* No readable completed destination; proceed with RACE. */ }
         }
+        race?.StartTrace?.Mark("destination-check-ended");
         var selectedFiles = apiFiles.Where(file => race is null || race.NeedsTransfer(file.Entry.FullPath, file.Entry.Size,
             file.Entry.ModifiedAt, RaceJobState)).ToList();
         var queuedEntries = selectedFiles.OrderBy(file => PriorityRank(file.Entry.Name, file.Entry.FullPath))
@@ -3575,6 +3602,8 @@ public partial class MainWindow : Window
             }
         }
         queued = queuedEntries.Count;
+        foreach (var entry in queuedEntries) entry.StartTrace = race?.StartTrace;
+        if (queuedEntries.Count > 0) race?.StartTrace?.Mark("jobs-enqueued", $"count={queuedEntries.Count}");
         ScheduleBatch(queuedEntries);
         if (race is not null && race.Finished(RaceJobState))
         {
@@ -3750,6 +3779,7 @@ public partial class MainWindow : Window
         public bool FxpMonitoringDisabled { get; set; }
         public long SpeedBytesPerSecond { get => _speedBytesPerSecond; set { _speedBytesPerSecond = value; Changed(); } }
         public Guid? SourceProfileId { get; set; }
+        public RaceStartTrace? StartTrace { get; set; }
         public bool VisionaryRace { get; set; }
         public Guid? DestinationProfileId { get; set; }
         public string? RuleSection { get; set; }

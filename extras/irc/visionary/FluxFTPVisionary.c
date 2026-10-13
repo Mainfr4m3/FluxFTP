@@ -2,8 +2,9 @@
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
-#define VERSION "1.03"
+#define VERSION "1.04"
 #define PIPE_PATH "\\\\.\\pipe\\FluxFTP.Visionary.v1"
 typedef struct LOADINFO { DWORD mVersion; HWND mHwnd; BOOL mKeep; BOOL mUnicode; DWORD mBeta; DWORD mBytes; } LOADINFO;
 static DWORD g_capacity = 4096;
@@ -35,14 +36,24 @@ __declspec(dllexport) int __stdcall FluxFTPTransfer(
     HWND main_window, HWND active_window, char *data, char *parms, BOOL show, BOOL no_pause)
 {
     char input[4096], request[4096], response[4096];
-    char *section, *release, *source, *target;
+    char *section, *release, *source, *target, *tick;
+    ULONGLONG entered = GetTickCount64(), chain = 0;
     HANDLE pipe; DWORD written = 0, read = 0;
     (void)main_window; (void)active_window; (void)parms; (void)show; (void)no_pause;
     if (!data) return 3;
     strncpy(input, data, sizeof(input) - 1); input[sizeof(input) - 1] = 0;
     section = strtok(input, " "); release = strtok(NULL, " "); source = strtok(NULL, " "); target = strtok(NULL, " ");
     if (!section || !release || !source || !target) { result(data, "ERROR usage: section release source target"); return 3; }
-    snprintf(request, sizeof(request), "TRANSFER\t%s\t%s\t%s\t%s\n", section, release, source, target);
+    tick = strtok(NULL, " ");
+    if (tick) {
+        ULONGLONG raw = strtoull(tick, NULL, 10);
+        if (raw > 0 && raw <= entered && entered - raw <= 300000) chain = raw;
+        else if (raw > 0 && raw <= 0xffffffffULL) {
+            DWORD age = (DWORD)entered - (DWORD)raw;
+            if (age <= 300000 && entered >= age) chain = entered - age;
+        }
+    }
+    snprintf(request, sizeof(request), "TRANSFER\t%s\t%s\t%s\t%s\t%llu\t%llu\n", section, release, source, target, chain, entered);
     {
         ULONGLONG deadline = GetTickCount64() + 10000;
         DWORD pipe_error = ERROR_FILE_NOT_FOUND;

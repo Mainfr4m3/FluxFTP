@@ -8,6 +8,25 @@ using IoFtp.Desktop.Models;
 using IoFtp.Desktop.Services;
 
 var assertions = 0;
+if (args.FirstOrDefault() == "--race-timing-checks")
+{
+    long tick = 1000;
+    var lines = new List<string>();
+    var trace = new RaceStartTrace("test", 1000, 900, 950, lines.Add, () => tick);
+    if (!lines[0].Contains("chain-to-dll=50ms; dll-to-pipe=50ms")) throw new Exception("Bridge timing");
+    tick = 1200; trace.Mark("watch-admitted"); trace.Mark("watch-admitted");
+    if (lines.Count != 2 || !lines[1].Contains("since-chain=300ms")) throw new Exception("Phase timing/deduplication");
+    trace.Protocol("source", "> PASS secret", "job");
+    trace.Protocol("source", "> RETR file", "job");
+    if (lines.Count != 3 || lines.Any(line => line.Contains("secret"))) throw new Exception("Credential filtering");
+    var unknown = new RaceStartTrace("old", 1000, 0, 0, lines.Add, () => tick);
+    if (!lines[^1].Contains("since-chain=unknown")) throw new Exception("Old bridge");
+    var future = new RaceStartTrace("bad", 1000, 1100, 1200, lines.Add, () => tick);
+    if (!lines[^1].Contains("dll-to-pipe=unknown")) throw new Exception("Future timestamps");
+    new RaceStartTrace("safe", 1000, 900, 950, _ => throw new Exception("logger"), () => tick).Mark("safe");
+    Console.WriteLine("RACE timing: 7 checks passed."); return;
+}
+if (args.FirstOrDefault() == "--race-done-checks") { RaceDoneChecks.Run(); return; }
 if (args.FirstOrDefault() == "--backup-checks") { BackupChecks.Run(); return; }
 if (args.FirstOrDefault() == "--visionary-rule-checks") { VisionaryRuleChecks.Run(args[1]); return; }
 if (args.FirstOrDefault() == "--secure-reverse-fxp-checks") { await SecureReverseFxpChecks.Run(); return; }

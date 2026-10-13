@@ -144,3 +144,28 @@ real FTP server behavior still needs live verification.
 it does not replace the parent release's marker regex. Other entries still copy
 the regex into the general race settings for review. Invalid .NET regexes and
 completion patterns matching empty text are rejected.
+# IRC DONE announcements
+
+Reload `Visionary-FluxFTP.mrc` from this release to forward DONE announcements. Existing bridge DLLs remain compatible.
+
+Map each trusted bot/section explicitly in mIRC:
+
+```
+/fluxvisi donebot NETWORK #CHANNEL RC RC TV-SPORTS SPORTS-1080P
+```
+
+Replace NETWORK and #CHANNEL with the actual announcement network/channel. The first RC is the bot nick;
+the second is the Flux site name. TV-SPORTS is the announced section; SPORTS-1080P must be the section
+used by the VISIONARY transfer request. The bridge matches `DONE: -SECTION- RELEASE Size ...`, not PRE DONE.
+For manual testing use `/fluxvisi complete SECTION RELEASE SITE`.
+
+DONE is scoped to site, section and release and expires after ten minutes. A source DONE lets Flux treat
+the source as final; a destination DONE can substitute for its FTP COMPLETE marker. Destination files
+must still exist at matching sizes without missing/bad/progress markers. DONE never bypasses NUKE checks.
+
+When using Flux's own IRC connection instead, add a catch rule with event DONE, match word DONE, the
+trusted bot/network/channel, and an explicit section matching the VISIONARY request.
+
+## RACE startup timing
+
+Use both updated DLLs (1.04) and Visionary-FluxFTP.mrc (1.02). RACE-Log emits VISIONARY TIMING with a shared race ID. since-chain begins at the FU_FXP_CHAINS handler; chain-to-dll includes chain fanout and dll-to-pipe includes waiting for the pipe. Further phases cover watch admission, UI dispatch, pool warmup, source inventory, destination checks, scheduling, worker availability and the first STOR/RETR and 150/125 reply on each side. Commands are measured before writing to the control stream; they do not prove data has started. Older bridge scripts show unknown chain timing. This does not measure Visionary processing before it emits FU_FXP_CHAINS.

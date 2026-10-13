@@ -7,7 +7,7 @@ internal sealed class IrcCatcher(Func<string, string[]>? sections = null, Action
 {
     private readonly object _gate = new();
     private readonly List<IrcAnnouncement> _recent = [];
-    public static readonly string[] Events = ["PRE", "NEWDIR", "COMPLETE", "NUKE", "REQUEST", "ADDPRE"];
+    public static readonly string[] Events = ["PRE", "NEWDIR", "COMPLETE", "DONE", "NUKE", "REQUEST", "ADDPRE"];
     public IReadOnlyList<IrcAnnouncement> Recent(string? site = null)
     { lock (_gate) return _recent.Where(a => site is null || a.Site.Equals(site, StringComparison.OrdinalIgnoreCase)).Take(5).ToArray(); }
 

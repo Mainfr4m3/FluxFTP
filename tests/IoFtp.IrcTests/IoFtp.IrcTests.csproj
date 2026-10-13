@@ -6,6 +6,8 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../../src/IoFtp.Desktop/Services/RaceStartTrace.cs" Link="RaceStartTrace.cs" />
+    <Compile Include="../../src/IoFtp.Desktop/Services/RaceCompletionSignals.cs" Link="RaceCompletionSignals.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/BackupService.cs" Link="BackupService.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/RaceWatchSlots.cs" Link="RaceWatchSlots.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/SkipListPackage.cs" Link="SkipListPackage.cs" />

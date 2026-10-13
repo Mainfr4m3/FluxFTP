@@ -48,11 +48,22 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
         using var writer = new StreamWriter(stream, new UTF8Encoding(false), 4096, true) { AutoFlush = true };
         var line = await reader.ReadLineAsync(cancellationToken).AsTask().WaitAsync(TimeSpan.FromSeconds(15), cancellationToken);
         if (string.IsNullOrWhiteSpace(line)) { await writer.WriteLineAsync("ERROR Empty request"); return; }
+        var received = RaceStartTrace.Now;
         var fields = line.Split('\t');
-        if (fields.Length != 5 || !fields[0].Equals("TRANSFER", StringComparison.OrdinalIgnoreCase) || fields.Skip(1).Any(string.IsNullOrWhiteSpace))
+        if ((fields.Length != 5 && fields.Length != 7) || !fields[0].Equals("TRANSFER", StringComparison.OrdinalIgnoreCase) || fields.Skip(1).Any(string.IsNullOrWhiteSpace))
         { await writer.WriteLineAsync("ERROR Expected TRANSFER<TAB>section<TAB>release<TAB>source<TAB>target"); return; }
         try
         {
+            if (fields[4] == "@DONE")
+            {
+                VisionaryTransferProfiles.ReleasePath(fields[2]);
+                if (new[] { fields[1], fields[3] }.Any(value => value.Length > 128 || value.Contains('/') || value.Contains('\\') || value.Any(char.IsWhiteSpace)))
+                    throw new ArgumentException("Invalid completion site or section.");
+                RaceCompletionSignals.Shared.Record(fields[3], fields[1], fields[2]);
+                _log?.Invoke($"VISIONARY DONE received: {fields[3]} / {fields[1]} / {fields[2]}; payload verification still required");
+                await writer.WriteLineAsync("OK DONE RECORDED " + fields[2]);
+                return;
+            }
             if (_raceStep is not null)
             {
                 if (new[] { fields[1], fields[3], fields[4] }.Any(value => value is "." or ".." || value.Contains('/') || value.Contains('\\') || value.Any(char.IsControl)))
@@ -67,7 +78,9 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
                 foreach (var completed in _races.Where(pair => pair.Value.IsCompleted).Select(pair => pair.Key).ToArray()) _races.Remove(completed);
                 if (_races.Count >= 2048) throw new InvalidOperationException("VISIONARY backlog is full (2048 active/waiting watches). Try again after watches finish.");
                 var options = VisionaryRaceOptions.Load();
-                var state = new VisionaryRaceState(options);
+                long chain = 0, dll = 0;
+                if (fields.Length == 7) { long.TryParse(fields[5], out chain); long.TryParse(fields[6], out dll); }
+                var state = new VisionaryRaceState(options) { StartTrace = new RaceStartTrace($"{fields[1]} {fields[2]}: {fields[3]} -> {fields[4]}", received, chain, dll, _log) };
                 var request = new ApiTransferRequest(fields[3], null, fields[1], fields[4], null, fields[1], fields[2]);
                 _races[key] = WatchAsync(request, state, options, cancellationToken);
                 await writer.WriteLineAsync("OK ACCEPTED " + fields[2] + " — queued or watching; progress is in the FluxFTP log");
@@ -96,7 +109,9 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
         _log?.Invoke(label + " accepted; waiting for a watch slot");
         try
         {
+            state.StartTrace?.Mark("watch-slot-wait");
             slot = await _watchSlots.EnterAsync(lifetime.Token);
+            state.StartTrace?.Mark("watch-admitted");
             _log?.Invoke(label + " watching source");
             while (!await _raceStep!(request, state, lifetime.Token))
                 await Task.Delay(TimeSpan.FromSeconds(options.RefreshSeconds), lifetime.Token);
@@ -112,6 +127,7 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
         finally
         {
             // Let the UI cancel this race's pending jobs even when cancellation occurred during the delay.
+            state.StartTrace?.Mark("watch-ended");
             lifetime.Cancel();
             if (slot is not null)
             {
