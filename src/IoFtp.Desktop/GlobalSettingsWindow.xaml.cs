@@ -18,6 +18,56 @@ public partial class GlobalSettingsWindow : Window
     private readonly IrcSettings _ircSettings;
     private readonly LayoutSettingsEditor _layoutEditor;
     public GlobalSettings? Settings { get; private set; }
+    private bool _backupBusy;
+    private async void BackupExport_Click(object sender, RoutedEventArgs e)
+    {
+        if (_backupBusy) return;
+        var password = BackupPasswordBox.Password;
+        if (password != BackupPasswordConfirmBox.Password) { BackupStatusText.Text = "Backup passwords do not match."; return; }
+        var picker = new SaveFileDialog { Filter = "FluxFTP backup (*.fluxbackup)|*.fluxbackup", DefaultExt = ".fluxbackup", AddExtension = true,
+            FileName = "FluxFTP-backup-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".fluxbackup" };
+        if (picker.ShowDialog(this) != true) return;
+        SetBackupBusy(true);
+        try
+        {
+            var count = await Task.Run(() => BackupService.Current().Export(picker.FileName, password));
+            BackupStatusText.Text = $"Backup exported: {count} files.\n{picker.FileName}";
+            BackupPasswordBox.Clear(); BackupPasswordConfirmBox.Clear();
+        }
+        catch (Exception exception) { BackupStatusText.Text = "Export failed: " + exception.Message; }
+        finally { SetBackupBusy(false); }
+    }
+    private async void BackupImport_Click(object sender, RoutedEventArgs e)
+    {
+        if (_backupBusy) return;
+        var picker = new OpenFileDialog { Filter = "FluxFTP backup (*.fluxbackup;*.fluxrestore)|*.fluxbackup;*.fluxrestore" };
+        if (picker.ShowDialog(this) != true) return;
+        var password = BackupPasswordBox.Password;
+        SetBackupBusy(true);
+        try
+        {
+            var service = BackupService.Current();
+            var package = await Task.Run(() => service.Read(picker.FileName, password));
+            if (MessageBox.Show(this, $"Import {package.Files.Count} files from {package.Created.ToLocalTime():yyyy-MM-dd HH:mm}?\n\nThis replaces the saved configuration at the next startup. A recovery copy is saved first.",
+                "Import FluxFTP backup", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+            await Task.Run(() => service.StageImport(package));
+            BackupPasswordBox.Clear(); BackupPasswordConfirmBox.Clear();
+            BackupStatusText.Text = "Import prepared. Close FluxFTP completely and start it again to restore the backup.";
+        }
+        catch (System.Security.Cryptography.CryptographicException) { BackupStatusText.Text = "Import failed: incorrect password, damaged backup, or recovery copy belongs to another Windows user."; }
+        catch (Exception exception) { BackupStatusText.Text = "Import failed: " + exception.Message; }
+        finally { SetBackupBusy(false); }
+    }
+    private void BackupCancel_Click(object sender, RoutedEventArgs e)
+    {
+        try { BackupService.Current().CancelPendingImport(); BackupStatusText.Text = "Pending import cancelled."; }
+        catch (Exception exception) { BackupStatusText.Text = exception.Message; }
+    }
+    private void SetBackupBusy(bool busy)
+    {
+        _backupBusy = busy; BackupExportButton.IsEnabled = !busy; BackupImportButton.IsEnabled = !busy; BackupCancelButton.IsEnabled = !busy;
+        if (busy) BackupStatusText.Text = "Processing backup…";
+    }
     public GlobalSettingsWindow(GlobalSettings s)
     {
         _visionaryBridge = s.EnableVisionaryBridge;
@@ -25,6 +75,8 @@ public partial class GlobalSettingsWindow : Window
         _advancedSkipRules = [.. s.AdvancedSkipRules ?? []];
         _originalTheme = s.Theme ?? ThemeManager.Default;
         InitializeComponent(); ProtocolBox.ItemsSource = Enum.GetValues<TransferProtocol>().Select(protocol => new ProtocolChoice(protocol)).ToArray(); ProxyTypeBox.ItemsSource = Enum.GetValues<ProxyType>(); LegendModeBox.ItemsSource = new[] { "Scrolling", "Static", "Activity", "Compact", "Hidden" };
+        Closing += (_, args) => { if (_backupBusy) args.Cancel = true; };
+        if (BackupService.Current().HasPendingImport) BackupStatusText.Text = "A backup import is pending. Close FluxFTP completely and start it again, or cancel the pending import.";
         BindBox.Text=s.BindAddress; PortFromBox.Text=$"{s.ActivePortFrom}"; PortToBox.Text=$"{s.ActivePortTo}"; ApiEnabledBox.IsChecked=s.EnableHttpsApi; ApiPortBox.Text=$"{s.HttpsApiPort}"; ApiLocalBox.IsChecked=s.ApiLocalhostOnly;
         ExpirationBox.Text=$"{s.PreparedJobExpirationSeconds}"; StarterBox.Text=$"{s.StarterTimeoutSeconds}"; RuntimeBox.Text=$"{s.MaxTransferRuntimeMinutes}"; JobHistoryBox.Text=$"{s.TransferJobHistory}"; TransferHistoryBox.Text=$"{s.TransferHistory}"; LogHistoryBox.Text=$"{s.LogBufferHistory}";
         UsernameBox.Text=s.DefaultUsername; ProtocolBox.SelectedItem=((ProtocolChoice[])ProtocolBox.ItemsSource).First(choice => choice.Protocol == s.DefaultProtocol); SlotsBox.Text=$"{s.DefaultSlots}"; UploadsBox.Text=$"{s.DefaultUploadSlots}"; DownloadsBox.Text=$"{s.DefaultDownloadSlots}"; DefaultIdleBox.Text=$"{s.DefaultIdleSeconds}";
@@ -56,6 +108,7 @@ public partial class GlobalSettingsWindow : Window
     }
     private void Save_Click(object sender, RoutedEventArgs e)
     {
+        if (_backupBusy) return;
         ErrorText.Text = "";
         try { _ = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(SkippedColorBox.Text); }
         catch { ErrorText.Text="Choose a valid skipped-item color, such as #7F9FBF."; return; }

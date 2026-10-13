@@ -44,6 +44,18 @@ public partial class CommandsWindow : Window
             .. CreateGlFtpdPresets()
         ];
         PresetBox.ItemsSource = _presets; PresetBox.SelectedIndex = 0;
+        Loaded += (_, _) => CommandBox.Focus();
+    }
+
+    private void SaveOutput_Click(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(OutputBox.Text)) return;
+        var safeSite = string.Concat(_siteName.Select(character => Path.GetInvalidFileNameChars().Contains(character) ? '_' : character));
+        var picker = new SaveFileDialog { Filter = "Text files (*.txt)|*.txt", DefaultExt = ".txt", AddExtension = true,
+            FileName = safeSite + "-commands.txt", Title = "Save server command output" };
+        if (picker.ShowDialog(this) != true) return;
+        try { File.WriteAllText(picker.FileName, OutputBox.Text, new System.Text.UTF8Encoding(false)); }
+        catch (Exception exception) { MessageBox.Show(this, exception.Message, "Save command output", MessageBoxButton.OK, MessageBoxImage.Error); }
     }
 
     private void Preset_Changed(object sender, SelectionChangedEventArgs e)

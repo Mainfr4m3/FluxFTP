@@ -8,6 +8,8 @@ using IoFtp.Desktop.Models;
 using IoFtp.Desktop.Services;
 
 var assertions = 0;
+if (args.FirstOrDefault() == "--backup-checks") { BackupChecks.Run(); return; }
+if (args.FirstOrDefault() == "--visionary-rule-checks") { VisionaryRuleChecks.Run(args[1]); return; }
 if (args.FirstOrDefault() == "--secure-reverse-fxp-checks") { await SecureReverseFxpChecks.Run(); return; }
 if (args.FirstOrDefault() == "--openssl-checks") { await OpenSslChecks.Run(); return; }
 if (args.FirstOrDefault() == "--path-editor-checks")

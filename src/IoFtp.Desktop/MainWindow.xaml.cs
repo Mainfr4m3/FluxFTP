@@ -447,6 +447,26 @@ public partial class MainWindow : Window
         LogText.AppendText($"{Environment.NewLine}Remote disconnected."); LogText.ScrollToEnd();
     }
 
+    private bool _commandPaneLeft;
+    private void CommandPane_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e) =>
+        _commandPaneLeft = (sender as FrameworkElement)?.Tag as string == "Left";
+    private void CommandPane_PreviewMouseDown(object sender, MouseButtonEventArgs e) =>
+        _commandPaneLeft = (sender as FrameworkElement)?.Tag as string == "Left";
+
+    private void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.R || Keyboard.Modifiers != ModifierKeys.Control) return;
+        var leftConnected = LeftMode.SelectedIndex == 1 && _leftRemoteSession?.IsConnected == true;
+        var rightConnected = RightMode.SelectedIndex == 1 && _remoteSession?.IsConnected == true;
+        if (!leftConnected && !rightConnected) return;
+        e.Handled = true;
+        if (e.IsRepeat) return;
+        var left = _commandPaneLeft;
+        if (left && !leftConnected) left = false;
+        else if (!left && !rightConnected) left = true;
+        if (left) CommandsLeft_Click(this, e); else CommandsRight_Click(this, e);
+    }
+
     private void CommandsLeft_Click(object sender, RoutedEventArgs e)
     {
         if (LeftMode.SelectedIndex != 1 || _leftRemoteSession?.IsConnected != true) { MessageBox.Show("Connect Remote first.", "Commands"); return; }
@@ -3172,6 +3192,7 @@ public partial class MainWindow : Window
 
     private async void GlobalSettings_Click(object sender, RoutedEventArgs e)
     {
+        SaveQueue();
         var dialog = new GlobalSettingsWindow(_settings) { Owner = this };
         if (dialog.ShowDialog() == true && dialog.Settings is not null)
         {
@@ -3487,6 +3508,7 @@ public partial class MainWindow : Window
                 if (child.Name is "." or ".." || ShouldSkip(child.Name, child.IsDirectory, true,
                     race is null || race.IsFinal(child.FullPath) ? child.Size : null)) continue;
                 if (race is not null && (race.IsCompletionMetadata(child) || VisionaryRaceState.IsVerificationMetadata(child))) continue;
+                if (child.IsDirectory && race?.AllowsDirectory(child) == false) continue;
                 var childDestination = NormalizeRemotePath($"{destinationDirectory}/{child.Name}");
                 if (child.IsDirectory) await QueueDirectory(child.FullPath, childDestination);
                 else if (race?.AllowsFile(child) != false) apiFiles.Add((child, childDestination));

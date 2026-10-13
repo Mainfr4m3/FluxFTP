@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:primitives="clr-namespace:System.Windows.Controls.Primitives;assembly=PresentationFramework"
         Title="FluxFTP" Width="1165" Height="750" MinWidth="900" MinHeight="600"
-        WindowStartupLocation="CenterScreen">
+        WindowStartupLocation="CenterScreen" PreviewKeyDown="MainWindow_PreviewKeyDown">
     <DockPanel Background="{DynamicResource WindowBrush}">
         <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceRaisedBrush}"
                 BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="8">
@@ -82,6 +82,7 @@
             </Grid.ColumnDefinitions>
 
             <Border Grid.Row="0" Grid.Column="0" Background="{DynamicResource SurfaceBrush}" Margin="8,8,3,3"
+                    Tag="Left" GotKeyboardFocus="CommandPane_GotKeyboardFocus" PreviewMouseDown="CommandPane_PreviewMouseDown"
                     BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="3">
                 <DockPanel>
                     <DockPanel DockPanel.Dock="Top" Margin="7,5,7,1">
@@ -155,6 +156,7 @@
             <GridSplitter Grid.Row="0" Grid.Column="1" Width="6" HorizontalAlignment="Stretch" Background="{DynamicResource BorderBrush}" />
 
             <Border Grid.Row="0" Grid.Column="2" Background="{DynamicResource SurfaceBrush}" Margin="3,8,8,3"
+                    Tag="Right" GotKeyboardFocus="CommandPane_GotKeyboardFocus" PreviewMouseDown="CommandPane_PreviewMouseDown"
                     BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="3">
                 <DockPanel>
                     <DockPanel DockPanel.Dock="Top" Margin="7,5,7,1">

@@ -43,10 +43,13 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
     private sealed record PayloadSnapshot(string Signature, DateTimeOffset Changed, bool Complete);
     private readonly Dictionary<string, PayloadSnapshot> _payloads = new(StringComparer.Ordinal);
     private readonly VisionaryTransferProfiles _profiles = profiles ?? VisionaryTransferProfiles.Load(options.RushOptionsPath);
-    public bool IsFinal(string path) => _profiles.ForDirectory(Parent(path)) is null ? SourceComplete :
+    public bool IsFinal(string path) => _profiles.ForDirectory(Parent(path)) is null or { MarkerBased: true } ? SourceComplete :
         _payloads.TryGetValue(Parent(path), out var payload) && payload.Complete;
     private static string Parent(string path) => path[..Math.Max(0, path.LastIndexOf('/'))];
     public bool AllowsFile(RemoteEntry file) => _profiles.ForDirectory(Parent(file.FullPath))?.Allows(file) ?? true;
+    public bool AllowsDirectory(RemoteEntry directory) => _profiles.ForDirectory(Parent(directory.FullPath))?.AllowsFolder(directory.Name) ?? true;
+    private bool MatchesComplete(RemoteEntry entry) => CompleteFlag.IsMatch(entry.Name) ||
+        _profiles.ForDirectory(Parent(entry.FullPath)) is { MarkerBased: true } profile && profile.MatchesComplete(entry.Name);
     public Regex CompleteFlag { get; } = options.Validate();
     public bool SourceComplete { get; set; }
     public bool SourceAvailable { get; set; }
@@ -75,11 +78,12 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
         entry.Name.StartsWith("(iNCOMPLETE)", StringComparison.OrdinalIgnoreCase);
     public IEnumerable<Guid> Jobs => _files.Values.Select(file => file.Job);
     public bool IsCompletionMetadata(RemoteEntry entry) => (entry.IsDirectory || entry.Size == 0) &&
-        (CompleteFlag.IsMatch(entry.Name) || Regex.IsMatch(entry.Name, @"\b(?:INCOMPLETE|UNFINISHED)\b",
+        (MatchesComplete(entry) || Regex.IsMatch(entry.Name, @"\b(?:INCOMPLETE|UNFINISHED)\b",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100)));
     public bool IsCompletionMarker(RemoteEntry entry)
     {
-        if (!IsCompletionMetadata(entry) || !CompleteFlag.IsMatch(entry.Name)) return false;
+        if (!IsCompletionMetadata(entry) || !MatchesComplete(entry)) return false;
+        if (NukeDetector.DetectName(entry.Name).IsNuked || entry.Name.StartsWith("REASON-", StringComparison.OrdinalIgnoreCase)) return false;
         if (Regex.IsMatch(entry.Name, @"\b(?:INCOMPLETE|UNFINISHED)\b|\bNOT[\s_-]+(?:COMPLETED?|FINISHED)\b",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100))) return false;
         foreach (Match percent in Regex.Matches(entry.Name, @"(?<![\d.,])(?<value>\d+(?:[.,]\d+)?)\s*%",
@@ -96,7 +100,7 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
             throw new InvalidOperationException("NUKE / REASON marker stopped the VISIONARY race.");
         directory ??= entries.Length > 0 ? Parent(entries[0].FullPath) : "";
         var profile = _profiles.ForDirectory(directory);
-        if (profile is null)
+        if (profile is null || profile.MarkerBased)
         {
             var markerComplete = entries.Any(IsCompletionMarker) && !entries.Any(entry =>
                 IsCompletionMetadata(entry) && !IsCompletionMarker(entry) ||

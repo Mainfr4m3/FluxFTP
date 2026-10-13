@@ -5,20 +5,34 @@ using IoFtp.Core.Abstractions;
 
 namespace IoFtp.Desktop.Services;
 
-internal sealed class VisionaryPayloadProfile(string name, string directory, string complete, string allow, string skip, bool expressions, int retries)
+internal sealed class VisionaryPayloadProfile(string name, string directory, string complete, string allow, string skip, bool expressions, int retries,
+    bool markerBased = false, string folderAllow = "", string folderSkip = "", string detection = "")
 {
     public string Name { get; } = name;
     public string Directory { get; } = directory;
     public int Attempts { get; } = retries + 1;
+    public bool MarkerBased { get; } = markerBased;
+    public Regex? Detection { get; } = detection.Length == 0 ? null : Pattern(detection);
     private readonly Regex _complete = Pattern(complete);
-    private readonly Regex? _allow = expressions && allow.Length > 0 ? Pattern(allow, allowEmpty: true) : null;
-    private readonly Regex? _skip = expressions && skip.Length > 0 ? Pattern(skip, allowEmpty: true) : null;
+    private readonly Regex? _allow = Filter(allow, expressions);
+    private readonly Regex? _skip = Filter(skip, expressions);
+    private readonly Regex? _folderAllow = Filter(folderAllow, expressions);
+    private readonly Regex? _folderSkip = Filter(folderSkip, expressions);
+    public bool AllowsFolder(string name) => (_folderAllow is null || _folderAllow.IsMatch(name)) && (_folderSkip is null || !_folderSkip.IsMatch(name));
+    public bool MatchesComplete(string name) => _complete.IsMatch(name);
     public bool Allows(RemoteEntry file) => !file.IsDirectory &&
         (allow.Length == 0 || Match(file.Name, allow, _allow)) && (skip.Length == 0 || !Match(file.Name, skip, _skip));
     public bool Completes(RemoteEntry file) => Allows(file) && file.Size > 0 && _complete.IsMatch(file.Name);
     public bool Pending(RemoteEntry file) => Allows(file) && !(file.Size > 0) && _complete.IsMatch(file.Name);
-    private static bool Match(string name, string value, Regex? regex) => regex?.IsMatch(name) ??
-        value.Split('|', StringSplitOptions.RemoveEmptyEntries).Any(pattern => FileSystemName.MatchesSimpleExpression(pattern, name, true));
+    private static bool Match(string name, string value, Regex? regex) => regex?.IsMatch(name) ?? true;
+    private static Regex? Filter(string value, bool expressions)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var parts = value.Split(expressions ? [';'] : [';', '|'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        string Glob(string text) => "^" + Regex.Escape(text).Replace(@"\*", ".*").Replace(@"\?", ".") + "$";
+        // Rush exports can mix RS_EXPR with explicit wildcard lists; do not compile '*.jpg' as regex.
+        return Pattern(string.Join("|", parts.Select(part => !expressions || part.StartsWith('*') || part.StartsWith('?') ? Glob(part) : "(?:" + part + ")")), allowEmpty: true);
+    }
     private static Regex Pattern(string value, bool allowEmpty = false)
     {
         if (string.IsNullOrWhiteSpace(value)) throw new InvalidDataException("A sample/covers completeflag is required.");
@@ -32,8 +46,10 @@ internal sealed class VisionaryTransferProfiles
 {
     private readonly VisionaryPayloadProfile[] _profiles;
     private VisionaryTransferProfiles(VisionaryPayloadProfile[] profiles) => _profiles = profiles;
-    public VisionaryPayloadProfile? ForDirectory(string path) => _profiles.FirstOrDefault(profile =>
-        ("/" + path.Trim('/')).EndsWith("/" + profile.Directory, StringComparison.OrdinalIgnoreCase));
+    public VisionaryPayloadProfile? ForDirectory(string path) => _profiles.FirstOrDefault(profile => profile.Directory.Length > 0 &&
+        ("/" + path.Trim('/')).EndsWith("/" + profile.Directory, StringComparison.OrdinalIgnoreCase)) ??
+        _profiles.FirstOrDefault(profile => profile.Detection?.IsMatch(path) == true) ??
+        _profiles.FirstOrDefault(profile => profile.Name == "normal");
 
     public static VisionaryTransferProfiles Load(string path = "")
     {
@@ -41,20 +57,25 @@ internal sealed class VisionaryTransferProfiles
         string Value(string section, string key, string fallback) => entries.LastOrDefault(entry =>
             entry.Section.Equals(section, StringComparison.OrdinalIgnoreCase) && entry.Key.Equals(key, StringComparison.OrdinalIgnoreCase))?.Value ?? fallback;
         var profiles = new List<VisionaryPayloadProfile>();
-        foreach (var name in new[] { "sample", "covers" })
+        foreach (var name in new[] { "sample", "covers", "proof", "subs", "multicd", "FLAC", "MVID", "MP3", "normal" })
         {
+            if (name is not ("sample" or "covers") && !entries.Any(entry => entry.Section.Equals(name, StringComparison.OrdinalIgnoreCase))) continue;
+            var isDirectoryProfile = name is "sample" or "covers" or "proof" or "subs";
             var detection = Value("detections", name, ".:/" + name);
-            if (!detection.StartsWith(".:/", StringComparison.Ordinal) || detection[3..].Split('/').Any(part =>
+            if (isDirectoryProfile && (!detection.StartsWith(".:/", StringComparison.Ordinal) || detection[3..].Split('/').Any(part =>
                 string.IsNullOrWhiteSpace(part) || part is "." or ".." || part.Contains('\\') || part.Any(char.IsControl)))
-                throw new InvalidDataException($"Unsupported {name} detection '{detection}'. Expected .:/directory.");
-            var defaultPattern = name == "sample" ? @"\.(mp4|avi|mpg|mpeg|vob|mkv|wmv)$" : @"\.(jpg|jpeg|gif|bmp|png|webp)$";
+                ) throw new InvalidDataException($"Unsupported {name} detection '{detection}'. Expected .:/directory.");
+            var payload = name is "sample" or "covers" or "proof";
+            var defaultPattern = !payload ? VisionaryRaceOptions.DefaultCompleteFlag : name == "sample" ? @"\.(mp4|avi|mpg|mpeg|vob|mkv|wmv)$" : @"\.(jpg|jpeg|gif|bmp|png|webp)$";
             var useRegex = Value(name, "rushopt", "RS_EXPR").Split([' ', '|'], StringSplitOptions.RemoveEmptyEntries)
                 .Any(option => option.Equals("RS_EXPR", StringComparison.OrdinalIgnoreCase));
             var allow = Value(name, "fileallow", "");
             var skip = Value(name, "fileskip", "");
             if (!int.TryParse(Value(name, "retrycount", "2"), out var retries) || retries is < 0 or > 100)
                 throw new InvalidDataException($"Invalid {name} retrycount.");
-            profiles.Add(new(name, detection[3..], Value(name, "completeflag", defaultPattern), allow, skip, useRegex, retries));
+            profiles.Add(new(name, isDirectoryProfile ? detection[3..] : "", Value(name, "completeflag", defaultPattern), allow, skip, useRegex, retries,
+                markerBased: !payload, Value(name, "folderallow", ""), Value(name, "folderskip", ""),
+                !isDirectoryProfile && name != "normal" ? Value("detections", name, "") : ""));
         }
         return new(profiles.ToArray());
     }

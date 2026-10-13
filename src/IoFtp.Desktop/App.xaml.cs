@@ -19,6 +19,13 @@ public partial class App : System.Windows.Application
             Shutdown();
             return;
         }
+        try { Services.BackupService.Current().ApplyPending(); }
+        catch (Exception exception)
+        {
+            try { Services.BackupService.Current().CancelPendingImport(); } catch { }
+            MessageBox.Show("Backup import failed: " + exception.Message + "\nCheck backup-restore-history before retrying.", "FluxFTP Backup/Import", MessageBoxButton.OK, MessageBoxImage.Error);
+            Shutdown(); return;
+        }
         EventManager.RegisterClassHandler(typeof(Window), FrameworkElement.LoadedEvent, new RoutedEventHandler(ApplyDarkChrome));
         Services.ThemeManager.Apply(new Services.GlobalSettingsStore().Load().Theme);
         base.OnStartup(e);
