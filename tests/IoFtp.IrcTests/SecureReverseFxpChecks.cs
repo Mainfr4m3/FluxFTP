@@ -44,6 +44,7 @@ internal static class SecureReverseFxpChecks
             var failed = false;
             try { await from.FxpToAsync(to, "/release/file.rar", "/release/file.rar", default, reverseDataConnection: true); }
             catch (FtpCommandException exception) when (exception.StatusCode == 553) { failed = true; }
+            if ((!failed && from.LastFxpTransferElapsed <= TimeSpan.Zero) || (failed && from.LastFxpTransferElapsed != TimeSpan.Zero)) throw new Exception("Passive timing must require successful replies from both servers.");
             if (failed != rejected) throw new Exception("Secure reverse FXP misclassified rejection.");
             var sentSource = Encoding.UTF8.GetString(sourceOutput.ToArray()).TrimStart('\uFEFF');
             var sentTarget = Encoding.UTF8.GetString(targetOutput.ToArray()).TrimStart('\uFEFF');

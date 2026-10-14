@@ -8,6 +8,31 @@ using IoFtp.Desktop.Models;
 using IoFtp.Desktop.Services;
 
 var assertions = 0;
+if (args.FirstOrDefault() == "--fxp-metrics-checks")
+{
+    var time = TimeSpan.Zero;
+    var stats = new SessionStatistics(() => time);
+    stats.Complete("FXP", 6000); stats.Complete("FXP", 6000); stats.Complete("Download", 90000);
+    if (stats.FxpRecentRate != 200) throw new Exception("Parallel completions or non-FXP counted incorrectly");
+    time = TimeSpan.FromSeconds(30);
+    if (stats.FxpSessionRate != 400) throw new Exception("Session average");
+    stats.Complete("FXP", 6000);
+    if (stats.FxpRecentRate != 300) throw new Exception("Rolling sum");
+    time = TimeSpan.FromSeconds(60);
+    if (stats.FxpRecentRate != 100) throw new Exception("Boundary expiration");
+    time = TimeSpan.FromSeconds(90);
+    if (stats.FxpRecentRate != 0 || stats.Fxp != 18000 || stats.FxpSessionRate != 200) throw new Exception("Idle expiry or session totals lost");
+    Console.WriteLine("PASS: passive Metrics parallel completions, FXP-only counting, 60-second expiry and session average."); return;
+}
+if (args.FirstOrDefault() == "--passive-fxp-checks")
+{
+    if (PassiveFxpAverage.Calculate(50000000, TimeSpan.FromSeconds(2)) != 25000000) throw new Exception("File average");
+    if (PassiveFxpAverage.Calculate(5000000, TimeSpan.FromSeconds(2)) != 2500000) throw new Exception("Transferred portion average");
+    if (PassiveFxpAverage.Calculate(0, TimeSpan.FromSeconds(2)) is not null || PassiveFxpAverage.Calculate(-1, TimeSpan.FromSeconds(2)) is not null || PassiveFxpAverage.Calculate(10, TimeSpan.Zero) is not null) throw new Exception("Unknown/invalid measurement");
+    if (PassiveFxpAverage.Calculate(long.MaxValue, TimeSpan.FromTicks(1)) != long.MaxValue) throw new Exception("Overflow");
+    await SecureReverseFxpChecks.Run();
+    Console.WriteLine("PASS: passive per-file averages, unknown sizes, zero durations, overflow and successful FXP completion timing."); return;
+}
 if (args.FirstOrDefault() == "--zero-slot-checks") { await ZeroSlotChecks.Run(); return; }
 if (args.FirstOrDefault() == "--site-compatibility-checks") { await SiteCompatibilityChecks.Run(); return; }
 if (args.FirstOrDefault() == "--race-timing-checks")

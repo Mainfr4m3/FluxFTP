@@ -2,11 +2,26 @@ using System.Diagnostics;
 
 namespace IoFtp.Desktop.Services;
 
-internal sealed class SessionStatistics
+internal sealed class SessionStatistics(Func<TimeSpan>? elapsed = null)
 {
     private readonly Stopwatch _uptime = Stopwatch.StartNew();
     private long _uploaded, _downloaded, _fxp, _local, _completed, _created, _closed, _hits;
-    public TimeSpan Uptime => _uptime.Elapsed;
+    public TimeSpan Uptime => elapsed?.Invoke() ?? _uptime.Elapsed;
+    private readonly object _rateGate = new();
+    private readonly Dictionary<long, long> _fxpSeconds = new();
+    public long FxpRecentRate
+    {
+        get
+        {
+            lock (_rateGate)
+            {
+                var second = (long)Uptime.TotalSeconds;
+                foreach (var old in _fxpSeconds.Keys.Where(value => value <= second - 60).ToArray()) _fxpSeconds.Remove(old);
+                return _fxpSeconds.Values.Sum() / 60;
+            }
+        }
+    }
+    public long FxpSessionRate => (long)(Fxp / Math.Max(1, Uptime.TotalSeconds));
     public long Uploaded => Interlocked.Read(ref _uploaded);
     public long Downloaded => Interlocked.Read(ref _downloaded);
     public long Fxp => Interlocked.Read(ref _fxp);
@@ -25,7 +40,15 @@ internal sealed class SessionStatistics
         {
             case "Upload": Interlocked.Add(ref _uploaded, bytes); break;
             case "Download": Interlocked.Add(ref _downloaded, bytes); break;
-            case "FXP": Interlocked.Add(ref _fxp, bytes); break;
+            case "FXP":
+                Interlocked.Add(ref _fxp, bytes);
+                lock (_rateGate)
+                {
+                    var second = (long)Uptime.TotalSeconds;
+                    foreach (var old in _fxpSeconds.Keys.Where(value => value <= second - 60).ToArray()) _fxpSeconds.Remove(old);
+                    _fxpSeconds[second] = _fxpSeconds.GetValueOrDefault(second) + bytes;
+                }
+                break;
             case "Local": Interlocked.Add(ref _local, bytes); break;
             default: throw new ArgumentException("Unknown transfer kind", nameof(kind));
         }

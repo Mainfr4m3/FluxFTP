@@ -41,6 +41,7 @@ public sealed class FtpRemoteSession : IRemoteSession
     public string LastFxpNegotiation { get; private set; } = "None";
     public IReadOnlyList<(string Name, TimeSpan Elapsed)> LastFxpStageTimings => _lastFxpStageTimings;
     public string LastTransferCompletion { get; private set; } = "";
+    public TimeSpan LastFxpTransferElapsed { get; private set; }
     public FxpProtectionMode FxpProtection => _profile?.EffectiveOptions.FxpProtection ?? FxpProtectionMode.AutoSecure;
     public bool UsesTlsControl => _profile?.Protocol is TransferProtocol.FtpsExplicit or TransferProtocol.FtpsImplicit;
 
@@ -255,6 +256,7 @@ public sealed class FtpRemoteSession : IRemoteSession
     {
         LastTransferCompletion = "";
         destination.LastTransferCompletion = "";
+        LastFxpTransferElapsed = TimeSpan.Zero;
         EnsureConnected(); destination.EnsureConnected();
         if (_sftpSession is not null || destination._sftpSession is not null)
             throw new NotSupportedException("Direct FXP is unavailable for SFTP; use client relay instead.");
@@ -438,6 +440,7 @@ public sealed class FtpRemoteSession : IRemoteSession
     private async Task StartAndCompleteFxpAsync(FtpRemoteSession destination, string sourcePath,
         string destinationPath, CancellationToken cancellationToken)
     {
+        var transferTimer = Stopwatch.StartNew();
         // Start both ends together. Some FTP servers do not emit 125/150 until
         // the peer has actually opened the negotiated data connection; awaiting
         // STOR before sending RETR can therefore deadlock until a 425 timeout.
@@ -454,6 +457,7 @@ public sealed class FtpRemoteSession : IRemoteSession
         TransferVerification.EnsureAccepted(completions[1].Message);
         EnsureSuccess(completions[0], 226, 250);
         EnsureSuccess(completions[1], 226, 250);
+        LastFxpTransferElapsed = transferTimer.Elapsed;
     }
 
     private async Task<TransferStart> StartTransferCommandAsync(string command, CancellationToken cancellationToken)

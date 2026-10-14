@@ -2028,10 +2028,13 @@ public partial class MainWindow : Window
                     try
                     {
                         LogText.AppendText($"{Environment.NewLine}Attempting direct {(clearFxp ? "clear" : "secure")} FXP: {entry.Name}");
-                        var fxpStartedAt = DateTime.UtcNow;
-                        using var monitorCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                        var monitor = MonitorFxpAsync(sourceProfile, destinationProfile, entry, monitorCancellation.Token);
-                        try
+                        var measureAverage = _settings.EnableFxpSpeedMonitoring;
+                        entry.FxpMonitoringDisabled = !measureAverage;
+                        entry.SpeedBytesPerSecond = 0;
+                        entry.FxpAverageMeasured = false;
+                        entry.FxpLiveMeasured = false;
+                        entry.FxpSpeedUnavailable = false;
+
                         {
                             if (useReverse)
                             {
@@ -2055,19 +2058,15 @@ public partial class MainWindow : Window
                                 }
                             }
                         }
-                        finally
-                        {
-                            monitorCancellation.Cancel();
-                            // Progress monitoring must never affect the transfer itself.
-                            try { await monitor; } catch (Exception) { }
-                        }
                         if (entry.TotalBytes > 0) entry.BytesTransferred = entry.TotalBytes;
-                        // Keep the final observed speed visible. Very small files can
-                        // finish before ioFTPD publishes a WHO sample, so calculate a
-                        // useful average for those instead of displaying a dash.
-                        var elapsed = Math.Max((DateTime.UtcNow - fxpStartedAt).TotalSeconds, 0.001);
-                        if (entry.SpeedBytesPerSecond <= 0 && entry.TotalBytes > 0)
-                            entry.SpeedBytesPerSecond = (long)(entry.TotalBytes / elapsed);
+                        if (measureAverage && PassiveFxpAverage.Calculate(sessionNewBytes, sourceSession.LastFxpTransferElapsed) is { } average)
+                        {
+                            entry.FxpAverageMeasured = true;
+                            entry.SpeedBytesPerSecond = average;
+                            var measurement = FormattableString.Invariant($"FXP average: {entry.Name} | bytes={sessionNewBytes}; transfer={sourceSession.LastFxpTransferElapsed.TotalSeconds:F3}s; average={average / 1000000.0:F2} MB/s; mode=passive");
+                            LogText.AppendText(Environment.NewLine + measurement);
+                            _raceLog.Write("FXP-AVERAGE", $"{entry.Id} {sourceProfile.Name} -> {destinationProfile.Name}: {measurement}");
+                        }
                         AppendFxpTimings(sourceSession);
                         AppendTransferIntegrityNotices(entry, ("source", sourceSession), ("destination", destinationSession));
                         LogText.AppendText($"{Environment.NewLine}Direct FXP completed via {sourceSession.LastFxpNegotiation}: {entry.Name}");
@@ -2217,11 +2216,11 @@ public partial class MainWindow : Window
     {
         var options = profile.EffectiveOptions;
         if (!_settings.EnableVisionaryBridge || !_raceReadySites.ContainsKey(profile.Id)) return options.MaxSlots;
-        // One shared listing/verifier connection, plus open panes and the
-        // maximum concurrent per-transfer monitors when enabled.
+        // One shared listing/verifier connection plus open panes.
+        // Passive file averages require no auxiliary connections.
         var auxiliary = 1 + (_leftProfile?.Id == profile.Id && _leftRemoteSession?.IsConnected == true ? 1 : 0)
             + (_rightProfile?.Id == profile.Id && _remoteSession?.IsConnected == true ? 1 : 0)
-            + (_settings.EnableFxpSpeedMonitoring ? Math.Max(options.MaxUploadSlots, options.MaxDownloadSlots) : 0);
+            ; // Passive averages need no monitor connections or reserved slots.
         return RaceSlotBudget.Transfers(options.MaxSlots,
             options.AllowUpload ? options.MaxUploadSlots : 0,
             options.AllowDownload ? options.MaxDownloadSlots : 0, auxiliary);
@@ -2411,115 +2410,6 @@ public partial class MainWindow : Window
             LogText.AppendText($"{Environment.NewLine}External script failed [{eventName}]: {exception.Message}");
             if (!ignoreFailure) throw;
         }
-    }
-
-    private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _fxpMonitoring = new();
-
-    private async Task MonitorFxpAsync(ConnectionProfile sourceProfile, ConnectionProfile destinationProfile,
-        QueueEntryView entry, CancellationToken cancellationToken)
-    {
-        entry.FxpMonitoringDisabled = !_settings.EnableFxpSpeedMonitoring;
-        if (entry.FxpMonitoringDisabled) return;
-        using var monitoringCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        cancellationToken = monitoringCancellation.Token;
-        _fxpMonitoring[entry.Id] = monitoringCancellation;
-        var endpoints = new[] { new FxpMonitorEndpoint(sourceProfile, false), new FxpMonitorEndpoint(destinationProfile, true) };
-        var lastSampleAt = DateTimeOffset.MinValue;
-        var bridgeWarning = false;
-        void Apply(FxpProgressSample sample)
-        {
-            lastSampleAt = DateTimeOffset.UtcNow;
-            entry.FxpSpeedUnavailable = false;
-            entry.FxpLiveMeasured = true;
-            if (sample.Bytes >= 0)
-                entry.BytesTransferred = FxpSpeedParser.ClampProgress(Math.Max(entry.BytesTransferred, sample.Bytes), entry.TotalBytes);
-            entry.SpeedBytesPerSecond = Math.Max(0, sample.Speed);
-        }
-        async Task<FxpProgressSample?> Probe(FxpMonitorEndpoint endpoint)
-        {
-            if (DateTimeOffset.UtcNow < endpoint.RetryAt) return null;
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(endpoint.Session is null ? TimeSpan.FromSeconds(8) : TimeSpan.FromSeconds(4));
-            try
-            {
-                endpoint.Session ??= await CreateWorkerAsync(endpoint.Profile, timeout.Token);
-                return await endpoint.Probe.ReadAsync(entry.Name, entry.Destination, entry.TotalBytes, endpoint.Upload,
-                    endpoint.Session.ExecuteCommandAsync, token => endpoint.Session.GetSizeAsync(entry.Destination, token), timeout.Token);
-            }
-            catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
-            {
-                // A cancelled FTP read can leave a reply pending. Discard the
-                // connection before retrying so responses cannot become misaligned.
-                if (!endpoint.WarningShown)
-                {
-                    endpoint.WarningShown = true;
-                    LogText.AppendText($"{Environment.NewLine}FXP progress on {endpoint.Profile.Name}: monitoring {(exception is OperationCanceledException ? "timed out" : "connection failed")} ({exception.GetType().Name}); reconnecting for {entry.Name}.");
-                }
-                var failed = endpoint.Session; endpoint.Session = null;
-                endpoint.Probe.ResetConnection();
-                endpoint.RetryAt = DateTimeOffset.UtcNow.AddSeconds(5);
-                if (failed is not null) { try { await failed.DisposeAsync(); } catch { } }
-                return null;
-            }
-        }
-        try
-        {
-            while (true)
-            {
-                await Task.Delay(1000, cancellationToken);
-                // Expire the display before awaiting a slow server. A genuine
-                // zero sample is different from missing or stale measurements.
-                if (DateTimeOffset.UtcNow - lastSampleAt > TimeSpan.FromSeconds(6))
-                { entry.FxpSpeedUnavailable = true; entry.SpeedBytesPerSecond = 0; }
-                try
-                {
-                    if (await TryReadTelemetryTransferAsync(entry, cancellationToken) is { } telemetry)
-                    { Apply(new(telemetry.Transferred, telemetry.Speed)); continue; }
-                }
-                catch (Exception) when (!cancellationToken.IsCancellationRequested) { }
-
-                // Sample both ends independently. A blocked destination cannot
-                // hold back a successful source sample, or vice versa.
-                var sourceMatched = false;
-                async Task ReadEndpoint(FxpMonitorEndpoint endpoint)
-                {
-                    if (await Probe(endpoint) is { } sample)
-                    {
-                        if (!endpoint.Upload) sourceMatched = true;
-                        else if (sourceMatched) return;
-                        Apply(sample);
-                    }
-                }
-                await Task.WhenAll(endpoints.Select(ReadEndpoint));
-                if (DateTimeOffset.UtcNow - lastSampleAt > TimeSpan.FromSeconds(6))
-                {
-                    entry.FxpSpeedUnavailable = true; entry.SpeedBytesPerSecond = 0;
-                    if (!bridgeWarning)
-                    {
-                        bridgeWarning = true;
-                        LogText.AppendText($"{Environment.NewLine}FXP progress: no fresh live measurement for {entry.Name}; monitoring continues on both servers.");
-                    }
-                }
-            }
-        }
-        finally
-        {
-            _fxpMonitoring.TryRemove(entry.Id, out _);
-            if (!_settings.EnableFxpSpeedMonitoring)
-            { entry.FxpMonitoringDisabled = true; entry.SpeedBytesPerSecond = 0; entry.FxpSpeedUnavailable = false; }
-            foreach (var endpoint in endpoints)
-                if (endpoint.Session is not null) { try { await endpoint.Session.DisposeAsync(); } catch { } }
-        }
-    }
-
-    private sealed class FxpMonitorEndpoint(ConnectionProfile profile, bool upload)
-    {
-        public ConnectionProfile Profile { get; } = profile;
-        public bool Upload { get; } = upload;
-        public FtpRemoteSession? Session { get; set; }
-        public FxpProgressProbe Probe { get; } = new();
-        public DateTimeOffset RetryAt { get; set; }
-        public bool WarningShown { get; set; }
     }
 
     private static async Task<(long Transferred, long Speed)?> TryReadTelemetryTransferAsync(
@@ -3056,6 +2946,8 @@ public partial class MainWindow : Window
             new("Session running", $"{(long)_sessionStatistics.Uptime.TotalHours} h {_sessionStatistics.Uptime.Minutes} min", "Since this FluxFTP process started; resets on restart"),
             new("Session uploaded", FormatSize(_sessionStatistics.Uploaded), "New bytes from successful uploads"),
             new("Session downloaded", FormatSize(_sessionStatistics.Downloaded), "New bytes from successful downloads; resumed bytes excluded"),
+            new("FXP / relay rate, last 60 s", $"{FormatSize(_sessionStatistics.FxpRecentRate)}/s", "Completed bytes in 60 one-second buckets / 60; updates on completion, no server polling"),
+            new("Session FXP / relay average", $"{FormatSize(_sessionStatistics.FxpSessionRate)}/s", "Completed FXP/relay bytes / session uptime, including idle time; not live throughput"),
             new("Session FXP / relay", FormatSize(_sessionStatistics.Fxp), "Successful server-to-server files, counted once per file"),
             new("Session local copies", FormatSize(_sessionStatistics.Local), "Successful disk-to-disk copies"),
             new("Session completed files", _sessionStatistics.Completed.ToString(), "Independent of saved or cleared queue history"),
@@ -3148,8 +3040,9 @@ public partial class MainWindow : Window
             : current.TotalBytes > 0
                 ? $"{FormatSize(current.BytesTransferred)} / {FormatSize(current.TotalBytes)}"
                 : FormatSize(current.BytesTransferred);
+        if (current.Direction is TransferDirection.ApiFxp or TransferDirection.RelayLeftToRight or TransferDirection.RelayRightToLeft && current.State == "Transferring" && !current.FxpMonitoringDisabled) TransferBytesText.Text += " · average available after completion";
         if (current.FxpSpeedUnavailable && current.State == "Transferring") TransferBytesText.Text += " · speed unavailable";
-        if (current.FxpMonitoringDisabled && current.State == "Transferring") TransferBytesText.Text += " · monitoring off";
+        if (current.FxpMonitoringDisabled && current.State == "Transferring") TransferBytesText.Text += " · average measurement off";
 
         var elapsed = current.StartedAt is { } started
             ? DateTimeOffset.Now - started.ToLocalTime()
@@ -3210,8 +3103,6 @@ public partial class MainWindow : Window
         {
             _settings = dialog.Settings;
             ConfigureSkippedItemColors();
-            if (!_settings.EnableFxpSpeedMonitoring)
-                foreach (var monitoring in _fxpMonitoring.Values) monitoring.Cancel();
             var priorityProfiles = new ProfileStore().Load().ToDictionary(profile => profile.Id);
             var ranks = _engine.Snapshot().ToDictionary(status => status.Item.Id, status => TransferFilePriority.Rank(
                 status.Item.Name, status.Item.SourcePath, _settings,
@@ -3709,7 +3600,7 @@ public partial class MainWindow : Window
             remoteToRemote ? "FXP" : "FTP", entry.Name, $"{entry.Source} → {entry.Destination}",
             entry.TotalBytes > 0 ? FormatSize(entry.TotalBytes) : entry.ProgressText, "1",
             entry.TotalBytes > 0 ? FormatSize(Math.Max(0, entry.TotalBytes - entry.BytesTransferred)) : "—",
-            entry.SpeedBytesPerSecond > 0 ? $"{FormatSize(entry.SpeedBytesPerSecond)}/s" : "—", done, entry.State, progressPercent);
+            entry.SpeedBytesPerSecond > 0 ? $"{FormatSize(entry.SpeedBytesPerSecond)}/s{(entry.FxpAverageMeasured ? " avg" : "")}" : "—", done, entry.State, progressPercent);
     }).ToList();
 
     private static string RemoteLeaf(string path) => path.TrimEnd('/').Split('/').LastOrDefault() ?? path;
@@ -3776,6 +3667,7 @@ public partial class MainWindow : Window
         private long _speedBytesPerSecond;
         public bool FxpSpeedUnavailable { get; set; }
         public bool FxpLiveMeasured { get; set; }
+        public bool FxpAverageMeasured { get; set; }
         public bool FxpMonitoringDisabled { get; set; }
         public long SpeedBytesPerSecond { get => _speedBytesPerSecond; set { _speedBytesPerSecond = value; Changed(); } }
         public Guid? SourceProfileId { get; set; }
