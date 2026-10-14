@@ -460,7 +460,7 @@ public sealed class FtpRemoteSession : IRemoteSession
         // the peer has actually opened the negotiated data connection; awaiting
         // STOR before sending RETR can therefore deadlock until a 425 timeout.
         var starts = await MeasureFxpStageAsync("STOR/RETR", async () => await Task.WhenAll(
-            destination.StartTransferCommandAsync($"STOR {destinationPath}", cancellationToken),
+            destination.StartTransferCommandAsync($"STOR {destinationPath}", cancellationToken, _fxpResumeOffset),
             StartTransferCommandAsync($"RETR {sourcePath}", cancellationToken)));
 
         var completions = await MeasureFxpStageAsync("Data", async () => await Task.WhenAll(
@@ -471,18 +471,20 @@ public sealed class FtpRemoteSession : IRemoteSession
         TransferVerification.EnsureAccepted(completions[0].Message);
         TransferVerification.EnsureAccepted(completions[1].Message);
         EnsureSuccess(completions[0], 226, 250);
+        if (_fxpResumeOffset > 0 && FtpResumeRejectedException.IsAppendPermissionRejection(completions[1].Code, completions[1].Message))
+            throw new FtpResumeRejectedException(completions[1].Message, completions[1].Code);
         EnsureSuccess(completions[1], 226, 250);
         LastFxpTransferElapsed = transferTimer.Elapsed;
     }
 
-    private async Task<TransferStart> StartTransferCommandAsync(string command, CancellationToken cancellationToken)
+    private async Task<TransferStart> StartTransferCommandAsync(string command, CancellationToken cancellationToken, long resumeOffset = 0)
     {
         var response = await FxpCommandAsync(command, cancellationToken);
         if (response.Code is 125 or 150) return new TransferStart(response, false);
         // A few FTP daemons suppress the preliminary reply for FXP and answer only
         // after the data connection closes. Treat their final reply as completion.
         if (response.Code is 226 or 250) return new TransferStart(response, true);
-        if (_fxpResumeOffset > 0 && command.StartsWith("STOR ", StringComparison.OrdinalIgnoreCase) &&
+        if (resumeOffset > 0 && command.StartsWith("STOR ", StringComparison.OrdinalIgnoreCase) &&
             FtpResumeRejectedException.IsAppendPermissionRejection(response.Code, response.Message))
             throw new FtpResumeRejectedException(response.Message, response.Code);
         throw new FtpCommandException(response.Code, response.Message);

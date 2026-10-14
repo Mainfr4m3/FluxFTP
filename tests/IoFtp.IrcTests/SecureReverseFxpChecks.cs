@@ -9,15 +9,17 @@ internal static class SecureReverseFxpChecks
     {
         foreach (var sscnFallback in new[] { false, true })
         foreach (var resume in new[] { false, true })
-        foreach (var rejected in new[] { false, true })
+        foreach (var rejection in new[] { 0, 1, 2, 3 })
         {
+            var rejected = rejection != 0;
+            var appendReply = "553 Error: file permissions incorrect for resuming/appending (not 644).\r\n";
             var sourceReplies = "250 CWD\r\n200 Binary\r\n200 PRET\r\n" +
                 (sscnFallback ? "227 Entering Passive Mode (95,211,177,207,165,240)\r\n200 SSCN:SERVER METHOD\r\n" :
                     "227-Using RACED1 for upcoming transfer\r\n227 Entering Passive Mode (95,211,177,207,165,240)\r\n") +
                 (resume ? "350 Restart accepted\r\n" : "") + "150 File status okay\r\n226 Transfer complete\r\n";
             var targetReplies = "250 CWD\r\n200 Binary\r\n" +
                 (sscnFallback ? "200 SSCN:CLIENT METHOD\r\n" : "220 SSCN:SERVER METHOD\r\n") +
-                "200 PORT command successful\r\n" + (resume ? "350 Restart accepted\r\n" : "") + (rejected ? "553 File exists\r\n" : "150 Opening BINARY data connection using SSL/TLS\r\n226 Transfer complete\r\n");
+                "200 PORT command successful\r\n" + (resume ? "350 Restart accepted\r\n" : "") + (rejection == 1 ? "553 File exists\r\n" : rejection == 2 ? appendReply : "150 Opening BINARY data connection using SSL/TLS\r\n" + (rejection == 3 ? appendReply : "226 Transfer complete\r\n"));
             using var sourceInput = new MemoryStream(Encoding.ASCII.GetBytes(sourceReplies));
             using var targetInput = new MemoryStream(Encoding.ASCII.GetBytes(targetReplies));
             using var sourceReader = new StreamReader(sourceInput);
@@ -44,7 +46,9 @@ internal static class SecureReverseFxpChecks
             var to = Session("ioFTPD", targetReader, targetWriter, false);
             var failed = false;
             try { await from.FxpToAsync(to, "/release/file.rar", "/release/file.rar", default, reverseDataConnection: true, offset: resume ? 50 : 0); }
-            catch (FtpCommandException exception) when (exception.StatusCode == 553) { failed = true; }
+            catch (FtpCommandException exception) when (exception.StatusCode == 553 && (!resume || rejection == 1)) { failed = true; }
+            catch (FtpResumeRejectedException exception) when (resume && rejection >= 2 && exception.CanOverwrite) { failed = true; }
+            if (resume && rejection >= 2 && !failed) throw new Exception("Destination append rejection must be eligible for resume recovery");
             if ((!failed && from.LastFxpTransferElapsed <= TimeSpan.Zero) || (failed && from.LastFxpTransferElapsed != TimeSpan.Zero)) throw new Exception("Passive timing must require successful replies from both servers.");
             if (failed != rejected) throw new Exception("Secure reverse FXP misclassified rejection.");
             var sentSource = Encoding.UTF8.GetString(sourceOutput.ToArray()).TrimStart('\uFEFF');
