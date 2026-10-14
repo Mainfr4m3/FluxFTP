@@ -7,6 +7,10 @@ internal static class ResumeRecoveryChecks
         var offsets = new List<long>(); var resets = 0; var logs = new List<string>();
         await ResumeRecovery.RunAsync(50, true, offset => { offsets.Add(offset); return offset > 0 ? Task.FromException(new FtpResumeRejectedException("REST unsupported", 500)) : Task.CompletedTask; }, () => { resets++; return Task.CompletedTask; }, logs.Add, CancellationToken.None);
         if (!offsets.SequenceEqual(new long[] { 50, 0 }) || resets != 1 || logs.Count != 1) throw new Exception("Expected one reset and one overwrite");
+        offsets.Clear(); resets = 0;
+        await ResumeRecovery.RunAsync(50, true, offset => { offsets.Add(offset); return offset > 0 ? Task.FromException(new FtpResumeRejectedException("553 Error: file permissions incorrect for resuming/appending (not 644).", 553)) : Task.CompletedTask; }, () => { resets++; return Task.CompletedTask; }, null, CancellationToken.None);
+        if (!offsets.SequenceEqual(new long[] { 50, 0 }) || resets != 1) throw new Exception("Append permission rejection must retry with overwrite once");
+        if (new FtpResumeRejectedException("553 Permission denied", 553).CanOverwrite) throw new Exception("Generic permission denial must not retry");
         foreach (var error in new Exception[] { new FtpResumeRejectedException("REST failed", 500), new FtpResumeRejectedException("dupe", 553), new FtpResumeRejectedException("closed", 421), new FtpResumeRejectedException("File is being uploaded", 550), new OperationCanceledException(), new TimeoutException(), new IOException("network") })
         {
             var enabled = error is not FtpResumeRejectedException { StatusCode: 500 };

@@ -13,5 +13,7 @@ public static class FtpTransferMode
 public sealed class FtpResumeRejectedException(string message, int statusCode = 0) : IOException(message)
 {
     public int StatusCode { get; } = statusCode;
-    public bool CanOverwrite => (StatusCode is 500 or 501 or 502 or 504 or 550 or 551) && TransferRejection.Category(Message) is null;
+    public static bool IsAppendPermissionRejection(int code, string message) => code == 553 &&
+        message.Contains("file permissions incorrect for resuming/appending", StringComparison.OrdinalIgnoreCase);
+    public bool CanOverwrite => ((StatusCode is 500 or 501 or 502 or 504 or 550 or 551) || IsAppendPermissionRejection(StatusCode, Message)) && TransferRejection.Category(Message) is null;
 }

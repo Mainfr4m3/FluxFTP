@@ -3069,14 +3069,12 @@ public partial class MainWindow : Window
         StatusProgressBar.IsIndeterminate = current.State == "Transferring" && current.TotalBytes <= 0;
         StatusProgressBar.Value = percent;
         StatusProgressText.Text = current.TotalBytes > 0 ? $"{percent:0}%" : current.State;
-        TransferBytesText.Text = current.SpeedBytesPerSecond > 0 || (current.FxpLiveMeasured && !current.FxpSpeedUnavailable)
-            ? $"{FormatSize(current.BytesTransferred)} ({FormatSize(current.SpeedBytesPerSecond)}/s)"
-            : current.TotalBytes > 0
-                ? $"{FormatSize(current.BytesTransferred)} / {FormatSize(current.TotalBytes)}"
-                : FormatSize(current.BytesTransferred);
-        if (current.Direction is TransferDirection.ApiFxp or TransferDirection.RelayLeftToRight or TransferDirection.RelayRightToLeft && current.State == "Transferring" && !current.FxpMonitoringDisabled) TransferBytesText.Text += " · average available after completion";
-        if (current.FxpSpeedUnavailable && current.State == "Transferring") TransferBytesText.Text += " · speed unavailable";
-        if (current.FxpMonitoringDisabled && current.State == "Transferring") TransferBytesText.Text += " · average measurement off";
+        var speedText = current.SpeedBytesPerSecond > 0 || (current.FxpLiveMeasured && !current.FxpSpeedUnavailable)
+            ? $"{current.SpeedBytesPerSecond / 1048576d:0.00} MB/s"
+            : "— MB/s";
+        TransferBytesText.Text = current.TotalBytes > 0
+            ? $"{FormatSize(current.BytesTransferred)} / {FormatSize(current.TotalBytes)} · {speedText}"
+            : $"{FormatSize(current.BytesTransferred)} · {speedText}";
 
         var elapsed = current.StartedAt is { } started
             ? DateTimeOffset.Now - started.ToLocalTime()
@@ -3637,7 +3635,7 @@ public partial class MainWindow : Window
             remoteToRemote ? "FXP" : "FTP", entry.Name, $"{entry.Source} → {entry.Destination}",
             entry.TotalBytes > 0 ? FormatSize(entry.TotalBytes) : entry.ProgressText, "1",
             entry.TotalBytes > 0 ? FormatSize(Math.Max(0, entry.TotalBytes - entry.BytesTransferred)) : "—",
-            entry.SpeedBytesPerSecond > 0 ? $"{FormatSize(entry.SpeedBytesPerSecond)}/s{(entry.FxpAverageMeasured ? " avg" : "")}" : "—", done, entry.State, progressPercent);
+            entry.SpeedBytesPerSecond > 0 ? $"{entry.SpeedBytesPerSecond / 1048576d:0.00} MB/s" : "—", done, entry.State, progressPercent);
     }).ToList();
 
     private static string RemoteLeaf(string path) => path.TrimEnd('/').Split('/').LastOrDefault() ?? path;

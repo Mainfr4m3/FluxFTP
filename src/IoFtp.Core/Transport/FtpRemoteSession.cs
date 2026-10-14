@@ -482,6 +482,9 @@ public sealed class FtpRemoteSession : IRemoteSession
         // A few FTP daemons suppress the preliminary reply for FXP and answer only
         // after the data connection closes. Treat their final reply as completion.
         if (response.Code is 226 or 250) return new TransferStart(response, true);
+        if (_fxpResumeOffset > 0 && command.StartsWith("STOR ", StringComparison.OrdinalIgnoreCase) &&
+            FtpResumeRejectedException.IsAppendPermissionRejection(response.Code, response.Message))
+            throw new FtpResumeRejectedException(response.Message, response.Code);
         throw new FtpCommandException(response.Code, response.Message);
     }
 
@@ -837,7 +840,7 @@ public sealed class FtpRemoteSession : IRemoteSession
         using (dataClient)
         {
             if (offset > 0) await RequestResumeAsync(offset, cancellationToken);
-            EnsureSuccess(await CommandAsync(command, cancellationToken), 125, 150);
+            EnsureTransferStart(await CommandAsync(command, cancellationToken), command, offset);
             try
             {
                 await using var stream = await ProtectDataStreamAsync(dataClient.GetStream(), dataClient.Client, cancellationToken);
@@ -886,6 +889,14 @@ public sealed class FtpRemoteSession : IRemoteSession
         var reply = await CommandAsync($"REST {offset}", token);
         if (reply.Code != 350) throw new FtpResumeRejectedException($"Resume rejected by {_profile!.Name}: {reply.Message}.", reply.Code);
     }
+
+    private static void EnsureTransferStart(FtpResponse reply, string command, long offset)
+    {
+        if (offset > 0 && command.StartsWith("STOR ", StringComparison.OrdinalIgnoreCase) &&
+            FtpResumeRejectedException.IsAppendPermissionRejection(reply.Code, reply.Message))
+            throw new FtpResumeRejectedException(reply.Message, reply.Code);
+        EnsureSuccess(reply, 125, 150);
+    }
     private async Task TransferActiveAsync(string command, long offset, Func<Stream, Task> transfer, CancellationToken cancellationToken)
     {
         var localEndpoint = (IPEndPoint)_controlClient!.Client.LocalEndPoint!;
@@ -896,7 +907,7 @@ public sealed class FtpRemoteSession : IRemoteSession
             var port = ((IPEndPoint)listener.LocalEndpoint).Port; var address = localEndpoint.Address.GetAddressBytes();
             EnsureSuccess(await CommandAsync($"PORT {string.Join(',', address)},{port / 256},{port % 256}", cancellationToken), 200);
             if (offset > 0) await RequestResumeAsync(offset, cancellationToken);
-            EnsureSuccess(await CommandAsync(command, cancellationToken), 125, 150);
+            EnsureTransferStart(await CommandAsync(command, cancellationToken), command, offset);
             using var client = await listener.AcceptTcpClientAsync(cancellationToken);
             await using var stream = await ProtectDataStreamAsync(client.GetStream(), client.Client, cancellationToken);
             await transfer(stream);
