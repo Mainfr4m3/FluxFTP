@@ -3471,7 +3471,7 @@ public partial class MainWindow : Window
                 if (TransferSlotLimit(profile) == 0)
                     throw new InvalidOperationException($"No RACE transfer slots available for {profile.Name}. Max slots must leave room for listing, open panes and enabled monitoring; check Site Options.");
             }
-            if (needsWarmup) { race.StartTrace?.Mark("pool-warmup-start"); await MaintainRaceSlotsAsync(_racePoolStop.Token); race.StartTrace?.Mark("pool-warmup-ready"); }
+            if (needsWarmup) race.StartTrace?.Mark("pool-warmup-deferred", "listing and scheduling start immediately; background maintenance warms idle workers");
         }
         foreach (var profile in new[] { sourceProfile, destinationProfile })
         {

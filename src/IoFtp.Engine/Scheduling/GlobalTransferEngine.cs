@@ -26,7 +26,7 @@ public sealed class GlobalTransferEngine : IAsyncDisposable
 
     public void RegisterOrUpdateSite(SitePolicy policy)
     {
-        if (policy.MaxSlots < 1 || policy.MaxDownloads < 0 || policy.MaxUploads < 0)
+        if (policy.MaxSlots < 0 || policy.MaxDownloads < 0 || policy.MaxUploads < 0)
             throw new ArgumentOutOfRangeException(nameof(policy), "Slot limits must be valid.");
         lock (_gate)
         {

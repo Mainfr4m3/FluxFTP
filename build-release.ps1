@@ -7,8 +7,8 @@ $numericVersion = ($Version -split '-')[0] + '.0'
 $output = Join-Path $PSScriptRoot "dist/release-v$Version"
 $staging = Join-Path $PSScriptRoot ('dist/release-build-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $output, $staging | Out-Null
-$bridgeFiles = @('FluxFTP.mrc', 'FluxFTP-DLL.mrc', 'FluxFTP32.dll', 'FluxFTP64.dll', 'README.md',
-    'visionary/Visionary-FluxFTP.mrc', 'visionary/FluxFTPVisionary32.dll', 'visionary/FluxFTPVisionary64.dll', 'visionary/README.md')
+& (Join-Path $PSScriptRoot 'extras/irc/Build-Bridge.ps1')
+$bridgeFiles = @('FluxFTP-Bridge.mrc', 'FluxFTP32.dll', 'FluxFTP64.dll')
 foreach ($file in $bridgeFiles) {
     if (!(Test-Path -LiteralPath (Join-Path $PSScriptRoot "extras/irc/$file"))) { throw "Missing bridge asset: $file" }
 }
@@ -30,6 +30,10 @@ foreach ($file in $bridgeFiles) {
     $destination = Join-Path $bridgeStage $file
     New-Item -ItemType Directory -Force -Path (Split-Path $destination) | Out-Null
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "extras/irc/$file") -Destination $destination
+}
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'extras/irc/Bridge-README.md') -Destination (Join-Path $bridgeStage 'README.md')
+foreach ($name in @('FluxFTPVisionary32.dll', 'FluxFTPVisionary64.dll')) {
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot "extras/irc/visionary/$name") -Destination (Join-Path $bridgeStage $name)
 }
 Compress-Archive -LiteralPath $bridgeStage -DestinationPath (Join-Path $output "FluxFTP-v$Version-bridge.zip")
 $guides = Join-Path $staging 'rules-and-guides'

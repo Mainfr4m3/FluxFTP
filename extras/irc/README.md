@@ -1,3 +1,13 @@
+## Recommended: one unified script
+
+With v1.0.102, use `FluxFTP-Bridge.mrc` instead of loading the three individual FluxFTP scripts. Keep all four DLLs alongside this file. Load it after Visionary.mrc. Unload `FluxFTP.mrc`, `FluxFTP-DLL.mrc` and `Visionary-FluxFTP.mrc` first (only the scripts, not Visionary itself), then `/load -rs "C:\path\FluxFTP-Bridge.mrc"`.
+
+The menu is named **FluxFTP**. The unified script handles `FU_FXP_CHAINS` directly: Visionary section, release and each source;target pair are forwarded over the local named pipe. Do not add the cbftp sockudp handler for Flux; it sends cbftp's separate UDP protocol. Keep only one Flux handler for this signal. The original scripts remain in the source repository for building the unified file; they are not included in release packages.
+
+Run `/fluxvisi test`: the included Visionary DLL must report 1.04. Enable the Visionary bridge in FluxFTP on the same Windows machine and user account as mIRC. Pipe error 2 means the named pipe is missing: check Flux is running, bridge enabled and the DLL version. The unified script includes chain timestamps; `since-chain=unknown` means an older caller/script or invalid timing data.
+
+Sections still require per-site mappings; `Section TV-2160P-DE is not configured for TIS` must be corrected in the section paths, not by adding arbitrary path prefixes.
+
 # FluxFTP remote control v1.03 for mIRC and AdiIRC
 
 `FluxFTP.mrc` controls a running FluxFTP instance through its local,

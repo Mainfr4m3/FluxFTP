@@ -34,6 +34,7 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
                     PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
                 await pipe.WaitForConnectionAsync(cancellationToken);
                 await HandleAsync(pipe, cancellationToken);
+                continue; // Accept the next chain without an artificial 25 ms gap.
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
             catch (IOException exception) { _log?.Invoke($"Visionary pipe: {exception.Message}"); }

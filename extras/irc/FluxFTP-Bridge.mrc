@@ -1,0 +1,340 @@
+; FluxFTP unified bridge. Load after Visionary.mrc; unload the three older FluxFTP scripts first.
+
+; Component: FluxFTP.mrc
+; FluxFTP remote control v1.03 for mIRC and AdiIRC
+; Load with: /load -rs "C:\path\to\FluxFTP.mrc"
+
+alias fluxftp {
+  if (!$1) { fluxftp.help | return }
+
+  if ($1 == config) {
+    if (!$2) { echo -ag FluxFTP: /fluxftp config <password> [port] [IPv4 address] | return }
+    set %fluxftp.password $2
+    set %fluxftp.port $iif($3 isnum 1-65535,$3,55477)
+    set %fluxftp.host $iif($4,$4,127.0.0.1)
+    echo -ag FluxFTP: configured for %fluxftp.host $+ : $+ %fluxftp.port
+    echo -ag FluxFTP: the API password is stored in your IRC client's variables file.
+    return
+  }
+
+  if ($1 == forget) {
+    unset %fluxftp.password %fluxftp.port %fluxftp.host
+    echo -ag FluxFTP: saved configuration removed.
+    return
+  }
+
+  if ($1 == help) { fluxftp.help | return }
+  if ($1 == raw) {
+    if (!$3) { echo -ag FluxFTP: /fluxftp raw <site[,site...]> <FTP command> | return }
+    fluxftp.send raw $2-
+    return
+  }
+  if ($1 == fxp) {
+    if (!$5) { echo -ag FluxFTP: /fluxftp fxp <source-site> <source-path> <target-site> <target-path> | return }
+    fluxftp.send fxp $2-
+    return
+  }
+  if ($1 == race) {
+    if (!$4) { echo -ag FluxFTP: /fluxftp race <section> <release> <source,target...> | return }
+    fluxftp.send race $2-
+    return
+  }
+  if ($1 == download) {
+    if (!$3) { echo -ag FluxFTP: /fluxftp download <site> <remote-path> | return }
+    fluxftp.send download $2-
+    return
+  }
+
+  echo -ag FluxFTP: unknown command $qt($1) $+ . Use /fluxftp help
+}
+
+alias flux {
+  fluxftp $1-
+}
+
+alias fluxftp.version return 1.03
+
+alias -l fluxftp.send {
+  if (!%fluxftp.password) {
+    echo -ag FluxFTP: not configured. Use /fluxftp config <password> [port] [IPv4 address]
+    return
+  }
+  if ($sock(fluxftp)) sockclose fluxftp
+  .timerFluxFTPTimeout off
+  var %host = $iif(%fluxftp.host,%fluxftp.host,127.0.0.1)
+  var %port = $iif(%fluxftp.port,%fluxftp.port,55477)
+  var %payload = %fluxftp.password $1-
+  sockudp -kt fluxftp %host %port %payload
+  if ($sockerr) {
+    echo -ag FluxFTP: could not send command (socket error $sockerr $+ ).
+    if ($sock(fluxftp)) sockclose fluxftp
+    return
+  }
+  .timerFluxFTPTimeout 1 10 fluxftp.timeout
+  echo -ag FluxFTP: sent $qt($1) to %host $+ : $+ %port $+ ...
+}
+
+alias -l fluxftp.timeout {
+  if ($sock(fluxftp)) sockclose fluxftp
+  echo -ag FluxFTP: no response after 10 seconds. Check that FluxFTP and its API are running.
+}
+
+alias -l fluxftp.help {
+  echo -ag FluxFTP remote control v $+ $fluxftp.version (also available as /flux)
+  echo -ag /fluxftp config <password> [port] [IPv4 address]
+  echo -ag /fluxftp raw <site[,site...]> <FTP command>
+  echo -ag /fluxftp fxp <source-site> <source-path> <target-site> <target-path>
+  echo -ag /fluxftp race <section> <release> <source,target...>
+  echo -ag /fluxftp download <site> <remote-path>
+  echo -ag /fluxftp forget
+}
+
+; Main menu: Commands > FluxFTP
+; Channel right-click menu: FluxFTP (alongside tools such as d-tool)
+alias -l fluxftp.menu.config {
+  var %password = $input(API password,e,FluxFTP configuration,%fluxftp.password)
+  if (%password == $null) return
+  var %port = $input(API port,e,FluxFTP configuration,$iif(%fluxftp.port,%fluxftp.port,55477))
+  if (%port == $null) return
+  var %host = $input(IPv4 address,e,FluxFTP configuration,$iif(%fluxftp.host,%fluxftp.host,127.0.0.1))
+  if (%host == $null) return
+  fluxftp config %password %port %host
+}
+
+alias -l fluxftp.menu.raw {
+  var %sites = $input(Site or comma-separated sites,e,FluxFTP raw command)
+  if (%sites == $null) return
+  var %command = $input(FTP command,e,FluxFTP raw command)
+  if (%command == $null) return
+  fluxftp raw %sites %command
+}
+
+alias -l fluxftp.menu.fxp {
+  var %source.site = $input(Source site,e,FluxFTP FXP)
+  if (%source.site == $null) return
+  var %source.path = $input(Source path,e,FluxFTP FXP)
+  if (%source.path == $null) return
+  var %target.site = $input(Target site,e,FluxFTP FXP)
+  if (%target.site == $null) return
+  var %target.path = $input(Target path,e,FluxFTP FXP)
+  if (%target.path == $null) return
+  fluxftp fxp %source.site %source.path %target.site %target.path
+}
+
+alias -l fluxftp.menu.race {
+  var %section = $input(Section,e,FluxFTP race)
+  if (%section == $null) return
+  var %release = $input(Release name,e,FluxFTP race)
+  if (%release == $null) return
+  var %sites = $input(Comma-separated source and target sites,e,FluxFTP race)
+  if (%sites == $null) return
+  fluxftp race %section %release %sites
+}
+
+alias -l fluxftp.menu.download {
+  var %site = $input(Site,e,FluxFTP download)
+  if (%site == $null) return
+  var %path = $input(Remote path,e,FluxFTP download)
+  if (%path == $null) return
+  fluxftp download %site %path
+}
+
+on *:UDPREAD:fluxftp:{
+  .timerFluxFTPTimeout off
+  if ($sockerr) {
+    echo -ag FluxFTP: socket error $sockerr $+ .
+    sockclose $sockname
+    return
+  }
+  unset %fluxftp.reply
+  sockread -f %fluxftp.reply
+  if (!$sockbr) return
+  var %i = 1, %line
+  while ($gettok(%fluxftp.reply,%i,10) != $null) {
+    %line = $remove($gettok(%fluxftp.reply,%i,10),$cr)
+    echo -ag FluxFTP: %line
+    inc %i
+  }
+  sockclose $sockname
+}
+
+on *:UNLOAD:{
+  .timerFluxFTPTimeout off
+  if ($sock(fluxftp)) sockclose fluxftp
+  echo -ag FluxFTP remote control unloaded.
+}
+
+
+; Component: FluxFTP-DLL.mrc
+; FluxFTP DLL wrapper v1.03 for mIRC and AdiIRC
+; Keep FluxFTP32.dll and FluxFTP64.dll in the same directory as this script.
+
+alias fluxdll.version return 1.03
+
+alias -l fluxdll.path {
+  if ($bits == 64) return $scriptdir $+ FluxFTP64.dll
+  return $scriptdir $+ FluxFTP32.dll
+}
+
+alias fluxdll {
+  if ($1 == config) {
+    if (!$2) { echo -ag FluxFTP DLL: /fluxdll config <password> [port] [IPv4 address] | return }
+    set %fluxdll.password $2
+    set %fluxdll.port $iif($3 isnum 1-65535,$3,55477)
+    set %fluxdll.host $iif($4,$4,127.0.0.1)
+    echo -ag FluxFTP DLL: configured for %fluxdll.host $+ : $+ %fluxdll.port
+    return
+  }
+  if ($1 == forget) { unset %fluxdll.password %fluxdll.port %fluxdll.host | echo -ag FluxFTP DLL: configuration removed. | return }
+  if ($1 == version) { echo -ag FluxFTP DLL v $+ $fluxdll.version | return }
+  if (!$istok(raw fxp race download,$1,32)) { echo -ag FluxFTP DLL: use raw, fxp, race, download, config, forget or version. | return }
+  if (!%fluxdll.password) { echo -ag FluxFTP DLL: configure it first with /fluxdll config <password> | return }
+  var %dll = $fluxdll.path
+  if (!$isfile(%dll)) { echo -ag FluxFTP DLL: missing $qt(%dll) | return }
+  var %request = $iif(%fluxdll.host,%fluxdll.host,127.0.0.1) $iif(%fluxdll.port,%fluxdll.port,55477) %fluxdll.password $1-
+  var %reply = $dll(%dll,FluxFTPCommand,%request)
+  echo -ag FluxFTP: %reply
+}
+
+alias -l fluxdll.menu.config {
+  var %password = $input(API password,e,FluxFTP DLL configuration,%fluxdll.password)
+  if (%password == $null) return
+  var %port = $input(API port,e,FluxFTP DLL configuration,$iif(%fluxdll.port,%fluxdll.port,55477))
+  if (%port == $null) return
+  var %host = $input(IPv4 address,e,FluxFTP DLL configuration,$iif(%fluxdll.host,%fluxdll.host,127.0.0.1))
+  if (%host == $null) return
+  fluxdll config %password %port %host
+}
+
+alias -l fluxdll.menu.raw {
+  var %sites = $input(Site or comma-separated sites,e,FluxFTP DLL raw)
+  if (%sites == $null) return
+  var %command = $input(FTP command,e,FluxFTP DLL raw)
+  if (%command == $null) return
+  fluxdll raw %sites %command
+}
+
+alias -l fluxdll.menu.fxp {
+  var %source.site = $input(Source site,e,FluxFTP DLL FXP)
+  if (%source.site == $null) return
+  var %source.path = $input(Source path,e,FluxFTP DLL FXP)
+  if (%source.path == $null) return
+  var %target.site = $input(Target site,e,FluxFTP DLL FXP)
+  if (%target.site == $null) return
+  var %target.path = $input(Target path,e,FluxFTP DLL FXP)
+  if (%target.path == $null) return
+  fluxdll fxp %source.site %source.path %target.site %target.path
+}
+
+alias -l fluxdll.menu.race {
+  var %section = $input(Section,e,FluxFTP DLL race)
+  if (%section == $null) return
+  var %release = $input(Release name,e,FluxFTP DLL race)
+  if (%release == $null) return
+  var %sites = $input(Comma-separated source and target sites,e,FluxFTP DLL race)
+  if (%sites == $null) return
+  fluxdll race %section %release %sites
+}
+
+alias -l fluxdll.menu.download {
+  var %site = $input(Site,e,FluxFTP DLL download)
+  if (%site == $null) return
+  var %path = $input(Remote path,e,FluxFTP DLL download)
+  if (%path == $null) return
+  fluxdll download %site %path
+}
+
+
+; Component: visionary/Visionary-FluxFTP.mrc
+; Visionary -> FluxFTP named-pipe bridge v1.02 (local transfer and mapped IRC DONE notifications)
+; Load after Visionary.mrc. Keep both DLL files beside this script.
+
+alias -l fluxvisi.dll return $scriptdir $+ $iif($bits == 64,FluxFTPVisionary64.dll,FluxFTPVisionary32.dll)
+
+alias fluxvisi {
+  if ($1 == complete) {
+    if ($0 != 4) { echo -ag Usage: /fluxvisi complete SECTION RELEASE SITE | return }
+    var %dll = $fluxvisi.dll
+    if (!$isfile(%dll)) { echo -ag FluxFTP Visionary: missing $qt(%dll) | return }
+    echo -ag $dll(%dll,FluxFTPTransfer,$2-4 @DONE)
+    return
+  }
+  if ($1 == donebot) {
+    if ($0 != 7) { echo -ag Usage: /fluxvisi donebot NETWORK #CHANNEL BOT FLUX_SITE ANNOUNCED_SECTION FLUX_SECTION | return }
+    set $+(%,fluxvisi.done.,$lower($2),.,$lower($3),.,$lower($4),.,$lower($6)) $5 $7
+    echo -ag FluxFTP DONE mapping saved for $2 $3 $4 $6 -> $5 $7
+    return
+  }
+  if ($1 == transfer) {
+    if ($0 != 5) { echo -ag Usage: /fluxvisi transfer SECTION RELEASE SOURCE TARGET | return }
+    var %dll = $fluxvisi.dll
+    if (!$isfile(%dll)) { echo -ag FluxFTP Visionary: missing $qt(%dll) | return }
+    echo -ag $dll(%dll,FluxFTPTransfer,$2-5)
+    return
+  }
+  if ($1 == test) {
+    var %dll = $fluxvisi.dll
+    if (!$isfile(%dll)) { echo -ag FluxFTP Visionary: missing $qt(%dll) | return }
+    echo -ag FluxFTP Visionary bridge v $+ $dll(%dll,FluxFTPVersion,_)
+    return
+  }
+  echo -ag FluxFTP Visionary commands: /fluxvisi test or /fluxvisi transfer SECTION RELEASE SOURCE TARGET
+}
+
+; DONE announcements are forwarded only for explicitly mapped network/channel/bot/section combinations.
+on *:TEXT:*:#:{
+  var %done.text = $strip($1-)
+  if (!$regex(%done.text,/^DONE:\s+-([A-Z0-9_-]+)-\s+(\S+)\s+Size\b/i)) return
+  var %done.section = $regml(1), %done.release = $regml(2)
+  var %done.binding = $eval($+(%,fluxvisi.done.,$lower($network),.,$lower($chan),.,$lower($nick),.,$lower(%done.section)),2)
+  if ($numtok(%done.binding,32) != 2) return
+  fluxvisi complete $gettok(%done.binding,2,32) %done.release $gettok(%done.binding,1,32)
+}
+
+on *:SIGNAL:FU_FXP_CHAINS:{
+  var %chain.tick = $ticks
+  var %section = $1, %release = $2, %chains = $3-
+  var %dll = $fluxvisi.dll
+  window -kze @FluxFTP
+  if (!%section || !%release || !%chains) { echo @FluxFTP $timestamp ERROR invalid FU_FXP_CHAINS signal: $1- | return }
+  if (!$isfile(%dll)) { echo @FluxFTP $timestamp ERROR missing $qt(%dll) | return }
+  var %i = 1
+  while ($gettok(%chains,%i,32) != $null) {
+    var %pair = $gettok(%chains,%i,32)
+    var %source = $gettok(%pair,1,59), %target = $gettok(%pair,2,59)
+    if (%source && %target) {
+      echo @FluxFTP $timestamp QUEUE %section %release %source -> %target
+      var %reply = $dll(%dll,FluxFTPTransfer,%section %release %source %target %chain.tick)
+      echo @FluxFTP $timestamp %reply
+    }
+    else echo @FluxFTP $timestamp ERROR invalid chain pair: %pair
+    inc %i
+  }
+}
+
+
+
+menu menubar {
+  FluxFTP
+  .Raw command...:fluxftp.menu.raw
+  .FXP transfer...:fluxftp.menu.fxp
+  .Race...:fluxftp.menu.race
+  .Download...:fluxftp.menu.download
+  .Configure API...:fluxftp.menu.config
+  .DLL commands
+  ..Configure...:fluxdll.menu.config
+  ..Raw command...:fluxdll.menu.raw
+  ..Race...:fluxdll.menu.race
+  .Visionary
+  ..Test bridge DLL:fluxvisi test
+  .Help:fluxftp help
+}
+menu channel {
+  FluxFTP
+  .Raw command...:fluxftp.menu.raw
+  .FXP transfer...:fluxftp.menu.fxp
+  .Race...:fluxftp.menu.race
+  .Download...:fluxftp.menu.download
+  .Configure API...:fluxftp.menu.config
+  .Test Visionary bridge:fluxvisi test
+}
