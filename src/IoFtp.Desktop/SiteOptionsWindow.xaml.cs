@@ -15,6 +15,7 @@ public partial class SiteOptionsWindow : Window
         var options = profile.EffectiveOptions;
         MaxSlotsBox.Text = options.MaxSlots.ToString(); UploadSlotsBox.Text = options.MaxUploadSlots.ToString(); DownloadSlotsBox.Text = options.MaxDownloadSlots.ToString();
         PriorityBox.Text = options.Priority.ToString(); AllowUploadBox.IsChecked = options.AllowUpload; AllowDownloadBox.IsChecked = options.AllowDownload;
+        UseCpsvBox.IsChecked = options.UseCpsv;
         StayLoggedInBox.IsChecked = options.StayLoggedIn; BasePathBox.Text = options.BasePath; TlsTransfersBox.IsChecked = options.PreferTlsTransfers;
         BinaryModeBox.IsChecked = options.ForceBinaryMode; IdleBox.Text = options.MaxIdleSeconds.ToString();
         SecureListingsBox.IsChecked = options.SecureFileListings;
@@ -102,6 +103,7 @@ public partial class SiteOptionsWindow : Window
             OpenSslTlsBox.IsChecked == true, ImportedSkipBox.Text, ImportedPriorityBox.Text, VisionaryRulesBox.Text,
             (FtpTextEncoding)Math.Max(0, TextEncodingBox.SelectedIndex), Utf8LoginBox.IsChecked == true,
             (FtpAuthCommand)Math.Max(0, AuthCommandBox.SelectedIndex), EarlyPbszBox.IsChecked == true, Tls12OnlyBox.IsChecked == true);
+        Options = Options with { UseCpsv = UseCpsvBox.IsChecked == true };
         SiteProxy = proxyType switch
         {
             null => null,

@@ -74,7 +74,7 @@ public sealed record SiteOptions(
     string AsciiRules = "",
     bool NoAsciiResume = true,
     int PassivePortMin = 0, int PassivePortMax = 0,
-    int ActivePortMin = 0, int ActivePortMax = 0);
+    int ActivePortMin = 0, int ActivePortMax = 0, bool UseCpsv = true);
 
 public sealed record ConnectionProfile(
     Guid Id,

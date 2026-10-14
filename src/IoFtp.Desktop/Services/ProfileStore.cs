@@ -78,6 +78,7 @@ internal sealed class ProfileStore
             Write(text, "BlockTransfersTo", options.BlockTransfersTo);
             Write(text, "SecureFileListings", options.SecureFileListings);
             Write(text, "NeedsPret", options.NeedsPret);
+            Write(text, "UseCpsv", options.UseCpsv);
             Write(text, "CeprSupported", options.CeprSupported);
             Write(text, "UseXdupe", options.UseXdupe);
             Write(text, "Affils", options.Affils);
@@ -134,7 +135,7 @@ internal sealed class ProfileStore
                 EnumValue(values, "FxpDataRole", FxpDataRole.Auto),
                 Bool(values, "UseOpenSslTls"), Get(values, "ImportedSkipRules"), Get(values, "ImportedPriorityRules"), Get(values, "VisionaryRules"),
                 EnumValue(values, "TextEncoding", FtpTextEncoding.Auto), Bool(values, "Utf8Login"),
-                EnumValue(values, "AuthCommand", FtpAuthCommand.Auto), Bool(values, "PbszBeforeLogin"), Bool(values, "Tls12Only"), PassivePortMin: Int(values, "PassivePortMin"), PassivePortMax: Int(values, "PassivePortMax"));
+                EnumValue(values, "AuthCommand", FtpAuthCommand.Auto), Bool(values, "PbszBeforeLogin"), Bool(values, "Tls12Only"), PassivePortMin: Int(values, "PassivePortMin"), PassivePortMax: Int(values, "PassivePortMax"), UseCpsv: Bool(values, "UseCpsv", true));
             var proxyMode = Get(values, "ProxyMode", "Inherit");
             ProxyConfiguration? proxy = proxyMode.Equals("Inherit", StringComparison.OrdinalIgnoreCase) ? null
                 : proxyMode.Equals("None", StringComparison.OrdinalIgnoreCase) ? new ProxyConfiguration(ProxyType.None)

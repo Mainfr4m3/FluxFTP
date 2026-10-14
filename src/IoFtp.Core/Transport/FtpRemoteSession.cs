@@ -300,7 +300,7 @@ public sealed class FtpRemoteSession : IRemoteSession
             (string Host, int Port) sourceAdvertised;
             if (secureFxp)
             {
-                if (Capabilities.Contains("CPSV"))
+                if (_profile!.EffectiveOptions.UseCpsv && Capabilities.Contains("CPSV"))
                 {
                     sourcePassive = await MeasureFxpStageAsync("CPSV", () => FxpCommandAsync("CPSV", cancellationToken));
                     usedCpsv = sourcePassive.Code == 227;
@@ -373,7 +373,7 @@ public sealed class FtpRemoteSession : IRemoteSession
                 // A CEPR-configured endpoint may reject EPSV even though the
                 // underlying ioFTPD site supports CPSV. Preserve secure FXP by
                 // preferring CPSV before falling all the way back to PASV/SSCN.
-                if (secureFxp && destination.Capabilities.Contains("CPSV"))
+                if (secureFxp && destination._profile!.EffectiveOptions.UseCpsv && destination.Capabilities.Contains("CPSV"))
                 {
                     passive = await MeasureFxpStageAsync("CPSV", () => destination.FxpCommandAsync("CPSV", cancellationToken));
                     usedCpsv = passive.Code == 227;
@@ -384,7 +384,7 @@ public sealed class FtpRemoteSession : IRemoteSession
                 advertised = ParsePassiveEndpoint(passive.Message);
             }
         }
-        else if (secureFxp && destination.Capabilities.Contains("CPSV"))
+        else if (secureFxp && destination._profile!.EffectiveOptions.UseCpsv && destination.Capabilities.Contains("CPSV"))
         {
             passive = await MeasureFxpStageAsync("CPSV", () => destination.FxpCommandAsync("CPSV", cancellationToken));
             usedCpsv = passive.Code == 227;

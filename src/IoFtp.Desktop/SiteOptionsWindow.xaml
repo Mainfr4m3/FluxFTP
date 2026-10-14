@@ -70,7 +70,7 @@
                         <TextBlock Grid.Row="10" Text="FXP data role" VerticalAlignment="Center"/>
                         <ComboBox x:Name="FxpDataRoleBox" Grid.Row="10" Grid.Column="1" Margin="0,4" ToolTip="Auto detects and remembers the working route. PASV makes this site accept the data connection. PORT makes this site open the data connection; useful when the site is behind CGNAT."/>
                         <CheckBox x:Name="BrokenPasvBox" Grid.Row="11" Grid.ColumnSpan="2" Content="Broken PASV — always use this site as the PORT/active side" Margin="0,6,0,2" Click="BrokenPasvBox_Click" ToolTip="cbftp-compatible Broken PASV setting. FluxFTP chooses the opposite site for PASV immediately instead of waiting for a 425 timeout."/>
-                        <CheckBox x:Name="OpenSslTlsBox" Grid.Row="12" Grid.ColumnSpan="2" Content="Use bundled OpenSSL directly (control and client data TLS)" Margin="0,6,0,2" ToolTip="Skip Windows Schannel and connect using the bundled OpenSSL TLS backend. Enable for glFTPD sites that report HandshakeFailure or no shared cipher."/>
+                        <StackPanel Grid.Row="12" Grid.ColumnSpan="2"><CheckBox x:Name="UseCpsvBox" Content="Use CPSV for secure FXP" Margin="0,6,0,2" ToolTip="Enabled by default. When disabled, skip CPSV on this site and use other supported secure FXP routes."/><CheckBox x:Name="OpenSslTlsBox" Grid.Row="12" Grid.ColumnSpan="2" Content="Use bundled OpenSSL directly (control and client data TLS)" Margin="0,6,0,2" ToolTip="Skip Windows Schannel and connect using the bundled OpenSSL TLS backend. Enable for glFTPD sites that report HandshakeFailure or no shared cipher."/></StackPanel>
                         <TextBlock Grid.Row="13" Text="FTP character encoding" VerticalAlignment="Center"/><ComboBox x:Name="TextEncodingBox" Grid.Row="13" Grid.Column="1" Margin="0,4"/>
                         <CheckBox x:Name="Utf8LoginBox" Grid.Row="14" Grid.ColumnSpan="2" Content="UTF-8 username and password" Margin="0,4"/>
                         <TextBlock Grid.Row="15" Text="Explicit FTPS command" VerticalAlignment="Center"/><ComboBox x:Name="AuthCommandBox" Grid.Row="15" Grid.Column="1" Margin="0,4"/>
@@ -107,3 +107,4 @@
         </Grid>
     </DockPanel>
 </Window>
+
