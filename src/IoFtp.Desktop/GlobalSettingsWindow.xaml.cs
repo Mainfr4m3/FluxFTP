@@ -77,6 +77,8 @@ public partial class GlobalSettingsWindow : Window
         InitializeComponent(); ProtocolBox.ItemsSource = Enum.GetValues<TransferProtocol>().Select(protocol => new ProtocolChoice(protocol)).ToArray(); ProxyTypeBox.ItemsSource = Enum.GetValues<ProxyType>(); LegendModeBox.ItemsSource = new[] { "Scrolling", "Static", "Activity", "Compact", "Hidden" };
         Closing += (_, args) => { if (_backupBusy) args.Cancel = true; };
         if (BackupService.Current().HasPendingImport) BackupStatusText.Text = "A backup import is pending. Close FluxFTP completely and start it again, or cancel the pending import.";
+        PassiveFromBox.Text = s.PassivePortMin == 0 ? "" : s.PassivePortMin.ToString();
+        PassiveToBox.Text = s.PassivePortMax == 0 ? "" : s.PassivePortMax.ToString();
         BindBox.Text=s.BindAddress; PortFromBox.Text=$"{s.ActivePortFrom}"; PortToBox.Text=$"{s.ActivePortTo}"; ApiEnabledBox.IsChecked=s.EnableHttpsApi; ApiPortBox.Text=$"{s.HttpsApiPort}"; ApiLocalBox.IsChecked=s.ApiLocalhostOnly;
         ExpirationBox.Text=$"{s.PreparedJobExpirationSeconds}"; StarterBox.Text=$"{s.StarterTimeoutSeconds}"; RuntimeBox.Text=$"{s.MaxTransferRuntimeMinutes}"; JobHistoryBox.Text=$"{s.TransferJobHistory}"; TransferHistoryBox.Text=$"{s.TransferHistory}"; LogHistoryBox.Text=$"{s.LogBufferHistory}";
         UsernameBox.Text=s.DefaultUsername; ProtocolBox.SelectedItem=((ProtocolChoice[])ProtocolBox.ItemsSource).First(choice => choice.Protocol == s.DefaultProtocol); SlotsBox.Text=$"{s.DefaultSlots}"; UploadsBox.Text=$"{s.DefaultUploadSlots}"; DownloadsBox.Text=$"{s.DefaultDownloadSlots}"; DefaultIdleBox.Text=$"{s.DefaultIdleSeconds}";
@@ -84,9 +86,12 @@ public partial class GlobalSettingsWindow : Window
         SerializeLocalBox.IsChecked = s.SerializeLocalTransfers;
         FxpSpeedMonitoringBox.IsChecked = s.EnableFxpSpeedMonitoring;
         DownloadMeasurementBox.IsChecked = s.EnableDownloadMeasurement;
-        SkipSmallerTargetBox.IsChecked = s.FxpSkipSmallerTarget;
-        SkipSameTargetBox.IsChecked = s.FxpSkipSameTarget;
-        SkipLargerTargetBox.IsChecked = s.FxpSkipLargerTarget;
+        foreach (var box in new[] { SmallerActionBox, SameActionBox, LargerActionBox }) box.ItemsSource = Enum.GetValues<ExistingTargetAction>();
+        SmallerActionBox.SelectedItem = s.FxpSmallerAction ?? (s.FxpSkipSmallerTarget ? ExistingTargetAction.Skip : ExistingTargetAction.Overwrite);
+        SameActionBox.SelectedItem = s.FxpSameAction ?? (s.FxpSkipSameTarget ? ExistingTargetAction.Skip : ExistingTargetAction.Overwrite);
+        LargerActionBox.SelectedItem = s.FxpLargerAction ?? (s.FxpSkipLargerTarget ? ExistingTargetAction.Skip : ExistingTargetAction.Overwrite);
+        NoAsciiResumeBox.IsChecked = s.NoAsciiResume;
+        foreach (var rule in s.AsciiRules.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) AsciiRulesList.Items.Add(rule);
         PriorityPatternsBox.Text=s.PriorityPatterns;
         foreach (var category in TransferFilePriority.Categories(s.TransferCategoryOrder)) PriorityCategoriesList.Items.Add(category);
         PriorityCategoriesList.SelectedIndex = 0;
@@ -118,9 +123,14 @@ public partial class GlobalSettingsWindow : Window
         var boxes = new[] { PortFromBox, PortToBox, ApiPortBox, ExpirationBox, StarterBox, RuntimeBox, JobHistoryBox, TransferHistoryBox, LogHistoryBox, SlotsBox, UploadsBox, DownloadsBox, DefaultIdleBox, LocalDownloadsBox, LocalUploadsBox, ProxyPortBox };
         if (boxes.Any(box => !int.TryParse(box.Text, out _))) { ErrorText.Text="All numeric settings must be whole numbers."; return; }
         int N(System.Windows.Controls.TextBox b)=>int.Parse(b.Text);
-        if (N(PortFromBox) is <1 or >65535 || N(PortToBox)<N(PortFromBox) || N(SlotsBox)<1 || N(UploadsBox)<0 || N(DownloadsBox)<0 || N(UploadsBox)>N(SlotsBox) || N(DownloadsBox)>N(SlotsBox)) { ErrorText.Text="Port range or slot limits are invalid."; return; }
+        if (N(PortFromBox) is <1 or >65535 || N(PortToBox)<N(PortFromBox) || N(PortToBox)>65535 || N(SlotsBox)<1 || N(UploadsBox)<0 || N(DownloadsBox)<0 || N(UploadsBox)>N(SlotsBox) || N(DownloadsBox)>N(SlotsBox)) { ErrorText.Text="Port range or slot limits are invalid."; return; }
         if (ApiEnabledBox.IsChecked == true && string.IsNullOrWhiteSpace(ApiPasswordBox.Password)) { ErrorText.Text="API password is required when the API is enabled."; return; }
         if ((ProxyType)(ProxyTypeBox.SelectedItem ?? ProxyType.None) != ProxyType.None && (string.IsNullOrWhiteSpace(ProxyHostBox.Text) || N(ProxyPortBox) is < 1 or > 65535)) { ErrorText.Text="Proxy host or port is invalid."; return; }
+        var passiveMin = 0; var passiveMax = 0;
+        if ((!string.IsNullOrWhiteSpace(PassiveFromBox.Text) && !int.TryParse(PassiveFromBox.Text, out passiveMin)) || (!string.IsNullOrWhiteSpace(PassiveToBox.Text) && !int.TryParse(PassiveToBox.Text, out passiveMax)))
+        { ErrorText.Text = "Passive ports must be whole numbers."; return; }
+        try { FtpPassivePortRange.Validate(passiveMin, passiveMax); }
+        catch (ArgumentException exception) { ErrorText.Text = exception.Message; return; }
         var theme = ReadTheme();
         var irc = _ircSettings;
         if (irc is null) return;
@@ -130,9 +140,10 @@ public partial class GlobalSettingsWindow : Window
             TransferCategoryOrder = string.Join("\n", PriorityCategoriesList.Items.Cast<string>()),
             EnableFxpSpeedMonitoring = FxpSpeedMonitoringBox.IsChecked == true, Layout = layout, MetadataSkipDefaultsApplied = true, VideoMetadataSkipDefaultsApplied = true,
             EnableDownloadMeasurement = DownloadMeasurementBox.IsChecked == true,
-            FxpSkipSmallerTarget = SkipSmallerTargetBox.IsChecked == true,
-            FxpSkipSameTarget = SkipSameTargetBox.IsChecked == true,
-            FxpSkipLargerTarget = SkipLargerTargetBox.IsChecked == true,
+            FxpSmallerAction = (ExistingTargetAction)SmallerActionBox.SelectedItem,
+            FxpSameAction = (ExistingTargetAction)SameActionBox.SelectedItem,
+            FxpLargerAction = (ExistingTargetAction)LargerActionBox.SelectedItem,
+            AsciiRules = string.Join("\n", AsciiRulesList.Items.Cast<string>()), NoAsciiResume = NoAsciiResumeBox.IsChecked == true, PassivePortMin = passiveMin, PassivePortMax = passiveMax,
             EnableSkipList=EnableSkipListBox.IsChecked==true, SkipZeroByteFiles=SkipZeroByteBox.IsChecked==true,
             SkipEmptyDirectories=SkipEmptyDirectoryBox.IsChecked==true, ApplySkipListToFolders=ApplySkipFoldersBox.IsChecked==true,
             SkipTransferMode=SkipModeBox.SelectedItem?.ToString() ?? "Both", SkippedItemColor=SkippedColorBox.Text.Trim() };
@@ -140,6 +151,21 @@ public partial class GlobalSettingsWindow : Window
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException)
         { Settings = null; ErrorText.Text = "Could not save settings to disk. Check write access and free space; your edits are still here. Please try Save again."; return; }
         ThemeManager.Apply(theme); DialogResult = true;
+    }
+    private void AsciiAdd_Click(object sender, RoutedEventArgs e) => EditAsciiRule(false);
+    private void AsciiEdit_Click(object sender, RoutedEventArgs e) => EditAsciiRule(true);
+    private void AsciiDelete_Click(object sender, RoutedEventArgs e) { if (AsciiRulesList.SelectedIndex >= 0) AsciiRulesList.Items.RemoveAt(AsciiRulesList.SelectedIndex); }
+    private void EditAsciiRule(bool edit)
+    {
+        var index = AsciiRulesList.SelectedIndex;
+        if (edit && index < 0) return;
+        var dialog = new CommandParameterWindow("ASCII wildcard or regex: pattern", edit ? AsciiRulesList.Items[index].ToString()! : "*.txt") { Owner = this };
+        if (dialog.ShowDialog() != true || string.IsNullOrWhiteSpace(dialog.Value)) return;
+        var rule = dialog.Value.Trim();
+        try { FtpTransferMode.Validate(rule); }
+        catch (ArgumentException exception) { ErrorText.Text = exception.Message; return; }
+        if (edit) AsciiRulesList.Items[index] = rule; else AsciiRulesList.Items.Add(rule);
+        ErrorText.Text = "";
     }
     private void PriorityCategoryUp_Click(object sender, RoutedEventArgs e) => MovePriorityCategory(-1);
     private void PriorityCategoryDown_Click(object sender, RoutedEventArgs e) => MovePriorityCategory(1);
@@ -168,6 +194,11 @@ public partial class GlobalSettingsWindow : Window
 
     private void PreviewTheme_Click(object sender, RoutedEventArgs e)
     {
+        var passiveMin = 0; var passiveMax = 0;
+        if ((!string.IsNullOrWhiteSpace(PassiveFromBox.Text) && !int.TryParse(PassiveFromBox.Text, out passiveMin)) || (!string.IsNullOrWhiteSpace(PassiveToBox.Text) && !int.TryParse(PassiveToBox.Text, out passiveMax)))
+        { ErrorText.Text = "Passive ports must be whole numbers."; return; }
+        try { FtpPassivePortRange.Validate(passiveMin, passiveMax); }
+        catch (ArgumentException exception) { ErrorText.Text = exception.Message; return; }
         var theme = ReadTheme();
         if (!ThemeManager.TryValidate(theme, out var error)) { ErrorText.Text=error; return; }
         ThemeManager.Apply(theme); ErrorText.Text=$"Previewing theme: {theme.Name}";
@@ -190,6 +221,11 @@ public partial class GlobalSettingsWindow : Window
 
     private void ExportTheme_Click(object sender, RoutedEventArgs e)
     {
+        var passiveMin = 0; var passiveMax = 0;
+        if ((!string.IsNullOrWhiteSpace(PassiveFromBox.Text) && !int.TryParse(PassiveFromBox.Text, out passiveMin)) || (!string.IsNullOrWhiteSpace(PassiveToBox.Text) && !int.TryParse(PassiveToBox.Text, out passiveMax)))
+        { ErrorText.Text = "Passive ports must be whole numbers."; return; }
+        try { FtpPassivePortRange.Validate(passiveMin, passiveMax); }
+        catch (ArgumentException exception) { ErrorText.Text = exception.Message; return; }
         var theme = ReadTheme();
         if (!ThemeManager.TryValidate(theme, out var error)) { ErrorText.Text=error; return; }
         var safeName = string.Concat((string.IsNullOrWhiteSpace(theme.Name) ? "FluxFTP-theme" : theme.Name).Select(character => Path.GetInvalidFileNameChars().Contains(character) ? '_' : character));

@@ -1,0 +1,11 @@
+# Target files and ASCII transfer mode
+
+Global Settings > FXP selects Skip, Resume or Overwrite separately for smaller, equal-size and larger target files. These actions apply to normal FTP-to-FTP transfers and VISIONARY RACE. Older skip checkboxes are migrated to equivalent selections. Verified COMPLETE destination releases remain skipped.
+
+Resume uses the smaller target size as REST offset on both servers before STOR/RETR. Zero-byte targets restart. Resume on equal-size targets skips for ordinary transfers, but restarts for RACE because growing/preallocated files need final transfer verification. Resume on larger targets restarts. If REST is rejected, Flux reports a resume error rather than silently overwriting or falling back to relay. Server dupe/upload locks may still reject Skip/Resume/Overwrite operations; client settings cannot override server permissions. A client relay fallback restarts the whole file.
+
+Site Options > Connection behavior > Always use binary file transfers is now optional and saved. Checked keeps TYPE I for every file. Unchecked uses TYPE A for files matching Global Settings > ASCII List and TYPE I for other files. Both direct FXP peers use a consistent mode; a binary override on either site keeps direct FXP binary.
+
+ASCII List supports Add/Edit/Delete, case-insensitive wildcards and regular expressions prefixed with regex:. The default list contains the text extensions shown in Rush. Do not resume ASCII transfers is enabled by default: matching text files restart instead of reusing partial bytes. Local downloads truncate their .FLUXFTP.PART when restarting. ASCII conversion may change line endings and file sizes. A converted-size ASCII destination requires a COMPLETE marker for RACE verification; binary payload retains exact-size checks. Passive per-file speed averages are not calculated for ASCII FXP because the network byte count may differ from the listed file size.
+
+Reconnect browsing sessions after changing transfer mode. New worker transfers use saved settings. Enable Resume for smaller targets if partial binary RACE files should continue; choose Overwrite for same-size targets if they should be transferred again while a release is incomplete.

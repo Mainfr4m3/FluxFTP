@@ -6,13 +6,15 @@
             <TextBlock DockPanel.Dock="Top" Text="GLOBAL SETTINGS" FontSize="22" FontWeight="SemiBold" Foreground="{DynamicResource AccentBrush}" Margin="0,0,0,12"/>
             <TextBlock DockPanel.Dock="Bottom" x:Name="ErrorText" Foreground="#F07178" Margin="0,8" TextWrapping="Wrap"/>
             <TabControl>
-                <TabItem Header="Network"><Grid Margin="16"><Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                <TabItem Header="Network"><Grid Margin="16"><Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                     <TextBlock Text="Bind address/interface"/><TextBox x:Name="BindBox" Grid.Column="1" Margin="0,4" ToolTip="Blank means Windows chooses the interface."/>
                     <TextBlock Grid.Row="1" Text="Active port range from"/><TextBox x:Name="PortFromBox" Grid.Row="1" Grid.Column="1" Margin="0,4"/>
                     <TextBlock Grid.Row="2" Text="Active port range to"/><TextBox x:Name="PortToBox" Grid.Row="2" Grid.Column="1" Margin="0,4"/>
-                    <CheckBox x:Name="ApiEnabledBox" Grid.Row="3" Grid.ColumnSpan="2" Content="Enable HTTPS/JSON API" Margin="0,10,0,4"/>
-                    <StackPanel Grid.Row="4" Grid.ColumnSpan="2" Orientation="Horizontal"><TextBlock Text="API port" Width="220"/><TextBox x:Name="ApiPortBox" Width="100"/><CheckBox x:Name="ApiLocalBox" Content="Localhost only" Margin="18,0"/></StackPanel>
-                    <TextBlock Grid.Row="5" Text="API password" VerticalAlignment="Center"/><PasswordBox x:Name="ApiPasswordBox" Grid.Row="5" Grid.Column="1" Margin="0,4" Padding="8,5"/>
+                    <TextBlock Grid.Row="3" Text="Allowed passive ports from"/><TextBox x:Name="PassiveFromBox" Grid.Row="3" Grid.Column="1" Margin="0,4" ToolTip="Blank allows all server ports. Checks PASV/EPSV/CPSV for every site; does not choose the server port."/>
+                    <TextBlock Grid.Row="4" Text="Allowed passive ports to"/><TextBox x:Name="PassiveToBox" Grid.Row="4" Grid.Column="1" Margin="0,4"/>
+                    <CheckBox x:Name="ApiEnabledBox" Grid.Row="5" Grid.ColumnSpan="2" Content="Enable HTTPS/JSON API" Margin="0,10,0,4"/>
+                    <StackPanel Grid.Row="6" Grid.ColumnSpan="2" Orientation="Horizontal"><TextBlock Text="API port" Width="220"/><TextBox x:Name="ApiPortBox" Width="100"/><CheckBox x:Name="ApiLocalBox" Content="Localhost only" Margin="18,0"/></StackPanel>
+                    <TextBlock Grid.Row="7" Text="API password" VerticalAlignment="Center"/><PasswordBox x:Name="ApiPasswordBox" Grid.Row="7" Grid.Column="1" Margin="0,4" Padding="8,5"/>
                 </Grid></TabItem>
                 <TabItem Header="Jobs &amp; history"><Grid Margin="16"><Grid.ColumnDefinitions><ColumnDefinition Width="250"/><ColumnDefinition Width="120"/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                     <TextBlock Text="Prepared job expiration (seconds)"/><TextBox x:Name="ExpirationBox" Grid.Column="1" Margin="0,4"/><TextBlock Grid.Row="1" Text="Starter timeout (seconds)"/><TextBox x:Name="StarterBox" Grid.Row="1" Grid.Column="1" Margin="0,4"/>
@@ -32,16 +34,35 @@
                 </Grid></TabItem>
                 <TabItem Header="FXP"><StackPanel Margin="16">
                     <TextBlock Text="Existing FXP target files" FontWeight="SemiBold"/>
-                    <CheckBox x:Name="SkipSmallerTargetBox" Content="Auto skip when target is smaller (started / partial file)" Margin="0,10,0,4"/>
-                    <CheckBox x:Name="SkipSameTargetBox" Content="Auto skip when target is the same size" Margin="0,4"/>
-                    <CheckBox x:Name="SkipLargerTargetBox" Content="Auto skip when target is larger" Margin="0,4,0,12"/>
-                    <TextBlock Text="Unchecked: use normal transfer behavior, which may overwrite an existing target. Applies to normal FXP/relay transfers. VISIONARY RACE bypasses these size rules so partial/growing files can be completed and verified. Skipped files are logged and removed from the queue." TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" Margin="0,0,0,12"/>
+                    <TextBlock Text="Target smaller" Margin="0,10,0,2"/><ComboBox x:Name="SmallerActionBox" Margin="0,2"/>
+                    <TextBlock Text="Target same size" Margin="0,4,0,2"/><ComboBox x:Name="SameActionBox" Margin="0,2"/>
+                    <TextBlock Text="Target larger" Margin="0,4,0,2"/><ComboBox x:Name="LargerActionBox" Margin="0,2"/>
+                    <TextBlock Text="Applies to normal FXP and RACE files. Verified COMPLETE releases are still skipped. Resume uses REST on both servers for a smaller binary target; ASCII resume can be disabled in ASCII List. Zero-byte targets restart; Resume on a larger target uses Overwrite. Servers may reject writes due to dupe protection." TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" Margin="0,8,0,12"/>
                     <TextBlock Text="FXP average speed" FontWeight="SemiBold"/>
                     <CheckBox x:Name="FxpSpeedMonitoringBox" Content="Measure average speed per completed FXP file" Margin="0,14,0,8"/>
                     <CheckBox x:Name="DownloadMeasurementBox" Content="Download measurement (diagnostic timing)" Margin="0,8,0,8"/>
                     <TextBlock Text="Off by default. Records per-file download timing in Connection Log and RACE log. Applies to new downloads." TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" Margin="0,0,0,12"/>
                     <TextBlock Text="Passive measurement: transferred file bytes divided by the time from STOR/RETR to successful replies from both servers. No extra connections, status commands or monitoring slots. The average is shown and logged when the file completes; no live speed or progress polling. Applies to new direct FXP transfers." TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}"/>
                 </StackPanel></TabItem>
+                <TabItem Header="ASCII List"><Grid Margin="16"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                    <CheckBox x:Name="NoAsciiResumeBox" Content="Do not resume ASCII transfers" Margin="0,0,0,10"/>
+                    <TextBlock Grid.Row="1" Text="Used when Always use binary file transfers is unchecked in Site Options. Wildcards are case-insensitive; prefix a regular expression with regex:." TextWrapping="Wrap" Margin="0,0,0,10"/>
+                    <ListBox x:Name="AsciiRulesList" Grid.Row="2" Background="{DynamicResource WindowBrush}" Foreground="{DynamicResource TextBrush}" BorderBrush="{DynamicResource BorderBrush}">
+                        <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem">
+                            <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+                            <Setter Property="Background" Value="Transparent"/>
+                            <Setter Property="Padding" Value="5,3"/>
+                            <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem">
+                                <Border x:Name="ItemBorder" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}"><ContentPresenter/></Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="ItemBorder" Property="Background" Value="{DynamicResource HoverBrush}"/></Trigger>
+                                    <Trigger Property="IsSelected" Value="True"><Setter TargetName="ItemBorder" Property="Background" Value="{DynamicResource SelectionBrush}"/></Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate></Setter.Value></Setter>
+                        </Style></ListBox.ItemContainerStyle>
+                    </ListBox>
+                    <WrapPanel Grid.Row="3" Margin="0,10,0,0"><Button Content="Add..." Click="AsciiAdd_Click" Margin="0,0,8,0"/><Button Content="Edit..." Click="AsciiEdit_Click" Margin="0,0,8,0"/><Button Content="Delete" Click="AsciiDelete_Click"/></WrapPanel>
+                </Grid></TabItem>
                 <TabItem Header="Skiplist"><Grid Margin="16"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                     <StackPanel>
                         <WrapPanel><CheckBox x:Name="EnableSkipListBox" Content="Enable Skip List" Margin="0,4,20,4"/><CheckBox x:Name="SkipZeroByteBox" Content="Skip Zero Byte File" Margin="0,4,20,4"/><CheckBox x:Name="SkipEmptyDirectoryBox" Content="Skip Empty Directory" Margin="0,4"/></WrapPanel>

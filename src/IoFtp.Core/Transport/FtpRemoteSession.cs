@@ -26,6 +26,7 @@ public sealed class FtpRemoteSession : IRemoteSession
     private int _loggedDataTlsDetails;
     private bool _tls12Only;
     private bool _useOpenSslFallback;
+    private long _fxpResumeOffset;
     private Encoding _controlEncoding = Encoding.ASCII;
     private SftpRemoteSession? _sftpSession;
 
@@ -252,11 +253,13 @@ public sealed class FtpRemoteSession : IRemoteSession
     }
 
     public async Task FxpToAsync(FtpRemoteSession destination, string sourcePath, string destinationPath,
-        CancellationToken cancellationToken, bool reverseDataConnection = false)
+        CancellationToken cancellationToken, bool reverseDataConnection = false, long offset = 0)
     {
         LastTransferCompletion = "";
         destination.LastTransferCompletion = "";
         LastFxpTransferElapsed = TimeSpan.Zero;
+        _fxpResumeOffset = offset;
+        if (offset < 0) throw new ArgumentOutOfRangeException(nameof(offset));
         EnsureConnected(); destination.EnsureConnected();
         if (_sftpSession is not null || destination._sftpSession is not null)
             throw new NotSupportedException("Direct FXP is unavailable for SFTP; use client relay instead.");
@@ -289,8 +292,8 @@ public sealed class FtpRemoteSession : IRemoteSession
         var sourceFile = relativePaths[0];
         var destinationFile = relativePaths[1];
         await MeasureFxpStageAsync("PRET", async () => await Task.WhenAll(
-            PrepareDataCommandAsync($"RETR {sourceFile}", cancellationToken),
-            destination.PrepareDataCommandAsync($"STOR {destinationFile}", cancellationToken)));
+            PrepareDataCommandAsync($"RETR {sourceFile}", cancellationToken, FtpTransferMode.IsAscii(sourceFile, sourceProfile.EffectiveOptions) && !destinationProfile.EffectiveOptions.ForceBinaryMode),
+            destination.PrepareDataCommandAsync($"STOR {destinationFile}", cancellationToken, FtpTransferMode.IsAscii(sourceFile, sourceProfile.EffectiveOptions) && !destinationProfile.EffectiveOptions.ForceBinaryMode)));
         if (reverseDataConnection)
         {
             FtpResponse sourcePassive = new(0, "");
@@ -351,6 +354,7 @@ public sealed class FtpRemoteSession : IRemoteSession
                 foreach (var role in roles)
                     if (role.Code is < 200 or >= 300) throw new FtpCommandException(role.Code, role.Message);
             }
+            FtpPassivePortRange.Ensure(sourceProfile.EffectiveOptions, sourceAdvertised.Port, sourceProfile.Name);
             await MeasureFxpStageAsync("PORT", () =>
                 ConfigureActiveFxpEndpointAsync(destination, sourceAdvertised, cancellationToken));
             LastFxpNegotiation = secureFxp ? usedCpsv ? "source CPSV / destination PORT" : "source PASV / destination SSCN+PORT" : "PASV/PORT (reverse)";
@@ -423,23 +427,34 @@ public sealed class FtpRemoteSession : IRemoteSession
         }
         else LastFxpNegotiation = "PASV";
 
+        FtpPassivePortRange.Ensure(destinationProfile.EffectiveOptions, advertised.Port, destinationProfile.Name);
         await MeasureFxpStageAsync("PORT", () => ConfigureActiveFxpEndpointAsync(this, advertised, cancellationToken));
         await StartAndCompleteFxpAsync(destination, sourceFile, destinationFile, cancellationToken);
     }
 
     public async Task RetryFxpWithReversedTopologyAsync(FtpRemoteSession destination, string sourcePath,
-        string destinationPath, CancellationToken cancellationToken)
+        string destinationPath, CancellationToken cancellationToken, long offset = 0)
     {
         var sourceProfile = _profile ?? throw new InvalidOperationException("The FXP source profile is unavailable.");
         var destinationProfile = destination._profile ?? throw new InvalidOperationException("The FXP destination profile is unavailable.");
         await Task.WhenAll(DisconnectAsync(CancellationToken.None), destination.DisconnectAsync(CancellationToken.None));
         await Task.WhenAll(ConnectAsync(sourceProfile, cancellationToken), destination.ConnectAsync(destinationProfile, cancellationToken));
-        await FxpToAsync(destination, sourcePath, destinationPath, cancellationToken, reverseDataConnection: true);
+        await FxpToAsync(destination, sourcePath, destinationPath, cancellationToken, reverseDataConnection: true, offset: offset);
     }
 
     private async Task StartAndCompleteFxpAsync(FtpRemoteSession destination, string sourcePath,
         string destinationPath, CancellationToken cancellationToken)
     {
+        if (_fxpResumeOffset > 0)
+        {
+            if (!FtpTransferMode.CanResume(sourcePath, _profile!.EffectiveOptions))
+                throw new FtpResumeRejectedException("Resume disabled for ASCII files; choose Overwrite.");
+            foreach (var session in new[] { this, destination })
+            {
+                var reply = await session.FxpCommandAsync($"REST {_fxpResumeOffset}", cancellationToken);
+                if (reply.Code != 350) throw new FtpResumeRejectedException($"Resume rejected by {session._profile!.Name}: {reply.Message}. Choose Overwrite to restart.");
+            }
+        }
         var transferTimer = Stopwatch.StartNew();
         // Start both ends together. Some FTP servers do not emit 125/150 until
         // the peer has actually opened the negotiated data connection; awaiting
@@ -863,7 +878,7 @@ public sealed class FtpRemoteSession : IRemoteSession
     private async Task TransferActiveAsync(string command, long offset, Func<Stream, Task> transfer, CancellationToken cancellationToken)
     {
         var localEndpoint = (IPEndPoint)_controlClient!.Client.LocalEndPoint!;
-        var listener = new TcpListener(localEndpoint.Address, 0); listener.Start();
+        var listener = FtpActivePortRange.Start(localEndpoint.Address, _profile!.EffectiveOptions.ActivePortMin, _profile.EffectiveOptions.ActivePortMax);
         try
         {
             await PrepareDataCommandAsync(command, cancellationToken);
@@ -889,8 +904,7 @@ public sealed class FtpRemoteSession : IRemoteSession
         if (localEndpoint.AddressFamily != AddressFamily.InterNetwork)
             throw new IOException("Active FTP fallback currently requires an IPv4 connection.");
 
-        var listener = new TcpListener(localEndpoint.Address, 0);
-        listener.Start();
+        var listener = FtpActivePortRange.Start(localEndpoint.Address, _profile!.EffectiveOptions.ActivePortMin, _profile.EffectiveOptions.ActivePortMax);
         try
         {
             await PrepareDataCommandAsync($"{command} {path}", cancellationToken);
@@ -1045,7 +1059,11 @@ public sealed class FtpRemoteSession : IRemoteSession
         {
             var extended = await CommandAsync("EPSV", cancellationToken);
             if (extended.Code == 229)
-                return ParseExtendedPassiveEndpoint(extended.Message, GetControlPeerHost(), profile.EffectiveOptions.CeprSupported);
+                {
+                var endpoint = ParseExtendedPassiveEndpoint(extended.Message, GetControlPeerHost(), profile.EffectiveOptions.CeprSupported);
+                FtpPassivePortRange.Ensure(profile.EffectiveOptions, endpoint.Port, profile.Name);
+                return endpoint;
+            }
         }
 
         var passive = await CommandAsync("PASV", cancellationToken);
@@ -1053,18 +1071,19 @@ public sealed class FtpRemoteSession : IRemoteSession
         var advertised = ParsePassiveEndpoint(passive.Message);
         // When connecting through localhost, never replace it with a server-advertised LAN address.
         var host = profile.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ? profile.Host : advertised.Host;
+        FtpPassivePortRange.Ensure(profile.EffectiveOptions, advertised.Port, profile.Name);
         return (host, advertised.Port);
     }
 
     private sealed record TransferStart(FtpResponse Response, bool Completed);
 
-    private async Task PrepareDataCommandAsync(string command, CancellationToken cancellationToken)
+    private async Task PrepareDataCommandAsync(string command, CancellationToken cancellationToken, bool? ascii = null)
     {
         // Pooled sessions and legacy profiles may be in ASCII mode. Require
         // binary mode on both FXP peers and every client transfer before PRET.
         if (command.StartsWith("RETR ", StringComparison.OrdinalIgnoreCase) ||
             command.StartsWith("STOR ", StringComparison.OrdinalIgnoreCase))
-            EnsureSuccess(await FxpCommandAsync("TYPE I", cancellationToken), 200);
+            EnsureSuccess(await FxpCommandAsync((ascii ?? FtpTransferMode.IsAscii(command[5..], _profile?.EffectiveOptions ?? new())) ? "TYPE A" : "TYPE I", cancellationToken), 200);
         if (_profile?.EffectiveOptions.NeedsPret != true) return;
         var response = await FxpCommandAsync($"PRET {command}", cancellationToken);
         EnsureSuccess(response, 200);

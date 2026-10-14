@@ -14,13 +14,14 @@ internal static class RaceDestinationVerifier
         (actual.Any(race.IsCompletionMarker) || race.DestinationAnnouncedComplete) && !HasRejectedPayload(actual) &&
         !actual.Any(entry => race.IsCompletionMetadata(entry) && !race.IsCompletionMarker(entry));
     // A source marker never proves that the destination accepted its SFV payload.
-    public static bool Accepts(IReadOnlyList<RemoteEntry> expected, IReadOnlyList<RemoteEntry> actual, VisionaryRaceState race)
+    public static bool Accepts(IReadOnlyList<RemoteEntry> expected, IReadOnlyList<RemoteEntry> actual, VisionaryRaceState race, Func<RemoteEntry, bool>? isAscii = null)
     {
         if (HasRejectedPayload(actual)) return false;
         foreach (var file in expected)
         {
             var found = actual.FirstOrDefault(entry => !entry.IsDirectory && entry.Name.Equals(file.Name, StringComparison.OrdinalIgnoreCase));
-            if (found is null || file.Size is null || found.Size != file.Size) return false;
+            if (found is null || file.Size is null) return false;
+            if (found.Size != file.Size && !(isAscii?.Invoke(file) == true && found.Size > 0 && HasCompleteMarker(actual, race))) return false;
         }
         return !expected.Any(entry => entry.Name.EndsWith(".sfv", StringComparison.OrdinalIgnoreCase) || entry.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)) || HasCompleteMarker(actual, race);
     }

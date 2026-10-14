@@ -46,7 +46,7 @@ internal static class ProfileStoreChecks
             foreach (var enabled in new[] { false, true })
             {
                 var options = profile.EffectiveOptions with { TextEncoding = encoding, AuthCommand = auth,
-                    Utf8Login = enabled, PbszBeforeLogin = enabled, Tls12Only = enabled, UseOpenSslTls = enabled };
+                    PassivePortMin = enabled ? 10000 : 0, PassivePortMax = enabled ? 20000 : 0, ForceBinaryMode = enabled, Utf8Login = enabled, PbszBeforeLogin = enabled, Tls12Only = enabled, UseOpenSslTls = enabled };
                 store.Save([profile with { Options = options }]);
                 Check(new ProfileStore(directory).Load().Single().EffectiveOptions == options, "TLS/encoding INI round trip");
             }

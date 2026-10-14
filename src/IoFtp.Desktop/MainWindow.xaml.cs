@@ -329,6 +329,7 @@ public partial class MainWindow : Window
 
     private ConnectionProfile ApplyGlobalProxy(ConnectionProfile profile)
     {
+        profile = profile with { Options = profile.EffectiveOptions with { AsciiRules = _settings.AsciiRules, NoAsciiResume = _settings.NoAsciiResume, PassivePortMin = _settings.PassivePortMin, PassivePortMax = _settings.PassivePortMax, ActivePortMin = _settings.ActivePortFrom, ActivePortMax = _settings.ActivePortTo } };
         if (profile.Proxy is not null) return profile;
         return _settings.ProxyType == ProxyType.None ? profile : profile with
         {
@@ -1961,7 +1962,7 @@ public partial class MainWindow : Window
                 session.EnableDownloadMeasurement = measureDownload;
                 var measurement = await LocalDownload.RunAsync(entry.Destination,
                     (output, offset) => session.DownloadAsync(source, output, offset, progress, cancellationToken),
-                    progress, cancellationToken);
+                    progress, cancellationToken, allowResume: FtpTransferMode.CanResume(source, (entry.Direction == TransferDirection.ApiDownload ? apiProfile! : entry.Direction == TransferDirection.Download ? rightProfile! : leftProfile!).EffectiveOptions));
                 entry.BytesTransferred = measurement.ResumeOffset + measurement.Bytes;
                 sessionNewBytes = measurement.Bytes;
                 if (measureDownload)
@@ -1977,7 +1978,7 @@ public partial class MainWindow : Window
                 var session = entry.Direction == TransferDirection.Upload ? rightWorker! : leftWorker!;
                 await EnsureRemoteDirectoryAsync(session, RemoteParent(entry.Destination), cancellationToken);
                 await using var input = new FileStream(entry.Source, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, true);
-                var offset = Math.Min(entry.BytesTransferred, input.Length); input.Seek(offset, SeekOrigin.Begin);
+                var offset = FtpTransferMode.CanResume(entry.Destination, (entry.Direction == TransferDirection.Upload ? rightProfile! : leftProfile!).EffectiveOptions) ? Math.Min(entry.BytesTransferred, input.Length) : 0; input.Seek(offset, SeekOrigin.Begin);
                 sessionNewBytes = input.Length - offset;
                 await session.UploadAsync(entry.Destination, input, offset, progress, cancellationToken);
                 AppendTransferIntegrityNotices(entry, ("destination", session));
@@ -1991,25 +1992,26 @@ public partial class MainWindow : Window
                 var destinationProfile = entry.Direction == TransferDirection.ApiFxp ? apiFxpDestination! :
                     entry.Direction == TransferDirection.RelayLeftToRight ? rightProfile! : leftProfile!;
                 await EnsureRemoteDirectoryAsync(destinationSession, RemoteParent(entry.Destination), cancellationToken);
-                if (!entry.VisionaryRace && sourceProfile.Protocol != TransferProtocol.Sftp && destinationProfile.Protocol != TransferProtocol.Sftp &&
-                    (_settings.FxpSkipSmallerTarget || _settings.FxpSkipSameTarget || _settings.FxpSkipLargerTarget))
+                long fxpOffset = 0;
+                if (sourceProfile.Protocol != TransferProtocol.Sftp && destinationProfile.Protocol != TransferProtocol.Sftp)
                 {
                     var targetSize = await destinationSession.GetSizeAsync(entry.Destination, cancellationToken);
                     if (targetSize is not null)
                     {
-                        var sourceSize = await sourceSession.GetSizeAsync(entry.Source, cancellationToken);
-                        if (FxpExistingFilePolicy.ShouldSkip(_settings, sourceSize, targetSize, entry.VisionaryRace))
+                        var sourceSize = entry.TotalBytes > 0 ? entry.TotalBytes : await sourceSession.GetSizeAsync(entry.Source, cancellationToken);
+                        var action = FxpExistingFilePolicy.Resolve(_settings, sourceSize, targetSize, entry.VisionaryRace);
+                        if (action == ExistingTargetAction.Skip)
                         {
-                            var reason = $"Existing target auto skipped: {entry.Name}; source={sourceSize} bytes, target={targetSize} bytes.";
-                            LogText.AppendText(Environment.NewLine + reason);
-                            _raceLog.Write("SKIP", reason);
-                            entry.State = "Skipped";
-                            _skippedTransferJobs.Add(entry.Id);
-                            reuseWorkers = true;
-                            return;
+                            var reason = $"Existing target skipped: {entry.Name}; source={sourceSize} bytes, target={targetSize} bytes; policy=Skip.";
+                            LogText.AppendText(Environment.NewLine + reason); _raceLog.Write("SKIP", reason);
+                            entry.State = "Skipped"; _skippedTransferJobs.Add(entry.Id); reuseWorkers = true; return;
                         }
+                        if (action == ExistingTargetAction.Resume && FtpTransferMode.CanResume(entry.Source, sourceProfile.EffectiveOptions) && FtpTransferMode.CanResume(entry.Destination, destinationProfile.EffectiveOptions)) fxpOffset = targetSize.Value;
+                        LogText.AppendText($"{Environment.NewLine}Existing target: {entry.Name}; action={(fxpOffset > 0 ? "Resume" : "Overwrite")}; offset={fxpOffset}.");
                     }
                 }
+                var asciiFxp = FtpTransferMode.IsAscii(entry.Source, sourceProfile.EffectiveOptions) && !destinationProfile.EffectiveOptions.ForceBinaryMode;
+                sessionNewBytes = Math.Max(0, entry.TotalBytes - fxpOffset);
                 var clearFxp = !sourceSession.UsesTlsControl || !destinationSession.UsesTlsControl ||
                     sourceSession.FxpProtection == FxpProtectionMode.Clear ||
                     destinationSession.FxpProtection == FxpProtectionMode.Clear;
@@ -2041,25 +2043,25 @@ public partial class MainWindow : Window
                                 var routeSource = configuredReverse == true ? "configured" : learnedReverse ? "learned" : "source CPSV preferred";
                                 LogText.AppendText($"{Environment.NewLine}Using {routeSource} source-passive FXP route for {sourceProfile.Name} → {destinationProfile.Name}: {entry.Name}");
                                 await sourceSession.FxpToAsync(destinationSession, entry.Source, entry.Destination,
-                                    cancellationToken, reverseDataConnection: true);
+                                    cancellationToken, reverseDataConnection: true, offset: fxpOffset);
                             }
                             else
                             {
-                                try { await sourceSession.FxpToAsync(destinationSession, entry.Source, entry.Destination, cancellationToken); }
+                                try { await sourceSession.FxpToAsync(destinationSession, entry.Source, entry.Destination, cancellationToken, offset: fxpOffset); }
                                 catch (FtpCommandException exception) when (exception.StatusCode == 425 && configuredReverse is null &&
                                     (clearFxp || sourceSession.Capabilities.Contains("CPSV") ||
                                     sourceSession.Capabilities.Contains("SSCN") && destinationSession.Capabilities.Contains("SSCN")))
                                 {
                                     LogText.AppendText($"{Environment.NewLine}Standard FXP returned 425; retrying with source passive and destination PORT, preserving data protection: {entry.Name}");
                                     await sourceSession.RetryFxpWithReversedTopologyAsync(
-                                        destinationSession, entry.Source, entry.Destination, cancellationToken);
+                                        destinationSession, entry.Source, entry.Destination, cancellationToken, offset: fxpOffset);
                                     if (_reverseFxpPairs.Add(pair)) _fxpRouteStore.SaveReverseRoutes(_reverseFxpPairs);
                                     LogText.AppendText($"{Environment.NewLine}Remembered reverse FXP route permanently for {sourceProfile.Name} → {destinationProfile.Name}.");
                                 }
                             }
                         }
                         if (entry.TotalBytes > 0) entry.BytesTransferred = entry.TotalBytes;
-                        if (measureAverage && PassiveFxpAverage.Calculate(sessionNewBytes, sourceSession.LastFxpTransferElapsed) is { } average)
+                        if (measureAverage && !asciiFxp && PassiveFxpAverage.Calculate(sessionNewBytes, sourceSession.LastFxpTransferElapsed) is { } average)
                         {
                             entry.FxpAverageMeasured = true;
                             entry.SpeedBytesPerSecond = average;
@@ -2076,6 +2078,9 @@ public partial class MainWindow : Window
                         reuseWorkers = true;
                         return;
                     }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+                    catch (FtpPassivePortException) { throw; }
+                    catch (FtpResumeRejectedException) { throw; }
                     catch (TransferVerificationException) { throw; }
                     catch (Exception exception) when (TransferRejection.Category(exception.Message) is not null) { throw; }
                     // A permanent FTP rejection cannot be repaired by changing the data route.
@@ -2118,6 +2123,7 @@ public partial class MainWindow : Window
                 }
                 else LogText.AppendText($"{Environment.NewLine}Secure direct FXP is unavailable in Auto mode; using client relay.");
 
+                sessionNewBytes = entry.TotalBytes; // Client relay restarts the whole file.
                 var temporary = Path.Combine(Path.GetTempPath(), $"ioftp-fxp-{Guid.NewGuid():N}.part");
                 try
                 {
@@ -2715,7 +2721,7 @@ public partial class MainWindow : Window
 
     private static string FriendlyMessage(Exception exception) => exception switch
     {
-        OperationCanceledException => "The operation timed out. If login succeeded, check the server's passive port range and firewall.",
+        OperationCanceledException => "The operation was cancelled or its time limit expired.",
         NotSupportedException => exception.Message,
         IoFtp.Core.Transport.FtpCommandException ftpException => $"FTP server replied {ftpException.StatusCode}: {ftpException.Message}",
         System.Net.WebException webException when webException.Response is System.Net.FtpWebResponse response => $"FTP server replied {(int)response.StatusCode}: {response.StatusDescription?.Trim() ?? "Unknown error"}",
@@ -3454,7 +3460,7 @@ public partial class MainWindow : Window
                     {
                         var listing = directory.Key == destination ? rootListing :
                             await _raceListings.ListAsync(ApplyGlobalProxy(destinationProfile), directory.Key, timeout.Token);
-                        if (!RaceDestinationVerifier.Accepts(directory.Select(file => file.Entry).ToArray(), listing, race))
+                        if (!RaceDestinationVerifier.Accepts(directory.Select(file => file.Entry).ToArray(), listing, race, file => FtpTransferMode.IsAscii(file.FullPath, sourceProfile.EffectiveOptions with { AsciiRules = _settings.AsciiRules }) && !destinationProfile.EffectiveOptions.ForceBinaryMode))
                         { verified = false; break; }
                     }
                     if (verified)
@@ -3504,7 +3510,7 @@ public partial class MainWindow : Window
                 try
                 {
                     var listing = await _raceListings.ListAsync(ApplyGlobalProxy(destinationProfile), directory.Key, timeout.Token);
-                    if (!RaceDestinationVerifier.Accepts(directory.Select(file => file.Entry).ToArray(), listing, race)) verified = false;
+                    if (!RaceDestinationVerifier.Accepts(directory.Select(file => file.Entry).ToArray(), listing, race, file => FtpTransferMode.IsAscii(file.FullPath, sourceProfile.EffectiveOptions with { AsciiRules = _settings.AsciiRules }) && !destinationProfile.EffectiveOptions.ForceBinaryMode)) verified = false;
                 }
                 catch (FtpCommandException exception) when (exception.StatusCode == 550) { verified = false; }
             }

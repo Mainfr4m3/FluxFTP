@@ -56,7 +56,13 @@ public sealed record GlobalSettings(
     bool SkipEmptyDirectories = false,
     bool ApplySkipListToFolders = true,
     string SkipTransferMode = "Both",
-    string SkippedItemColor = "#7F9FBF");
+    string SkippedItemColor = "#7F9FBF",
+    ExistingTargetAction? FxpSmallerAction = null,
+    ExistingTargetAction? FxpSameAction = null,
+    ExistingTargetAction? FxpLargerAction = null,
+    string AsciiRules = IoFtp.Core.Transport.FtpTransferMode.DefaultAsciiRules,
+    bool NoAsciiResume = true,
+    int PassivePortMin = 0, int PassivePortMax = 0);
 
 public sealed record ViewLayoutSettings(string[]? HiddenColumns = null, string SortBy = "Name",
     bool Descending = false, string FontFamily = "", double FontSize = 0, bool Bold = false);

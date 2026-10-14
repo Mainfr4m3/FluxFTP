@@ -8,6 +8,9 @@ using IoFtp.Desktop.Models;
 using IoFtp.Desktop.Services;
 
 var assertions = 0;
+if (args.FirstOrDefault() == "--global-port-checks") { GlobalPortChecks.Run(); return; }
+if (args.FirstOrDefault() == "--passive-port-checks") { await PassivePortChecks.Run(); return; }
+if (args.FirstOrDefault() == "--transfer-policy-checks") { await TransferPolicyChecks.Run(); return; }
 if (args.FirstOrDefault() == "--fxp-metrics-checks")
 {
     var time = TimeSpan.Zero;

@@ -17,7 +17,7 @@ internal static class BinaryModeChecks
         typeof(FtpRemoteSession).GetField("_writer", flags)!.SetValue(session, writer);
         typeof(FtpRemoteSession).GetField("_reader", flags)!.SetValue(session, reader);
         var prepare = typeof(FtpRemoteSession).GetMethod("PrepareDataCommandAsync", flags)!;
-        Task Prepare(string command) => (Task)prepare.Invoke(session, [command, CancellationToken.None])!;
+        Task Prepare(string command) => (Task)prepare.Invoke(session, [command, CancellationToken.None, null])!;
         await Prepare("RETR archive.rar");
         await Prepare("STOR archive.rar");
         await Prepare("LIST /");

@@ -16,7 +16,7 @@ public partial class SiteOptionsWindow : Window
         MaxSlotsBox.Text = options.MaxSlots.ToString(); UploadSlotsBox.Text = options.MaxUploadSlots.ToString(); DownloadSlotsBox.Text = options.MaxDownloadSlots.ToString();
         PriorityBox.Text = options.Priority.ToString(); AllowUploadBox.IsChecked = options.AllowUpload; AllowDownloadBox.IsChecked = options.AllowDownload;
         StayLoggedInBox.IsChecked = options.StayLoggedIn; BasePathBox.Text = options.BasePath; TlsTransfersBox.IsChecked = options.PreferTlsTransfers;
-        BinaryModeBox.IsChecked = true; IdleBox.Text = options.MaxIdleSeconds.ToString();
+        BinaryModeBox.IsChecked = options.ForceBinaryMode; IdleBox.Text = options.MaxIdleSeconds.ToString();
         SecureListingsBox.IsChecked = options.SecureFileListings;
         NeedsPretBox.IsChecked = options.NeedsPret;
         CeprBox.IsChecked = options.CeprSupported;
@@ -29,6 +29,7 @@ public partial class SiteOptionsWindow : Window
         Utf8LoginBox.IsChecked = options.Utf8Login;
         EarlyPbszBox.IsChecked = options.PbszBeforeLogin;
         Tls12OnlyBox.IsChecked = options.Tls12Only;
+
         FxpProtectionBox.ItemsSource = new[]
         {
             new FxpProtectionChoice(FxpProtectionMode.AutoSecure, "Auto — secure FXP (TLS)"),

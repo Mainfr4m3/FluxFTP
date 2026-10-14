@@ -33,6 +33,7 @@ public enum DirectoryListingMode
 public enum FtpTextEncoding { Auto, Utf8, Windows1252 }
 public enum FtpAuthCommand { Auto, Tls, Ssl }
 
+public enum ExistingTargetAction { Skip, Resume, Overwrite }
 public enum ProxyType { None, Socks4, Socks5, HttpConnect }
 public enum FxpProtectionMode { AutoSecure, Clear }
 public enum FxpDataRole { Auto, Passive, Active }
@@ -69,7 +70,11 @@ public sealed record SiteOptions(
     bool Utf8Login = false,
     FtpAuthCommand AuthCommand = FtpAuthCommand.Auto,
     bool PbszBeforeLogin = false,
-    bool Tls12Only = false);
+    bool Tls12Only = false,
+    string AsciiRules = "",
+    bool NoAsciiResume = true,
+    int PassivePortMin = 0, int PassivePortMax = 0,
+    int ActivePortMin = 0, int ActivePortMax = 0);
 
 public sealed record ConnectionProfile(
     Guid Id,

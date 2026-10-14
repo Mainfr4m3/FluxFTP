@@ -14,10 +14,13 @@ internal static class GlobalSettingsChecks
             var irc = new IrcSettings(Enabled: true, Host: "irc.example.test", Port: 6697, UseTls: true,
                 Nick: "FluxTest", Password: "dpapi:literal-password %20", UseZnc: true, ZncUsername: "user",
                 ZncNetwork: "network", Channel: "#test", NetworkName: "Example", AccountLinks: [new("account", "admin")], AllowInvalidCertificate: false);
-            var settings = new GlobalSettings(Irc: irc, TransferCategoryOrder: "NFO\nSFV\nMain files\nProof\nSample");
+            var settings = new GlobalSettings(ActivePortFrom: 49000, ActivePortTo: 49100, PassivePortMin: 50000, PassivePortMax: 51000, FxpSmallerAction: IoFtp.Core.Models.ExistingTargetAction.Resume, FxpSameAction: IoFtp.Core.Models.ExistingTargetAction.Overwrite, AsciiRules: "*.TXT\nregex:^README$", NoAsciiResume: false, Irc: irc, TransferCategoryOrder: "NFO\nSFV\nMain files\nProof\nSample");
             new GlobalSettingsStore(directory).Save(settings);
             var path = Path.Combine(directory, "settings.json");
             Check(!File.ReadAllText(path).Contains(irc.Password), "secret protected on disk");
+            var restored = new GlobalSettingsStore(directory).Load();
+            Check(restored.ActivePortFrom == 49000 && restored.ActivePortTo == 49100 && restored.PassivePortMin == 50000 && restored.PassivePortMax == 51000, "global active/passive ports survive restart");
+            Check(restored.FxpSmallerAction == settings.FxpSmallerAction && restored.FxpSameAction == settings.FxpSameAction && restored.AsciiRules == settings.AsciiRules && !restored.NoAsciiResume, "conflict actions and ASCII rules survive restart");
             Check(new GlobalSettingsStore(directory).Load().TransferCategoryOrder == settings.TransferCategoryOrder, "transfer category order survives restart");
             var layout = new Dictionary<string, ViewLayoutSettings>
             {
@@ -70,7 +73,7 @@ internal static class GlobalSettingsChecks
             Check(!FxpExistingFilePolicy.ShouldSkip(new(), 100, null) && !FxpExistingFilePolicy.ShouldSkip(new(), null, 50), "unknown sizes do not skip");
             Check(!FxpExistingFilePolicy.ShouldSkip(new(FxpSkipSmallerTarget: false), 100, 50), "partial FXP target skip can be disabled");
             Check(FxpExistingFilePolicy.ShouldSkip(new(), 100, 0), "zero-byte existing FXP target skipped");
-            Check(!FxpExistingFilePolicy.ShouldSkip(new(), 100, 50, true) && !FxpExistingFilePolicy.ShouldSkip(new(), 100, 100, true), "RACE can repair partial or preallocated existing targets");
+            Check(FxpExistingFilePolicy.ShouldSkip(new(), 100, 50, true) && FxpExistingFilePolicy.ShouldSkip(new(), 100, 100, true), "RACE now follows selected target policy");
             new GlobalSettingsStore(directory).Save(settings with { EnableDownloadMeasurement = true });
             Check(new GlobalSettingsStore(directory).Load().EnableDownloadMeasurement, "download measurement preference persists");
             var session = new SessionStatistics();

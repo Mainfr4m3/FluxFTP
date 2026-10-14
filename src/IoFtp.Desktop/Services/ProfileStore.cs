@@ -92,6 +92,8 @@ internal sealed class ProfileStore
             Write(text, "AuthCommand", options.AuthCommand);
             Write(text, "PbszBeforeLogin", options.PbszBeforeLogin);
             Write(text, "Tls12Only", options.Tls12Only);
+            Write(text, "PassivePortMin", options.PassivePortMin);
+            Write(text, "PassivePortMax", options.PassivePortMax);
             Write(text, "ProxyMode", profile.Proxy is null ? "Inherit" : profile.Proxy.Type == ProxyType.None ? "None" : "Custom");
             if (profile.Proxy is not null)
             {
@@ -132,7 +134,7 @@ internal sealed class ProfileStore
                 EnumValue(values, "FxpDataRole", FxpDataRole.Auto),
                 Bool(values, "UseOpenSslTls"), Get(values, "ImportedSkipRules"), Get(values, "ImportedPriorityRules"), Get(values, "VisionaryRules"),
                 EnumValue(values, "TextEncoding", FtpTextEncoding.Auto), Bool(values, "Utf8Login"),
-                EnumValue(values, "AuthCommand", FtpAuthCommand.Auto), Bool(values, "PbszBeforeLogin"), Bool(values, "Tls12Only"));
+                EnumValue(values, "AuthCommand", FtpAuthCommand.Auto), Bool(values, "PbszBeforeLogin"), Bool(values, "Tls12Only"), PassivePortMin: Int(values, "PassivePortMin"), PassivePortMax: Int(values, "PassivePortMax"));
             var proxyMode = Get(values, "ProxyMode", "Inherit");
             ProxyConfiguration? proxy = proxyMode.Equals("Inherit", StringComparison.OrdinalIgnoreCase) ? null
                 : proxyMode.Equals("None", StringComparison.OrdinalIgnoreCase) ? new ProxyConfiguration(ProxyType.None)
