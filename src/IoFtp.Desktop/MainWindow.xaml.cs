@@ -2936,6 +2936,28 @@ public partial class MainWindow : Window
         else { upper.Height = new GridLength(upperHeight); lower.Height = new GridLength(lowerHeight); }
     }
 
+    private void NormalizePanelSpace()
+    {
+        var visible = new[] { ManagerRow, QueueRow, MetricsRow, StatusRow, LogRow }
+            .Where(row => row.Height.Value > 0).ToArray();
+        var flexible = _managerVisible ? ManagerRow : visible.LastOrDefault();
+        foreach (var row in visible)
+        {
+            if (ReferenceEquals(row, flexible)) row.Height = new GridLength(1, GridUnitType.Star);
+            else if (row.Height.IsStar) row.Height = new GridLength(Math.Max(row.MinHeight, row.ActualHeight));
+        }
+        void Divider(RowDefinition row, RowDefinition splitterRow, UIElement splitter, double height)
+        {
+            var index = Array.IndexOf(visible, row);
+            var show = index > 0;
+            splitter.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+            splitterRow.Height = new GridLength(show ? height : 0);
+        }
+        Divider(MetricsRow, MetricsSplitterRow, MetricsSplitter, 6);
+        Divider(StatusRow, StatusSplitterRow, StatusSplitter, 6);
+        Divider(LogRow, LogSplitterRow, LogSplitter, 8);
+    }
+
     private void ToggleLog_Click(object sender, RoutedEventArgs e)
     {
         if (LogRow.Height.Value > 0)
@@ -2957,6 +2979,7 @@ public partial class MainWindow : Window
             LogRow.Height = !_managerVisible ? new GridLength(1, GridUnitType.Star) : _visibleLogHeight.Value > 0 ? _visibleLogHeight : new GridLength(150);
             ToggleLogButton.Content = "Hide Log";
         }
+        NormalizePanelSpace();
     }
 
     private void ToggleQueue_Click(object sender, RoutedEventArgs e)
@@ -2998,6 +3021,7 @@ public partial class MainWindow : Window
             StatusHost.Visibility = StatusSplitter.Visibility = Visibility.Collapsed;
             StatusRow.MinHeight = 0; StatusRow.Height = new GridLength(0); StatusSplitterRow.Height = new GridLength(0);
             StatusButton.Content = "Show Status";
+            NormalizePanelSpace();
             return;
         }
         var profiles = new ProfileStore().Load();
@@ -3034,6 +3058,7 @@ public partial class MainWindow : Window
         StatusSplitterRow.Height = new GridLength(6);
         StatusRow.MinHeight = 150; StatusRow.Height = _statusHeight;
         StatusButton.Content = "Hide Status";
+        NormalizePanelSpace();
     }
     private GridLength _statusHeight = new(300);
     private GridLength _metricsHeight = new(300);
@@ -3047,6 +3072,7 @@ public partial class MainWindow : Window
         ManagerRow.Height = _managerVisible ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
         if (LogPanel.Visibility == Visibility.Visible) LogRow.Height = _managerVisible ? _visibleLogHeight : new GridLength(1, GridUnitType.Star);
         ManagerButton.Content = _managerVisible ? "Hide Manager" : "Show Manager";
+        NormalizePanelSpace();
     }
     private void Metrics_Click(object sender, RoutedEventArgs e)
     {
@@ -3063,6 +3089,7 @@ public partial class MainWindow : Window
         MetricsRow.MinHeight = show ? 200 : 0;
         MetricsRow.Height = show ? _metricsHeight : new GridLength(0);
         MetricsButton.Content = show ? "Hide Metrics" : "Show Metrics";
+        NormalizePanelSpace();
     }
     private void Scripts_Click(object sender, RoutedEventArgs e) => new ExternalScriptsWindow { Owner = this }.Show();
     private void About_Click(object sender, RoutedEventArgs e) => new AboutWindow { Owner = this }.ShowDialog();

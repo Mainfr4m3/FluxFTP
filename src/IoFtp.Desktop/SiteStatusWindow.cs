@@ -28,5 +28,8 @@ internal sealed class SiteStatusPanel : UserControl
         Unloaded += (_, _) => _timer.Stop();
         IsVisibleChanged += (_, _) => { if (IsVisible) { Refresh(); _timer.Start(); } else _timer.Stop(); };
     }
-    private sealed record SiteChoice(Guid Id, string Name);
+    private sealed record SiteChoice(Guid Id, string Name)
+    {
+        public override string ToString() => Name;
+    }
 }

@@ -320,10 +320,11 @@
                              FontFamily="{DynamicResource AppMonospaceFontFamily}" />
                 </DockPanel>
             </Border>
-            <primitives:Thumb x:Name="MetricsSplitter" Grid.Row="3" Grid.ColumnSpan="3" Height="6" HorizontalAlignment="Stretch" Cursor="SizeNS" DragDelta="PanelSplitter_DragDelta" Visibility="Collapsed" Background="{DynamicResource BorderBrush}"/>
+            <primitives:Thumb x:Name="MetricsSplitter" Grid.Row="3" Grid.ColumnSpan="3" Height="6" HorizontalAlignment="Stretch" Cursor="SizeNS" DragDelta="PanelSplitter_DragDelta" Visibility="Collapsed" Background="Transparent"><primitives:Thumb.Template><ControlTemplate TargetType="{x:Type primitives:Thumb}"><Grid Background="Transparent"><Border Height="2" Margin="80,0" VerticalAlignment="Center" Background="{DynamicResource BorderBrush}" CornerRadius="1"/></Grid></ControlTemplate></primitives:Thumb.Template></primitives:Thumb>
             <ContentControl x:Name="MetricsHost" Grid.Row="4" Grid.ColumnSpan="3" Visibility="Collapsed"/>
-            <primitives:Thumb x:Name="StatusSplitter" Grid.Row="5" Grid.ColumnSpan="3" Height="6" HorizontalAlignment="Stretch" Cursor="SizeNS" DragDelta="PanelSplitter_DragDelta" Visibility="Collapsed" Background="{DynamicResource BorderBrush}"/>
+            <primitives:Thumb x:Name="StatusSplitter" Grid.Row="5" Grid.ColumnSpan="3" Height="6" HorizontalAlignment="Stretch" Cursor="SizeNS" DragDelta="PanelSplitter_DragDelta" Visibility="Collapsed" Background="Transparent"><primitives:Thumb.Template><ControlTemplate TargetType="{x:Type primitives:Thumb}"><Grid Background="Transparent"><Border Height="2" Margin="80,0" VerticalAlignment="Center" Background="{DynamicResource BorderBrush}" CornerRadius="1"/></Grid></ControlTemplate></primitives:Thumb.Template></primitives:Thumb>
             <ContentControl x:Name="StatusHost" Grid.Row="6" Grid.ColumnSpan="3" Visibility="Collapsed"/>
         </Grid>
     </DockPanel>
 </Window>
+
