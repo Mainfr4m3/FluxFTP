@@ -33,7 +33,7 @@ public partial class VisionaryWindow : Window
             "2. Import FTPRush sites, bookmarks and section paths together; review conflicts in the Sections tab. Include your VISIONARY folder in the Rules tab.\n" +
             "3. Export the bridge, load Visionary-FluxFTP.mrc after Visionary.mrc, and set [FU_FXP] USE_FU_FXP=1 in options.ini.\n" +
             "mIRC: /fluxvisi test   •   /fluxvisi transfer SECTION RELEASE SOURCE TARGET\n" +
-            "Races rescan growing releases, then recopy files once after COMPLETE to verify the final version. NUKE stops the race. Disable the bridge to stop all watches. Settings apply to new races. Other Rush-specific options remain VISIONARY configuration.";
+            "RACE lists directories when chains or mapped IRC RACE/FAST/HALF/DONE messages arrive. There is no periodic rescan. Maximum lifetime limits the entire watch. Configure bot/section mappings with /fluxvisi donebot. Disable the bridge to stop watches. Changes apply to new races.";
         try
         {
             var options = VisionaryRaceOptions.Load();
