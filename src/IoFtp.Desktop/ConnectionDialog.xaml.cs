@@ -51,10 +51,10 @@ public partial class ConnectionDialog : Window
             NameBox.Text = quickConnect ? "Quick connection" : "New site";
             UsernameBox.Text = defaults.DefaultUsername;
             ProtocolBox.SelectedItem = ((ProtocolChoice[])ProtocolBox.ItemsSource).First(choice => choice.Protocol == defaults.DefaultProtocol);
-            ListingModeBox.SelectedIndex = 0;
+            ListingModeBox.SelectedIndex = 2; // Prefer STAT -l with LIST fallback.
             RemotePathBox.Text = "/";
             _options = new SiteOptions(defaults.DefaultSlots, defaults.DefaultUploadSlots, defaults.DefaultDownloadSlots,
-                MaxIdleSeconds: defaults.DefaultIdleSeconds);
+                MaxIdleSeconds: defaults.DefaultIdleSeconds, AuthCommand: FtpAuthCommand.Ssl, PbszBeforeLogin: true);
         }
         Loaded += (_, _) => HostBox.Focus();
     }

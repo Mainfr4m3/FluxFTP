@@ -9,6 +9,8 @@ internal sealed class VisionaryPayloadProfile(string name, string directory, str
     bool markerBased = false, string folderAllow = "", string folderSkip = "", string detection = "")
 {
     public string Name { get; } = name;
+    public string FileFilterDetail => $"profile={Name}; allow={allow}; skip={skip}; regex={expressions}";
+    public string FolderFilterDetail => $"profile={Name}; allow={folderAllow}; skip={folderSkip}; regex={expressions}";
     public string Directory { get; } = directory;
     public int Attempts { get; } = retries + 1;
     public bool MarkerBased { get; } = markerBased;

@@ -5,7 +5,7 @@ namespace IoFtp.Desktop.Services;
 
 internal sealed record SkipListPackage(string Patterns = "", AdvancedSkipRule[]? Rules = null,
     bool Enabled = true, bool ZeroByteFiles = false, bool EmptyDirectories = false,
-    bool ApplyToFolders = true, string Mode = "Both", string Color = "#7F9FBF")
+    bool ApplyToFolders = true, string Mode = "Both", string Color = "#7F9FBF", bool? UseAdvancedFilters = null)
 {
     public void Validate()
     {

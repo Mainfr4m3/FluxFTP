@@ -452,7 +452,7 @@ public sealed class FtpRemoteSession : IRemoteSession
             foreach (var session in new[] { this, destination })
             {
                 var reply = await session.FxpCommandAsync($"REST {_fxpResumeOffset}", cancellationToken);
-                if (reply.Code != 350) throw new FtpResumeRejectedException($"Resume rejected by {session._profile!.Name}: {reply.Message}. Choose Overwrite to restart.");
+                if (reply.Code != 350) throw new FtpResumeRejectedException($"Resume rejected by {session._profile!.Name}: {reply.Message}. Choose Overwrite to restart.", reply.Code);
             }
         }
         var transferTimer = Stopwatch.StartNew();
@@ -602,7 +602,7 @@ public sealed class FtpRemoteSession : IRemoteSession
         bool allowPreferredStat = false)
     {
         var shouldTryStat = _profile!.ListingMode == DirectoryListingMode.StatOnly ||
-            (allowPreferredStat && _profile.ListingMode == DirectoryListingMode.StatThenList && Capabilities.Contains("STAT"));
+            (allowPreferredStat && _profile.ListingMode == DirectoryListingMode.StatThenList);
         if (shouldTryStat)
         {
             var stat = await CommandAsync($"STAT -l {path}", cancellationToken);
@@ -836,7 +836,7 @@ public sealed class FtpRemoteSession : IRemoteSession
         Exception? dataError = null;
         using (dataClient)
         {
-            if (offset > 0) EnsureSuccess(await CommandAsync($"REST {offset}", cancellationToken), 350);
+            if (offset > 0) await RequestResumeAsync(offset, cancellationToken);
             EnsureSuccess(await CommandAsync(command, cancellationToken), 125, 150);
             try
             {
@@ -875,6 +875,17 @@ public sealed class FtpRemoteSession : IRemoteSession
         return file;
     }
 
+    public async Task ReconnectForRetryAsync(CancellationToken token)
+    {
+        var profile = _profile ?? throw new InvalidOperationException("No connected profile.");
+        await DisconnectAsync(token);
+        await ConnectAsync(profile, token);
+    }
+    private async Task RequestResumeAsync(long offset, CancellationToken token)
+    {
+        var reply = await CommandAsync($"REST {offset}", token);
+        if (reply.Code != 350) throw new FtpResumeRejectedException($"Resume rejected by {_profile!.Name}: {reply.Message}.", reply.Code);
+    }
     private async Task TransferActiveAsync(string command, long offset, Func<Stream, Task> transfer, CancellationToken cancellationToken)
     {
         var localEndpoint = (IPEndPoint)_controlClient!.Client.LocalEndPoint!;
@@ -884,7 +895,7 @@ public sealed class FtpRemoteSession : IRemoteSession
             await PrepareDataCommandAsync(command, cancellationToken);
             var port = ((IPEndPoint)listener.LocalEndpoint).Port; var address = localEndpoint.Address.GetAddressBytes();
             EnsureSuccess(await CommandAsync($"PORT {string.Join(',', address)},{port / 256},{port % 256}", cancellationToken), 200);
-            if (offset > 0) EnsureSuccess(await CommandAsync($"REST {offset}", cancellationToken), 350);
+            if (offset > 0) await RequestResumeAsync(offset, cancellationToken);
             EnsureSuccess(await CommandAsync(command, cancellationToken), 125, 150);
             using var client = await listener.AcceptTcpClientAsync(cancellationToken);
             await using var stream = await ProtectDataStreamAsync(client.GetStream(), client.Client, cancellationToken);

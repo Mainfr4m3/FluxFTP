@@ -14,11 +14,22 @@ internal static class GlobalSettingsChecks
             var irc = new IrcSettings(Enabled: true, Host: "irc.example.test", Port: 6697, UseTls: true,
                 Nick: "FluxTest", Password: "dpapi:literal-password %20", UseZnc: true, ZncUsername: "user",
                 ZncNetwork: "network", Channel: "#test", NetworkName: "Example", AccountLinks: [new("account", "admin")], AllowInvalidCertificate: false);
-            var settings = new GlobalSettings(ActivePortFrom: 49000, ActivePortTo: 49100, PassivePortMin: 50000, PassivePortMax: 51000, FxpSmallerAction: IoFtp.Core.Models.ExistingTargetAction.Resume, FxpSameAction: IoFtp.Core.Models.ExistingTargetAction.Overwrite, AsciiRules: "*.TXT\nregex:^README$", NoAsciiResume: false, Irc: irc, TransferCategoryOrder: "NFO\nSFV\nMain files\nProof\nSample");
+            var settings = new GlobalSettings(UseAdvancedSkipFilters: true, LogSkipListMatches: true, OverwriteIfResumeFails: true, ActivePortFrom: 49000, ActivePortTo: 49100, PassivePortMin: 50000, PassivePortMax: 51000, FxpSmallerAction: IoFtp.Core.Models.ExistingTargetAction.Resume, FxpSameAction: IoFtp.Core.Models.ExistingTargetAction.Overwrite, AsciiRules: "*.TXT\nregex:^README$", NoAsciiResume: false, Irc: irc, TransferCategoryOrder: "NFO\nSFV\nMain files\nProof\nSample");
             new GlobalSettingsStore(directory).Save(settings);
             var path = Path.Combine(directory, "settings.json");
             Check(!File.ReadAllText(path).Contains(irc.Password), "secret protected on disk");
             var restored = new GlobalSettingsStore(directory).Load();
+            Check(restored.UseAdvancedSkipFilters == true, "advanced skip mode survives restart");
+            Check(restored.LogSkipListMatches, "skip match logging preference survives restart");
+            Check(restored.OverwriteIfResumeFails, "resume overwrite preference survives restart");
+            Check(new GlobalSettings().OverwriteIfResumeFails && new GlobalSettings().DefaultSlots == 2 && new GlobalSettings().DefaultUploadSlots == 1 && new GlobalSettings().DefaultDownloadSlots == 1, "Rush-compatible fresh defaults");
+            var oldJson = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+            oldJson.Remove("ResumeOverwriteDefaultsApplied"); oldJson["OverwriteIfResumeFails"] = false;
+            File.WriteAllText(path, oldJson.ToJsonString());
+            Check(new GlobalSettingsStore(directory).Load().OverwriteIfResumeFails, "older default-off version migrates to standard-on");
+            new GlobalSettingsStore(directory).Save(settings with { OverwriteIfResumeFails = false });
+            Check(!new GlobalSettingsStore(directory).Load().OverwriteIfResumeFails, "explicit disable is retained after migration");
+            new GlobalSettingsStore(directory).Save(settings);
             Check(restored.ActivePortFrom == 49000 && restored.ActivePortTo == 49100 && restored.PassivePortMin == 50000 && restored.PassivePortMax == 51000, "global active/passive ports survive restart");
             Check(restored.FxpSmallerAction == settings.FxpSmallerAction && restored.FxpSameAction == settings.FxpSameAction && restored.AsciiRules == settings.AsciiRules && !restored.NoAsciiResume, "conflict actions and ASCII rules survive restart");
             Check(new GlobalSettingsStore(directory).Load().TransferCategoryOrder == settings.TransferCategoryOrder, "transfer category order survives restart");
@@ -104,7 +115,7 @@ internal static class GlobalSettingsChecks
             File.WriteAllText(Path.Combine(totalDirectory, "total-statistics.json"), "invalid json");
             var recoveredTotals = new TotalStatisticsStore(totalDirectory);
             Check(recoveredTotals.Snapshot().Completed == 4 && recoveredTotals.LastError is not null, "corrupt totals recover from backup with warning");
-            new GlobalSettingsStore(directory).Save(settings with { SkipPatterns = "*.message", MetadataSkipDefaultsApplied = false });
+            new GlobalSettingsStore(directory).Save(settings with { UseAdvancedSkipFilters = false, SkipPatterns = "*.message", MetadataSkipDefaultsApplied = false });
             var skipSettings = new GlobalSettingsStore(directory).Load();
             Check(SkipRuleMatcher.ShouldSkip(skipSettings, "[ioNiNJA]-(2.7GB 20F-COMPLETE)-[ioNiNJA]", true, "Transfer"), "COMPLETE directory skipped");
             Check(SkipRuleMatcher.ShouldSkip(skipSettings, "[ioninja]-(850MB 5F-COMPLETE)-[ioninja]", true, "Transfer"), "COMPLETE size/count and case variations skipped");

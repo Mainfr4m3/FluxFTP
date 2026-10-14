@@ -10,4 +10,8 @@ public static class FtpTransferMode
     public static bool IsAscii(string path, SiteOptions options) => !options.ForceBinaryMode && Lines(options.AsciiRules).Any(rule => Pattern(rule).IsMatch(path.Replace('\\', '/').Split('/')[^1]));
     public static bool CanResume(string path, SiteOptions options) => !options.NoAsciiResume || !IsAscii(path, options);
 }
-public sealed class FtpResumeRejectedException(string message) : IOException(message);
+public sealed class FtpResumeRejectedException(string message, int statusCode = 0) : IOException(message)
+{
+    public int StatusCode { get; } = statusCode;
+    public bool CanOverwrite => (StatusCode is 500 or 501 or 502 or 504 or 550 or 551) && TransferRejection.Category(Message) is null;
+}

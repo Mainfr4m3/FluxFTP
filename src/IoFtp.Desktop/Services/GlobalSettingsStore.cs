@@ -29,6 +29,7 @@ internal sealed class GlobalSettingsStore
 
     private static GlobalSettings AddMetadataSkipDefaults(GlobalSettings settings)
     {
+        if (!settings.ResumeOverwriteDefaultsApplied) settings = settings with { OverwriteIfResumeFails = true, ResumeOverwriteDefaultsApplied = true };
         if (settings.MetadataSkipDefaultsApplied && settings.VideoMetadataSkipDefaultsApplied) return settings;
         var patterns = settings.SkipPatterns.Split(['\r', '\n', ',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var defaults = new List<string>();
@@ -40,7 +41,7 @@ internal sealed class GlobalSettingsStore
     public void Save(GlobalSettings settings)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(_path)!); var temporary = _path + ".tmp";
-        var protectedSettings = settings with { ApiPassword = Protect(settings.ApiPassword), ProxyPassword = Protect(settings.ProxyPassword), Irc = settings.Irc is { } irc ? irc with { Password = Protect(irc.Password) } : null };
+        var protectedSettings = settings with { ResumeOverwriteDefaultsApplied = true, ApiPassword = Protect(settings.ApiPassword), ProxyPassword = Protect(settings.ProxyPassword), Irc = settings.Irc is { } irc ? irc with { Password = Protect(irc.Password) } : null };
         File.WriteAllText(temporary, JsonSerializer.Serialize(protectedSettings, new JsonSerializerOptions { WriteIndented = true }));
         File.Move(temporary, _path, true);
     }

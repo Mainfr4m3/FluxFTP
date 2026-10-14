@@ -47,6 +47,8 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
     public bool IsFinal(string path) => _profiles.ForDirectory(Parent(path)) is null or { MarkerBased: true } ? SourceComplete :
         _payloads.TryGetValue(Parent(path), out var payload) && payload.Complete;
     private static string Parent(string path) => path[..Math.Max(0, path.LastIndexOf('/'))];
+    public string FileFilterDetail(RemoteEntry file) => _profiles.ForDirectory(Parent(file.FullPath))?.FileFilterDetail ?? "no profile";
+    public string FolderFilterDetail(RemoteEntry directory) => _profiles.ForDirectory(Parent(directory.FullPath))?.FolderFilterDetail ?? "no profile";
     public bool AllowsFile(RemoteEntry file) => _profiles.ForDirectory(Parent(file.FullPath))?.Allows(file) ?? true;
     public bool AllowsDirectory(RemoteEntry directory) => _profiles.ForDirectory(Parent(directory.FullPath))?.AllowsFolder(directory.Name) ?? true;
     private bool MatchesComplete(RemoteEntry entry) => CompleteFlag.IsMatch(entry.Name) ||
@@ -67,7 +69,9 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
     }
     private readonly Dictionary<string, bool> _directoryCompletion = new(StringComparer.Ordinal);
     private bool _lastComplete;
-    public void BeginListing() { SourceComplete = false; SourceAvailable = false; DestinationVerified = false; _directoryCompletion.Clear(); }
+    private readonly HashSet<string> _pendingPayloads = new(StringComparer.Ordinal);
+    public bool HasPendingPayload => _pendingPayloads.Count > 0;
+    public void BeginListing() { _pendingPayloads.Clear(); SourceComplete = false; SourceAvailable = false; DestinationVerified = false; _directoryCompletion.Clear(); }
     public void EndListing()
     {
         if (_directoryCompletion.Count > 0) SourceComplete = _directoryCompletion.Values.All(value => value);
@@ -98,6 +102,9 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
     public void InspectListing(IEnumerable<RemoteEntry> children, bool releaseRoot, string? directory = null, Func<RemoteEntry, bool>? includeFile = null)
     {
         var entries = children.ToArray();
+        foreach (var file in entries.Where(entry => !entry.IsDirectory && entry.Size is null or <= 0 &&
+            !IsVerificationMetadata(entry) && !IsCompletionMetadata(entry) && AllowsFile(entry) && (includeFile?.Invoke(entry) ?? true)))
+            _pendingPayloads.Add(file.FullPath);
         if (entries.Any(child => child.Name.StartsWith("REASON-", StringComparison.OrdinalIgnoreCase) ||
             Regex.IsMatch(child.Name, @"(?:^|[\s._\[(-])NUKE(?:D)?(?:$|[\s._\])-])", RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100))))
             throw new InvalidOperationException("NUKE / REASON marker stopped the VISIONARY race.");
@@ -130,7 +137,7 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
     public bool NeedsTransfer(string path, long? size, DateTimeOffset? modified, Func<Guid, string?> status)
     {
         ThrowIfStopped();
-        if (DestinationAlreadyComplete) return false;
+        if (DestinationAlreadyComplete || size is null or <= 0) return false;
         if (!_files.TryGetValue(path, out var prior)) return true;
         var state = status(prior.Job);
         if (state is null or "Cancelled") throw new OperationCanceledException("A race job was removed or cancelled.");
@@ -158,6 +165,6 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
     }
 
     public bool IsSkipped(string path, Func<Guid, string?> status) => _files.TryGetValue(path, out var file) && status(file.Job) == "Skipped";
-    public bool Finished(Func<Guid, string?> status) => DestinationAlreadyComplete || SourceComplete && _files.Count > 0 &&
+    public bool Finished(Func<Guid, string?> status) => DestinationAlreadyComplete || !HasPendingPayload && SourceComplete && _files.Count > 0 &&
         _files.All(pair => status(pair.Value.Job) == "Skipped" || IsFinal(pair.Key) && pair.Value.Final && status(pair.Value.Job) == "Completed");
 }

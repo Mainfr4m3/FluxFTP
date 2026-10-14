@@ -91,11 +91,15 @@ public partial class GlobalSettingsWindow : Window
         SameActionBox.SelectedItem = s.FxpSameAction ?? (s.FxpSkipSameTarget ? ExistingTargetAction.Skip : ExistingTargetAction.Overwrite);
         LargerActionBox.SelectedItem = s.FxpLargerAction ?? (s.FxpSkipLargerTarget ? ExistingTargetAction.Skip : ExistingTargetAction.Overwrite);
         NoAsciiResumeBox.IsChecked = s.NoAsciiResume;
+        ResumeOverwriteBox.IsChecked = s.OverwriteIfResumeFails;
         foreach (var rule in s.AsciiRules.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) AsciiRulesList.Items.Add(rule);
         PriorityPatternsBox.Text=s.PriorityPatterns;
         foreach (var category in TransferFilePriority.Categories(s.TransferCategoryOrder)) PriorityCategoriesList.Items.Add(category);
         PriorityCategoriesList.SelectedIndex = 0;
         SkipPatternsBox.Text=s.SkipPatterns;
+        UseAdvancedSkipBox.IsChecked = SkipRuleMatcher.UsesAdvanced(s);
+        UpdateSkipFilterMode();
+        LogSkipMatchesBox.IsChecked = s.LogSkipListMatches;
         EnableSkipListBox.IsChecked=s.EnableSkipList; SkipZeroByteBox.IsChecked=s.SkipZeroByteFiles;
         SkipEmptyDirectoryBox.IsChecked=s.SkipEmptyDirectories; ApplySkipFoldersBox.IsChecked=s.ApplySkipListToFolders;
         SkipModeBox.ItemsSource = new[] { "Both", "Auto", "Manual" }; SkipModeBox.SelectedItem=s.SkipTransferMode;
@@ -143,8 +147,8 @@ public partial class GlobalSettingsWindow : Window
             FxpSmallerAction = (ExistingTargetAction)SmallerActionBox.SelectedItem,
             FxpSameAction = (ExistingTargetAction)SameActionBox.SelectedItem,
             FxpLargerAction = (ExistingTargetAction)LargerActionBox.SelectedItem,
-            AsciiRules = string.Join("\n", AsciiRulesList.Items.Cast<string>()), NoAsciiResume = NoAsciiResumeBox.IsChecked == true, PassivePortMin = passiveMin, PassivePortMax = passiveMax,
-            EnableSkipList=EnableSkipListBox.IsChecked==true, SkipZeroByteFiles=SkipZeroByteBox.IsChecked==true,
+            AsciiRules = string.Join("\n", AsciiRulesList.Items.Cast<string>()), OverwriteIfResumeFails = ResumeOverwriteBox.IsChecked == true, NoAsciiResume = NoAsciiResumeBox.IsChecked == true, PassivePortMin = passiveMin, PassivePortMax = passiveMax,
+            UseAdvancedSkipFilters = UseAdvancedSkipBox.IsChecked == true, LogSkipListMatches = LogSkipMatchesBox.IsChecked == true, EnableSkipList=EnableSkipListBox.IsChecked==true, SkipZeroByteFiles=SkipZeroByteBox.IsChecked==true,
             SkipEmptyDirectories=SkipEmptyDirectoryBox.IsChecked==true, ApplySkipListToFolders=ApplySkipFoldersBox.IsChecked==true,
             SkipTransferMode=SkipModeBox.SelectedItem?.ToString() ?? "Both", SkippedItemColor=SkippedColorBox.Text.Trim() };
         try { new GlobalSettingsStore().Save(Settings); }
@@ -241,7 +245,7 @@ public partial class GlobalSettingsWindow : Window
     }
     private SkipListPackage ReadSkipPackage() => new(SkipPatternsBox.Text, _advancedSkipRules.ToArray(),
         EnableSkipListBox.IsChecked==true, SkipZeroByteBox.IsChecked==true, SkipEmptyDirectoryBox.IsChecked==true,
-        ApplySkipFoldersBox.IsChecked==true, SkipModeBox.SelectedItem?.ToString() ?? "Both", SkippedColorBox.Text.Trim());
+        ApplySkipFoldersBox.IsChecked==true, SkipModeBox.SelectedItem?.ToString() ?? "Both", SkippedColorBox.Text.Trim(), UseAdvancedSkipBox.IsChecked == true);
 
     private void SkippedColor_Click(object sender, RoutedEventArgs e)
     {
@@ -260,6 +264,8 @@ public partial class GlobalSettingsWindow : Window
             package.Validate();
             _ = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(package.Color);
             SkipPatternsBox.Text=package.Patterns; _advancedSkipRules=[.. package.Rules ?? []];
+            UseAdvancedSkipBox.IsChecked = package.UseAdvancedFilters ?? _advancedSkipRules.Any(rule => !string.IsNullOrWhiteSpace(rule.Pattern));
+            UpdateSkipFilterMode();
             EnableSkipListBox.IsChecked=package.Enabled; SkipZeroByteBox.IsChecked=package.ZeroByteFiles;
             SkipEmptyDirectoryBox.IsChecked=package.EmptyDirectories; ApplySkipFoldersBox.IsChecked=package.ApplyToFolders;
             SkipModeBox.SelectedItem=package.Mode; SkippedColorBox.Text=package.Color;
@@ -281,10 +287,32 @@ public partial class GlobalSettingsWindow : Window
         catch(Exception exception) { ErrorText.Text="Skip list export failed: "+exception.Message; }
     }
 
+    private void SkipFilterMode_Changed(object sender, RoutedEventArgs e) => UpdateSkipFilterMode();
+    private void UpdateSkipFilterMode()
+    {
+        if (SkipPatternsBox is null || SkipFilterNotice is null || UseAdvancedSkipBox is null) return;
+        var advanced = !_visionaryBridge && UseAdvancedSkipBox.IsChecked == true;
+        UseAdvancedSkipBox.IsEnabled = !_visionaryBridge;
+        SkipPatternsBox.IsEnabled = !advanced;
+        if (EnableSkipListBox is not null) EnableSkipListBox.Content = advanced ? "Enable advanced filters" : "Enable Skip List";
+        if (_visionaryBridge)
+        {
+            SkipFilterNotice.Text = "Visionary applies its per-site release/section regex rules before sending chains. Flux advanced filters are disabled. You may enable the normal wildcard skiplist here. Resume/Skip/Overwrite target-file actions remain available under FXP.";
+            return;
+        }
+        SkipFilterNotice.Text = advanced
+            ? "Advanced filters are active. The normal wildcard skiplist is disabled and is not evaluated. Its saved patterns are preserved. Uncheck Use advanced filters to return to normal mode."
+            : "Normal wildcard skiplist is active. Advanced filters are not evaluated. Choosing regex rules in Advanced switches to advanced mode and disables this list. Common skip options apply in both modes.";
+    }
     private void AdvancedSkiplist_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new AdvancedSkiplistWindow(_advancedSkipRules) { Owner = this };
-        if (dialog.ShowDialog() == true) _advancedSkipRules = [.. dialog.Rules];
+        if (dialog.ShowDialog() == true)
+        {
+            _advancedSkipRules = [.. dialog.Rules];
+            if (_advancedSkipRules.Any(rule => rule.Regex && !string.IsNullOrWhiteSpace(rule.Pattern))) UseAdvancedSkipBox.IsChecked = true;
+            UpdateSkipFilterMode();
+        }
     }
     private async void TestProxy_Click(object sender, RoutedEventArgs e)
     {

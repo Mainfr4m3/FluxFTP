@@ -5,14 +5,21 @@ namespace IoFtp.Desktop.Services;
 
 internal static class SkipRuleMatcher
 {
+    public static bool UsesAdvanced(GlobalSettings settings) => !settings.EnableVisionaryBridge && (settings.UseAdvancedSkipFilters ?? (settings.AdvancedSkipRules?.Any(rule => !string.IsNullOrWhiteSpace(rule.Pattern)) == true));
+
     public static bool Applies(GlobalSettings settings, bool automatic) => settings.EnableSkipList &&
         (settings.SkipTransferMode == "Both" || settings.SkipTransferMode == (automatic ? "Auto" : "Manual"));
 
-    public static bool ShouldSkip(GlobalSettings settings, string name, bool isDirectory = false, string scope = "Allround", bool automatic = false, long? size = null)
+    public static bool ShouldSkip(GlobalSettings settings, string name, bool isDirectory = false, string scope = "Allround", bool automatic = false, long? size = null) =>
+        FindMatch(settings, name, isDirectory, scope, automatic, size)?.Denied == true;
+
+    public static SkipRuleMatch? FindMatch(GlobalSettings settings, string name, bool isDirectory = false, string scope = "Allround", bool automatic = false, long? size = null)
     {
-        if (!Applies(settings, automatic)) return false;
-        if (!isDirectory && settings.SkipZeroByteFiles && size == 0) return true;
-        if (isDirectory && !settings.ApplySkipListToFolders) return false;
+        if (!Applies(settings, automatic)) return null;
+        if (!isDirectory && settings.SkipZeroByteFiles && size == 0) return new(true, "Skip Zero Byte File", "reported size=0");
+        if (isDirectory && !settings.ApplySkipListToFolders) return null;
+        if (UsesAdvanced(settings))
+        {
         foreach (var rule in settings.AdvancedSkipRules ?? [])
         {
             if (string.IsNullOrWhiteSpace(rule.Pattern) || !TypeMatches(rule.EntryType, isDirectory) || !ScopeMatches(rule.Scope, scope))
@@ -26,12 +33,16 @@ internal static class SkipRuleMatcher
             }
             catch (ArgumentException) { continue; }
             catch (RegexMatchTimeoutException) { continue; }
-            if (matches) return rule.Action.Equals("Deny", StringComparison.OrdinalIgnoreCase);
+            if (matches) return new(rule.Action.Equals("Deny", StringComparison.OrdinalIgnoreCase), rule.Regex ? "Global regex" : "Global wildcard", $"pattern={rule.Pattern}; action={rule.Action}; type={rule.EntryType}; scope={rule.Scope}");
+        }
+
+        return null; // Advanced mode never falls through to the normal wildcard list.
         }
 
         var patterns = settings.SkipPatterns.Split(['\r', '\n', ',', ';'],
             StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        return patterns.Any(pattern => System.IO.Enumeration.FileSystemName.MatchesSimpleExpression(pattern, name, true));
+        var pattern = patterns.FirstOrDefault(pattern => System.IO.Enumeration.FileSystemName.MatchesSimpleExpression(pattern, name, true));
+        return pattern is null ? null : new(true, "Global wildcard list", "pattern=" + pattern);
     }
 
     private static bool TypeMatches(string type, bool isDirectory) =>
@@ -44,3 +55,5 @@ internal static class SkipRuleMatcher
         configured.Equals("Allround", StringComparison.OrdinalIgnoreCase) ||
         configured.Equals(requested, StringComparison.OrdinalIgnoreCase);
 }
+
+internal sealed record SkipRuleMatch(bool Denied, string Source, string Detail);

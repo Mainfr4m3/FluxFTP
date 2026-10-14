@@ -38,6 +38,7 @@
                     <TextBlock Text="Target same size" Margin="0,4,0,2"/><ComboBox x:Name="SameActionBox" Margin="0,2"/>
                     <TextBlock Text="Target larger" Margin="0,4,0,2"/><ComboBox x:Name="LargerActionBox" Margin="0,2"/>
                     <TextBlock Text="Applies to normal FXP and RACE files. Verified COMPLETE releases are still skipped. Resume uses REST on both servers for a smaller binary target; ASCII resume can be disabled in ASCII List. Zero-byte targets restart; Resume on a larger target uses Overwrite. Servers may reject writes due to dupe protection." TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" Margin="0,8,0,12"/>
+                    <CheckBox x:Name="ResumeOverwriteBox" Content="Auto overwrite file if resume is rejected" Margin="0,4,0,12" ToolTip="One restart from zero after a rejected REST command. Applies to upload, download and FXP/RACE. Does not apply to cancellation, timeout, dupe or file locks."/>
                     <TextBlock Text="FXP average speed" FontWeight="SemiBold"/>
                     <CheckBox x:Name="FxpSpeedMonitoringBox" Content="Measure average speed per completed FXP file" Margin="0,14,0,8"/>
                     <CheckBox x:Name="DownloadMeasurementBox" Content="Download measurement (diagnostic timing)" Margin="0,8,0,8"/>
@@ -65,13 +66,15 @@
                 </Grid></TabItem>
                 <TabItem Header="Skiplist"><Grid Margin="16"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                     <StackPanel>
+                        <CheckBox x:Name="LogSkipMatchesBox" Content="Log skiplist matches (rule and file size)" Margin="0,4"/>
                         <WrapPanel><CheckBox x:Name="EnableSkipListBox" Content="Enable Skip List" Margin="0,4,20,4"/><CheckBox x:Name="SkipZeroByteBox" Content="Skip Zero Byte File" Margin="0,4,20,4"/><CheckBox x:Name="SkipEmptyDirectoryBox" Content="Skip Empty Directory" Margin="0,4"/></WrapPanel>
                         <CheckBox x:Name="ApplySkipFoldersBox" Content="Apply Skip List to Folder" Margin="0,4"/>
                         <WrapPanel Margin="0,8"><TextBlock Text="Skip mode" VerticalAlignment="Center" Margin="0,0,10,0"/><ComboBox x:Name="SkipModeBox" Width="170"/><TextBlock Text="Skipped item color" VerticalAlignment="Center" Margin="15,0,10,0"/><TextBox x:Name="SkippedColorBox" Width="90"/><Button Content="Choose…" Click="SkippedColor_Click"/></WrapPanel>
-                        <WrapPanel><Button Content="Add / Edit / Delete rules…" Click="AdvancedSkiplist_Click"/><Button Content="Import…" Click="ImportSkipList_Click"/><Button Content="Export…" Click="ExportSkipList_Click"/></WrapPanel>
+                        <CheckBox x:Name="UseAdvancedSkipBox" Content="Use advanced filters instead of the normal skiplist" Checked="SkipFilterMode_Changed" Unchecked="SkipFilterMode_Changed" Margin="0,4"/>
+                        <WrapPanel><Button Content="Advanced…" Click="AdvancedSkiplist_Click"/><Button Content="Import…" Click="ImportSkipList_Click"/><Button Content="Export…" Click="ExportSkipList_Click"/></WrapPanel>
                     </StackPanel>
                     <TextBox x:Name="SkipPatternsBox" Grid.Row="1" Margin="0,10" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" FontFamily="{DynamicResource AppMonospaceFontFamily}"/>
-                    <TextBlock Grid.Row="2" Text="Simple list: one wildcard per line. Advanced supports regex, file/folder types and ordered Allow/Deny rules. Auto includes API, PRE and VISIONARY. Growing RACE files are not skipped solely because they are currently zero bytes." Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap"/>
+                    <TextBlock x:Name="SkipFilterNotice" Grid.Row="2" Text="Normal mode: one wildcard per line. Selecting regex rules in Advanced disables the normal list. Only one filter mode is used at a time; both lists remain saved." Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap"/>
                 </Grid></TabItem>
                 <TabItem Header="Prio List"><Grid Margin="16"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                     <TextBlock Text="Transfer category order — highest priority first" FontWeight="SemiBold"/>

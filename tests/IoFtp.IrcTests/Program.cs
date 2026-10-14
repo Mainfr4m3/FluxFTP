@@ -8,6 +8,10 @@ using IoFtp.Desktop.Models;
 using IoFtp.Desktop.Services;
 
 var assertions = 0;
+if (args.FirstOrDefault() == "--skip-filter-mode-checks") { SkipFilterModeChecks.Run(); return; }
+if (args.FirstOrDefault() == "--skip-match-checks") { SkipMatchChecks.Run(); return; }
+if (args.FirstOrDefault() == "--race-empty-source-checks") { RaceEmptySourceChecks.Run(); return; }
+if (args.FirstOrDefault() == "--resume-recovery-checks") { await ResumeRecoveryChecks.Run(); return; }
 if (args.FirstOrDefault() == "--global-port-checks") { GlobalPortChecks.Run(); return; }
 if (args.FirstOrDefault() == "--passive-port-checks") { await PassivePortChecks.Run(); return; }
 if (args.FirstOrDefault() == "--transfer-policy-checks") { await TransferPolicyChecks.Run(); return; }

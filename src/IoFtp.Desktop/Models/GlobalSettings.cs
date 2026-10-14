@@ -16,9 +16,9 @@ public sealed record GlobalSettings(
     int TransferHistory = 10000,
     int LogBufferHistory = 4096,
     string DefaultUsername = "anonymous",
-    int DefaultSlots = 4,
-    int DefaultUploadSlots = 2,
-    int DefaultDownloadSlots = 2,
+    int DefaultSlots = 2,
+    int DefaultUploadSlots = 1,
+    int DefaultDownloadSlots = 1,
     TransferProtocol DefaultProtocol = TransferProtocol.FtpsExplicit,
     int DefaultIdleSeconds = 60,
     string LocalDownloadPath = "",
@@ -62,7 +62,11 @@ public sealed record GlobalSettings(
     ExistingTargetAction? FxpLargerAction = null,
     string AsciiRules = IoFtp.Core.Transport.FtpTransferMode.DefaultAsciiRules,
     bool NoAsciiResume = true,
-    int PassivePortMin = 0, int PassivePortMax = 0);
+    int PassivePortMin = 0, int PassivePortMax = 0,
+    bool OverwriteIfResumeFails = true,
+    bool ResumeOverwriteDefaultsApplied = false,
+    bool LogSkipListMatches = false,
+    bool? UseAdvancedSkipFilters = null);
 
 public sealed record ViewLayoutSettings(string[]? HiddenColumns = null, string SortBy = "Name",
     bool Descending = false, string FontFamily = "", double FontSize = 0, bool Bold = false);

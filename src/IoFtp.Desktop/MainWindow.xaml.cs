@@ -1591,8 +1591,23 @@ public partial class MainWindow : Window
 
     private int PriorityRank(string name, string sourcePath) => TransferFilePriority.Rank(name, sourcePath, _settings);
 
-    private bool ShouldSkip(string name, bool isDirectory = false, bool automatic = false, long? size = null) =>
-        SkipRuleMatcher.ShouldSkip(_settings, name, isDirectory, "Transfer", automatic, size);
+    private readonly HashSet<string> _loggedSkipMatches = new(StringComparer.Ordinal);
+    private void LogSkipMatch(string name, string reason, bool isDirectory, bool automatic, long? size)
+    {
+        if (!_settings.LogSkipListMatches) return;
+        var text = $"{name} | {(isDirectory ? "directory" : "file")}; size={(size?.ToString() ?? "unknown")}; mode={(automatic ? "Auto" : "Manual")}; {reason}";
+        if (_loggedSkipMatches.Count >= 4096) _loggedSkipMatches.Clear();
+        if (!_loggedSkipMatches.Add(text)) return;
+        _raceLog.Write("SKIP-MATCH", text);
+        LogText.AppendText(Environment.NewLine + "Skiplist match: " + text);
+    }
+    private bool ShouldSkip(string name, bool isDirectory = false, bool automatic = false, long? size = null)
+    {
+        var match = SkipRuleMatcher.FindMatch(_settings, name, isDirectory, "Transfer", automatic, size);
+        if (match?.Denied != true) return false;
+        LogSkipMatch(name, match.Source + "; " + match.Detail, isDirectory, automatic, size);
+        return true;
+    }
 
     private void ConfigureSkippedItemColors()
     {
@@ -1962,7 +1977,7 @@ public partial class MainWindow : Window
                 session.EnableDownloadMeasurement = measureDownload;
                 var measurement = await LocalDownload.RunAsync(entry.Destination,
                     (output, offset) => session.DownloadAsync(source, output, offset, progress, cancellationToken),
-                    progress, cancellationToken, allowResume: FtpTransferMode.CanResume(source, (entry.Direction == TransferDirection.ApiDownload ? apiProfile! : entry.Direction == TransferDirection.Download ? rightProfile! : leftProfile!).EffectiveOptions));
+                    progress, cancellationToken, allowResume: FtpTransferMode.CanResume(source, (entry.Direction == TransferDirection.ApiDownload ? apiProfile! : entry.Direction == TransferDirection.Download ? rightProfile! : leftProfile!).EffectiveOptions), overwriteIfResumeRejected: _settings.OverwriteIfResumeFails, reconnect: () => session.ReconnectForRetryAsync(cancellationToken), log: message => Dispatcher.BeginInvoke(() => { LogText.AppendText(Environment.NewLine + entry.Name + ": " + message); _raceLog.Write("RESUME", entry.Id + " " + message); }));
                 entry.BytesTransferred = measurement.ResumeOffset + measurement.Bytes;
                 sessionNewBytes = measurement.Bytes;
                 if (measureDownload)
@@ -1980,7 +1995,12 @@ public partial class MainWindow : Window
                 await using var input = new FileStream(entry.Source, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, true);
                 var offset = FtpTransferMode.CanResume(entry.Destination, (entry.Direction == TransferDirection.Upload ? rightProfile! : leftProfile!).EffectiveOptions) ? Math.Min(entry.BytesTransferred, input.Length) : 0; input.Seek(offset, SeekOrigin.Begin);
                 sessionNewBytes = input.Length - offset;
-                await session.UploadAsync(entry.Destination, input, offset, progress, cancellationToken);
+                await ResumeRecovery.RunAsync(offset, _settings.OverwriteIfResumeFails, async attemptOffset =>
+                {
+                    input.Position = attemptOffset;
+                    sessionNewBytes = input.Length - attemptOffset;
+                    await session.UploadAsync(entry.Destination, input, attemptOffset, progress, cancellationToken);
+                }, async () => { await session.ReconnectForRetryAsync(cancellationToken); entry.BytesTransferred = 0; }, message => { LogText.AppendText(Environment.NewLine + entry.Name + ": " + message); _raceLog.Write("RESUME", entry.Id + " " + message); }, cancellationToken);
                 AppendTransferIntegrityNotices(entry, ("destination", session));
             }
             else
@@ -2027,6 +2047,7 @@ public partial class MainWindow : Window
                 var useReverse = configuredReverse ?? (learnedReverse || sourceCpsvPreferred);
                 if (directFxpAvailable)
                 {
+                    var resumeOverwriteAttempted = false;
                     try
                     {
                         LogText.AppendText($"{Environment.NewLine}Attempting direct {(clearFxp ? "clear" : "secure")} FXP: {entry.Name}");
@@ -2037,7 +2058,10 @@ public partial class MainWindow : Window
                         entry.FxpLiveMeasured = false;
                         entry.FxpSpeedUnavailable = false;
 
+                        async Task TransferAttempt(long attemptOffset)
                         {
+                            fxpOffset = attemptOffset;
+                            sessionNewBytes = Math.Max(0, entry.TotalBytes - attemptOffset);
                             if (useReverse)
                             {
                                 var routeSource = configuredReverse == true ? "configured" : learnedReverse ? "learned" : "source CPSV preferred";
@@ -2060,6 +2084,9 @@ public partial class MainWindow : Window
                                 }
                             }
                         }
+                        await ResumeRecovery.RunAsync(fxpOffset, _settings.OverwriteIfResumeFails, TransferAttempt,
+                            () => { resumeOverwriteAttempted = true; return Task.WhenAll(sourceSession.ReconnectForRetryAsync(cancellationToken), destinationSession.ReconnectForRetryAsync(cancellationToken)); },
+                            message => { LogText.AppendText(Environment.NewLine + entry.Name + ": " + message); _raceLog.Write("RESUME", entry.Id + " " + message); }, cancellationToken);
                         if (entry.TotalBytes > 0) entry.BytesTransferred = entry.TotalBytes;
                         if (measureAverage && !asciiFxp && PassiveFxpAverage.Calculate(sessionNewBytes, sourceSession.LastFxpTransferElapsed) is { } average)
                         {
@@ -2078,6 +2105,7 @@ public partial class MainWindow : Window
                         reuseWorkers = true;
                         return;
                     }
+                    catch (Exception) when (resumeOverwriteAttempted) { throw; }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
                     catch (FtpPassivePortException) { throw; }
                     catch (FtpResumeRejectedException) { throw; }
@@ -3108,6 +3136,7 @@ public partial class MainWindow : Window
         if (dialog.ShowDialog() == true && dialog.Settings is not null)
         {
             _settings = dialog.Settings;
+            _loggedSkipMatches.Clear();
             ConfigureSkippedItemColors();
             var priorityProfiles = new ProfileStore().Load().ToDictionary(profile => profile.Id);
             var ranks = _engine.Snapshot().ToDictionary(status => status.Item.Id, status => TransferFilePriority.Rank(
@@ -3422,16 +3451,17 @@ public partial class MainWindow : Window
             if (nuke.IsNuked)
                 throw new InvalidOperationException($"Nuke detection blocked automated transfer: {sourceDirectory} ({nuke.Display}).");
             race?.InspectListing(children, sourceDirectory == source, sourceDirectory, child => !ShouldSkip(child.Name, child.IsDirectory, true));
-            if (SkipRuleMatcher.Applies(_settings, true) && _settings.SkipEmptyDirectories && !children.Any(child => child.Name is not ("." or ".."))) return;
+            if (SkipRuleMatcher.Applies(_settings, true) && _settings.SkipEmptyDirectories && !children.Any(child => child.Name is not ("." or ".."))) { LogSkipMatch(sourceDirectory, "Skip Empty Directory; listing has no child entries", true, true, null); return; }
             foreach (var child in children)
             {
                 if (child.Name is "." or ".." || ShouldSkip(child.Name, child.IsDirectory, true,
                     race is null || race.IsFinal(child.FullPath) ? child.Size : null)) continue;
-                if (race is not null && (race.IsCompletionMetadata(child) || VisionaryRaceState.IsVerificationMetadata(child))) continue;
-                if (child.IsDirectory && race?.AllowsDirectory(child) == false) continue;
+                if (race is not null && (race.IsCompletionMetadata(child) || !_settings.EnableVisionaryBridge && VisionaryRaceState.IsVerificationMetadata(child))) continue;
+                if (child.IsDirectory && race?.AllowsDirectory(child) == false) { LogSkipMatch(child.FullPath, "VISIONARY folder filter; " + race.FolderFilterDetail(child), true, true, null); continue; }
                 var childDestination = NormalizeRemotePath($"{destinationDirectory}/{child.Name}");
                 if (child.IsDirectory) await QueueDirectory(child.FullPath, childDestination);
                 else if (race?.AllowsFile(child) != false) apiFiles.Add((child, childDestination));
+                else LogSkipMatch(child.FullPath, "VISIONARY file filter; " + race!.FileFilterDetail(child), false, true, child.Size);
             }
         }
         if (item.IsDirectory) await QueueDirectory(source, destination);
@@ -3443,11 +3473,12 @@ public partial class MainWindow : Window
         }
         timeout.Token.ThrowIfCancellationRequested();
         race?.EndListing();
+        if (race?.HasPendingPayload == true) race.StartTrace?.Mark("waiting-source-payload", "zero or unknown source size; rescan before transfer");
         race?.StartTrace?.Mark("source-inventory-ready", $"eligible-files={apiFiles.Count}");
         if (apiFiles.Count > 0) race?.StartTrace?.Mark("first-eligible-payload", $"files={apiFiles.Count}");
         // Inspect raw destination listings before skip rules and before creating transfer jobs.
         // A marker alone cannot prove that the expected payload exists at the right sizes.
-        if (race is not null && apiFiles.Count > 0)
+        if (race is not null && apiFiles.Count > 0 && !race.HasPendingPayload)
         {
             try
             {

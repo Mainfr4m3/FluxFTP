@@ -9,7 +9,7 @@ internal static class LocalDownload
     // Async reads may complete synchronously; keep the entire data loop and
     // filesystem work off the WPF dispatcher, including SFTP's blocking calls.
     internal static Task<Measurement> RunAsync(string destination, Func<Stream, long, Task> download,
-        IProgress<long>? progress, CancellationToken cancellationToken, bool allowResume = true) => Task.Run(async () =>
+        IProgress<long>? progress, CancellationToken cancellationToken, bool allowResume = true, bool overwriteIfResumeRejected = false, Func<Task>? reconnect = null, Action<string>? log = null) => Task.Run(async () =>
     {
         var elapsed = Stopwatch.StartNew();
         long resume, bytes;
@@ -23,7 +23,11 @@ internal static class LocalDownload
             output.Seek(0, SeekOrigin.End);
             resume = output.Length;
             progress?.Report(output.Length);
-            await download(output, output.Length).ConfigureAwait(false);
+            await ResumeRecovery.RunAsync(resume, overwriteIfResumeRejected, offset => download(output, offset), async () =>
+            {
+                if (reconnect is not null) await reconnect().ConfigureAwait(false);
+                output.SetLength(0); output.Position = 0; resume = 0; progress?.Report(0);
+            }, log, cancellationToken).ConfigureAwait(false);
             bytes = output.Length;
             var flushing = Stopwatch.StartNew();
             await output.FlushAsync(cancellationToken).ConfigureAwait(false);
