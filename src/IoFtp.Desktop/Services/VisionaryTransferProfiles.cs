@@ -46,6 +46,9 @@ internal sealed class VisionaryPayloadProfile(string name, string directory, str
 
 internal sealed class VisionaryTransferProfiles
 {
+    internal sealed record SavedEntry(string Section, string Key, string Value);
+    public static SavedEntry[] Import(string path) => new VisionaryConfiguration(path).Entries
+        .Select(entry => new SavedEntry(entry.Section, entry.Key, entry.Value)).ToArray();
     private readonly VisionaryPayloadProfile[] _profiles;
     private VisionaryTransferProfiles(VisionaryPayloadProfile[] profiles) => _profiles = profiles;
     public VisionaryPayloadProfile? ForDirectory(string path) => _profiles.FirstOrDefault(profile => profile.Directory.Length > 0 &&
@@ -53,9 +56,9 @@ internal sealed class VisionaryTransferProfiles
         _profiles.FirstOrDefault(profile => profile.Detection?.IsMatch(path) == true) ??
         _profiles.FirstOrDefault(profile => profile.Name == "normal");
 
-    public static VisionaryTransferProfiles Load(string path = "")
+    public static VisionaryTransferProfiles Load(string path = "", SavedEntry[]? savedEntries = null)
     {
-        var entries = string.IsNullOrWhiteSpace(path) ? [] : new VisionaryConfiguration(path).Entries;
+        var entries = savedEntries ?? (string.IsNullOrWhiteSpace(path) ? [] : Import(path));
         string Value(string section, string key, string fallback) => entries.LastOrDefault(entry =>
             entry.Section.Equals(section, StringComparison.OrdinalIgnoreCase) && entry.Key.Equals(key, StringComparison.OrdinalIgnoreCase))?.Value ?? fallback;
         var profiles = new List<VisionaryPayloadProfile>();

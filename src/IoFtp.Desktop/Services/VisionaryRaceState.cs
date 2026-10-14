@@ -8,15 +8,25 @@ namespace IoFtp.Desktop.Services;
 
 internal sealed record VisionaryRaceOptions(
     string CompleteFlag = VisionaryRaceOptions.DefaultCompleteFlag,
-    int RefreshSeconds = 3, int TimeoutMinutes = 5, string RushOptionsPath = "")
+    int RefreshSeconds = 3, int TimeoutMinutes = 5, string RushOptionsPath = "",
+    VisionaryTransferProfiles.SavedEntry[]? ImportedProfiles = null)
 {
     public const string LegacyCompleteFlag = @"(?:^|[\s\[\]()._-])(?:COMPLETE|FINISHED)(?:$|[\s\[\]()._-])|100%";
     public const string DefaultCompleteFlag = @"(?:^|[\s\[\]()._-])(?:COMPLETED?|FINISHED)(?:$|[\s\[\]()._-])|(?<![\d.,])100(?:[.,]0+)?\s*%";
-    // Bound the entire watch, including admission wait, even with older saved settings.
-    public TimeSpan EffectiveTimeout => TimeSpan.FromMinutes(Math.Clamp(TimeoutMinutes, 1, 5));
+    // The configured lifetime includes admission wait as well as the active watch.
+    public TimeSpan EffectiveTimeout => TimeSpan.FromMinutes(Math.Clamp(TimeoutMinutes, 1, 1440));
     private static string FilePath => Path.Combine(AppContext.BaseDirectory, "FluxFTP-visionary-race.json");
-    public static VisionaryRaceOptions Load() => File.Exists(FilePath)
-        ? JsonSerializer.Deserialize<VisionaryRaceOptions>(File.ReadAllText(FilePath)) ?? new() : new();
+    public static VisionaryRaceOptions Load()
+    {
+        var options = File.Exists(FilePath)
+            ? JsonSerializer.Deserialize<VisionaryRaceOptions>(File.ReadAllText(FilePath)) ?? new() : new();
+        if (options.ImportedProfiles is null && !string.IsNullOrWhiteSpace(options.RushOptionsPath))
+        {
+            options.Save(); // Migrate the previously selected file once while it is still available.
+            options = JsonSerializer.Deserialize<VisionaryRaceOptions>(File.ReadAllText(FilePath))!;
+        }
+        return options;
+    }
     public Regex Validate()
     {
         if (RefreshSeconds is < 1 or > 60 || TimeoutMinutes is < 1 or > 1440)
@@ -30,8 +40,21 @@ internal sealed record VisionaryRaceOptions(
     public void Save()
     {
         Validate();
-        VisionaryTransferProfiles.Load(RushOptionsPath);
-        File.WriteAllText(FilePath + ".tmp", JsonSerializer.Serialize(this));
+        var entries = ImportedProfiles;
+        if (entries is null)
+        {
+            if (string.IsNullOrWhiteSpace(RushOptionsPath)) entries = [];
+            else if (File.Exists(RushOptionsPath)) entries = VisionaryTransferProfiles.Import(RushOptionsPath);
+            else
+            {
+                var previous = File.Exists(FilePath) ? JsonSerializer.Deserialize<VisionaryRaceOptions>(File.ReadAllText(FilePath)) : null;
+                if (previous?.ImportedProfiles is null || !string.Equals(previous.RushOptionsPath, RushOptionsPath, StringComparison.OrdinalIgnoreCase))
+                    throw new FileNotFoundException("Import the transfer profile file once before removing it.", RushOptionsPath);
+                entries = previous.ImportedProfiles;
+            }
+        }
+        VisionaryTransferProfiles.Load(savedEntries: entries);
+        File.WriteAllText(FilePath + ".tmp", JsonSerializer.Serialize(this with { ImportedProfiles = entries }));
         File.Move(FilePath + ".tmp", FilePath, true);
     }
 }
@@ -43,7 +66,7 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
     private readonly Dictionary<string, Tracked> _files = new(StringComparer.Ordinal);
     private sealed record PayloadSnapshot(string Signature, DateTimeOffset Changed, bool Complete);
     private readonly Dictionary<string, PayloadSnapshot> _payloads = new(StringComparer.Ordinal);
-    private readonly VisionaryTransferProfiles _profiles = profiles ?? VisionaryTransferProfiles.Load(options.RushOptionsPath);
+    private readonly VisionaryTransferProfiles _profiles = profiles ?? VisionaryTransferProfiles.Load(options.RushOptionsPath, options.ImportedProfiles);
     public bool IsFinal(string path) => _profiles.ForDirectory(Parent(path)) is null or { MarkerBased: true } ? SourceComplete :
         _payloads.TryGetValue(Parent(path), out var payload) && payload.Complete;
     private static string Parent(string path) => path[..Math.Max(0, path.LastIndexOf('/'))];

@@ -32,7 +32,7 @@
    <TextBox x:Name="CompleteFlagBox" Margin="0,4"/>
    <WrapPanel Margin="0,0,0,8">
     <TextBlock Text="Rescan seconds" VerticalAlignment="Center"/><TextBox x:Name="RefreshBox" Width="45"/>
-    <TextBlock Text="Timeout minutes" VerticalAlignment="Center"/><TextBox x:Name="TimeoutBox" Width="55"/>
+    <TextBlock Text="Maximum lifetime (minutes)" VerticalAlignment="Center"/><TextBox x:Name="TimeoutBox" Width="55" ToolTip="1–1440 minutes; default 5. Includes waiting for slots. Changes apply to new races."/>
     <Button Content="Save race settings" Click="SaveRace_Click"/>
     <Button Content="Use selected completeflag" Click="UseFlag_Click"/>
    </WrapPanel>

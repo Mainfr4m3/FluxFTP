@@ -8,6 +8,22 @@ internal static class RaceFlowChecks
     {
         var checks = 0;
         void Check(bool value, string name) { if (!value) throw new Exception(name); checks++; }
+        var profileFolder = Path.Combine(Path.GetTempPath(), "Flux-profile-import-" + Guid.NewGuid());
+        Directory.CreateDirectory(profileFolder);
+        try
+        {
+            var original = Path.Combine(profileFolder, "rushopt.ini");
+            File.WriteAllText(original, "[normal]\nfileallow=\\.rar$\nfileskip=blocked\nrushopt=RS_EXPR\ncompleteflag=COMPLETE\nretrycount=4\n");
+            var imported = new VisionaryRaceOptions(RushOptionsPath: original, ImportedProfiles: VisionaryTransferProfiles.Import(original));
+            var restored = System.Text.Json.JsonSerializer.Deserialize<VisionaryRaceOptions>(System.Text.Json.JsonSerializer.Serialize(imported))!;
+            File.Delete(original);
+            var profile = VisionaryTransferProfiles.Load(restored.RushOptionsPath, restored.ImportedProfiles).ForDirectory("/release")!;
+            Check(profile.Attempts == 5, "imported retry count survives removal of original");
+            Check(profile.Allows(new("file.rar", "/release/file.rar", false, 100, null)), "imported allow regex retained");
+            Check(!profile.Allows(new("blocked.rar", "/release/blocked.rar", false, 100, null)), "imported skip regex retained");
+            _ = new VisionaryRaceState(restored);
+        }
+        finally { Directory.Delete(profileFolder, true); }
         foreach (var pattern in new[] { VisionaryRaceOptions.DefaultCompleteFlag, VisionaryRaceOptions.LegacyCompleteFlag })
         {
             var markerRace = new VisionaryRaceState(new(CompleteFlag: pattern));
@@ -25,7 +41,9 @@ internal static class RaceFlowChecks
         }
         Check(TransferRejection.Category("550 file.rar: File locking failed.") == "FILE-LOCKED", "ioFTPD locking failure blocks relay fallback");
         Check(new VisionaryRaceOptions().EffectiveTimeout == TimeSpan.FromMinutes(5), "race default lifetime is five minutes");
-        Check(new VisionaryRaceOptions(TimeoutMinutes: 60).EffectiveTimeout == TimeSpan.FromMinutes(5), "legacy timeout capped at five minutes");
+        Check(new VisionaryRaceOptions(TimeoutMinutes: 60).EffectiveTimeout == TimeSpan.FromMinutes(60), "configured race lifetime above five minutes retained");
+        Check(new VisionaryRaceOptions(TimeoutMinutes: 1440).EffectiveTimeout == TimeSpan.FromDays(1), "maximum race lifetime retained");
+        Check(new VisionaryRaceOptions(TimeoutMinutes: 0).EffectiveTimeout == TimeSpan.FromMinutes(1), "invalid saved lifetime bounded");
         Check(new VisionaryRaceOptions(TimeoutMinutes: 2).EffectiveTimeout == TimeSpan.FromMinutes(2), "shorter race timeout retained");
         using (var slots = new RaceWatchSlots(1))
         using (await slots.EnterAsync(default))

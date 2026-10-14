@@ -145,7 +145,7 @@ public partial class VisionaryWindow : Window
         try
         {
             new VisionaryRaceOptions(CompleteFlagBox.Text, int.Parse(RefreshBox.Text), int.Parse(TimeoutBox.Text), RushOptionsBox.Text.Trim()).Save();
-            StatusText.Text = "Race settings saved for new races. Existing watches keep their current settings.";
+            StatusText.Text = "Race settings and transfer profiles saved in FluxFTP. The original rushopt.ini is no longer needed. Changes apply to new races.";
         }
         catch (Exception ex) { StatusText.Text = ex.Message; }
     }
@@ -157,7 +157,7 @@ public partial class VisionaryWindow : Window
         {
             VisionaryTransferProfiles.Load(picker.FileName);
             RushOptionsBox.Text = picker.FileName;
-            StatusText.Text = "Sample/covers profiles validated. Save race settings to use them for new races. Other Rush options are not changed.";
+            StatusText.Text = "Profiles validated. Save race settings to import them into FluxFTP; afterwards the original file is no longer needed.";
         }
         catch (Exception ex) { StatusText.Text = $"Could not load sample/covers profiles: {ex.Message}"; }
     }
