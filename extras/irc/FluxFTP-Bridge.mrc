@@ -252,6 +252,11 @@ alias -l fluxdll.menu.download {
 alias -l fluxvisi.dll return $scriptdir $+ $iif($bits == 64,FluxFTPVisionary64.dll,FluxFTPVisionary32.dll)
 
 alias fluxvisi {
+  if ($1 == update) {
+    if ($0 != 4) { echo -ag Usage: /fluxvisi update SECTION RELEASE SITE | return }
+    echo -ag $dll($fluxvisi.dll,FluxFTPTransfer,$2-4 @UPDATE)
+    return
+  }
   if ($1 == complete) {
     if ($0 != 4) { echo -ag Usage: /fluxvisi complete SECTION RELEASE SITE | return }
     var %dll = $fluxvisi.dll
@@ -284,11 +289,12 @@ alias fluxvisi {
 ; DONE announcements are forwarded only for explicitly mapped network/channel/bot/section combinations.
 on *:TEXT:*:#:{
   var %done.text = $strip($1-)
-  if (!$regex(%done.text,/^DONE:\s+-([A-Z0-9_-]+)-\s+(\S+)\s+Size\b/i)) return
-  var %done.section = $regml(1), %done.release = $regml(2)
+  if (!$regex(%done.text,/^(DONE|RACE|FAST|HALF):\s+-([A-Z0-9_-]+)-\s+(\S+)\s+/i)) return
+  var %event = $regml(1), %done.section = $regml(2), %done.release = $regml(3)
   var %done.binding = $eval($+(%,fluxvisi.done.,$lower($network),.,$lower($chan),.,$lower($nick),.,$lower(%done.section)),2)
   if ($numtok(%done.binding,32) != 2) return
-  fluxvisi complete $gettok(%done.binding,2,32) %done.release $gettok(%done.binding,1,32)
+  if (%event == DONE) fluxvisi complete $gettok(%done.binding,2,32) %done.release $gettok(%done.binding,1,32)
+  else fluxvisi update $gettok(%done.binding,2,32) %done.release $gettok(%done.binding,1,32)
 }
 
 on *:SIGNAL:FU_FXP_CHAINS:{

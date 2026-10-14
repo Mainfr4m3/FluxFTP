@@ -14,6 +14,13 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
     private Task? _listener;
     private readonly Func<ApiTransferRequest, VisionaryRaceState, CancellationToken, Task<bool>>? _raceStep;
     private readonly Dictionary<string, Task> _races = new(StringComparer.OrdinalIgnoreCase);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> _notifications = new(StringComparer.OrdinalIgnoreCase);
+    private void Notify(string section, string release)
+    {
+        foreach (var pair in _notifications)
+            if (pair.Key.StartsWith(section + "\t" + release + "\t", StringComparison.OrdinalIgnoreCase) && pair.Value.CurrentCount == 0)
+                try { pair.Value.Release(); } catch (SemaphoreFullException) { }
+    }
     private readonly RaceWatchSlots _watchSlots = new(32);
 
     public VisionaryPipeServer(Func<ApiTransferRequest, Task<object>> startTransfer, Action<string>? log = null,
@@ -93,12 +100,13 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
         { await writer.WriteLineAsync("ERROR Expected TRANSFER<TAB>section<TAB>release<TAB>source<TAB>target"); return; }
         try
         {
-            if (fields[4] == "@DONE")
+            if (fields[4] is "@DONE" or "@UPDATE")
             {
                 VisionaryTransferProfiles.ReleasePath(fields[2]);
                 if (new[] { fields[1], fields[3] }.Any(value => value.Length > 128 || value.Contains('/') || value.Contains('\\') || value.Any(char.IsWhiteSpace)))
                     throw new ArgumentException("Invalid completion site or section.");
-                RaceCompletionSignals.Shared.Record(fields[3], fields[1], fields[2]);
+                if (fields[4] == "@DONE") RaceCompletionSignals.Shared.Record(fields[3], fields[1], fields[2]);
+                Notify(fields[1], fields[2]);
                 _log?.Invoke($"VISIONARY DONE received: {fields[3]} / {fields[1]} / {fields[2]}; payload verification still required");
                 await writer.WriteLineAsync("OK DONE RECORDED " + fields[2]);
                 return;
@@ -111,7 +119,7 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
                 // One writer per destination release, including when several sources announce it.
                 var key = string.Join('\t', fields[1], fields[2], fields[4]);
                 if (_races.TryGetValue(key, out var active) && !active.IsCompleted)
-                { await writer.WriteLineAsync("OK ALREADY WATCHING " + fields[2]); return; }
+                { Notify(fields[1], fields[2]); await writer.WriteLineAsync("OK WATCH UPDATED " + fields[2]); return; }
                 if (_races.Any(pair => !pair.Value.IsCompleted && Overlapping(pair.Key, key)))
                     throw new InvalidOperationException("An overlapping release/subdirectory race already writes this destination. Use the existing watch.");
                 foreach (var completed in _races.Where(pair => pair.Value.IsCompleted).Select(pair => pair.Key).ToArray()) _races.Remove(completed);
@@ -121,7 +129,8 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
                 if (fields.Length == 7) { long.TryParse(fields[5], out chain); long.TryParse(fields[6], out dll); }
                 var state = new VisionaryRaceState(options) { StartTrace = new RaceStartTrace($"{fields[1]} {fields[2]}: {fields[3]} -> {fields[4]}", received, chain, dll, _log) };
                 var request = new ApiTransferRequest(fields[3], null, fields[1], fields[4], null, fields[1], fields[2]);
-                _races[key] = WatchAsync(request, state, options, cancellationToken);
+                var notification = _notifications.GetOrAdd(key, _ => new SemaphoreSlim(0, 1));
+                _races[key] = WatchAsync(request, state, options, cancellationToken, notification);
                 await writer.WriteLineAsync("OK ACCEPTED " + fields[2] + " — queued or watching; progress is in the FluxFTP log");
                 return;
             }
@@ -139,7 +148,7 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
             (a[1].StartsWith(b[1] + "/", StringComparison.OrdinalIgnoreCase) || b[1].StartsWith(a[1] + "/", StringComparison.OrdinalIgnoreCase));
     }
 
-    private async Task WatchAsync(ApiTransferRequest request, VisionaryRaceState state, VisionaryRaceOptions options, CancellationToken token)
+    private async Task WatchAsync(ApiTransferRequest request, VisionaryRaceState state, VisionaryRaceOptions options, CancellationToken token, SemaphoreSlim notification)
     {
         await Task.Yield(); // Admit all pairs before beginning potentially expensive race work.
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -154,7 +163,7 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
             state.StartTrace?.Mark("watch-admitted");
             _log?.Invoke(label + " watching source");
             while (!await _raceStep!(request, state, lifetime.Token))
-                await Task.Delay(TimeSpan.FromSeconds(options.RefreshSeconds), lifetime.Token);
+                await notification.WaitAsync(lifetime.Token);
             _log?.Invoke(label + " COMPLETE: final transfers finished");
         }
         catch (OperationCanceledException)
