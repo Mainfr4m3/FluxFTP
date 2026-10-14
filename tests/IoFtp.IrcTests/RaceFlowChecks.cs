@@ -8,6 +8,11 @@ internal static class RaceFlowChecks
     {
         var checks = 0;
         void Check(bool value, string name) { if (!value) throw new Exception(name); checks++; }
+        var prequeueRace = new VisionaryRaceState(new());
+        prequeueRace.SkipExistingTarget("/release/file.rar");
+        Check(!prequeueRace.NeedsTransfer("/release/file.rar", 100, null, _ => null), "existing target excluded before creating job");
+        Check(!prequeueRace.NeedsTransfer("/release/file.rar", 200, DateTimeOffset.UtcNow, _ => null), "existing target remains skipped as source grows");
+        Check(prequeueRace.NeedsTransfer("/release/missing.rar", 100, null, _ => null), "missing target still eligible");
         var profileFolder = Path.Combine(Path.GetTempPath(), "Flux-profile-import-" + Guid.NewGuid());
         Directory.CreateDirectory(profileFolder);
         try

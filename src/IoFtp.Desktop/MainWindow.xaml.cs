@@ -3694,6 +3694,30 @@ public partial class MainWindow : Window
         race?.StartTrace?.Mark("destination-check-ended");
         var selectedFiles = apiFiles.Where(file => race is null || race.NeedsTransfer(file.Entry.FullPath, file.Entry.Size,
             file.Entry.ModifiedAt, RaceJobState)).ToList();
+        if (race is not null && selectedFiles.Count > 0)
+        {
+            var skippedBeforeQueue = 0;
+            foreach (var directory in selectedFiles.GroupBy(file => RemoteParent(file.Destination)).ToArray())
+            {
+                IReadOnlyList<RemoteEntry> listing;
+                try { listing = await _raceListings.ListAsync(ApplyGlobalProxy(destinationProfile), directory.Key, timeout.Token); }
+                catch (FtpCommandException exception) when (exception.StatusCode == 550) { continue; }
+                var targets = listing.Where(file => !file.IsDirectory).GroupBy(file => file.Name, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+                foreach (var file in directory)
+                {
+                    if (!targets.TryGetValue(file.Entry.Name, out var target) || target.Size is null ||
+                        FxpExistingFilePolicy.Resolve(_settings, file.Entry.Size, target.Size, true) != ExistingTargetAction.Skip) continue;
+                    race.SkipExistingTarget(file.Entry.FullPath);
+                    selectedFiles.Remove(file); skippedBeforeQueue++;
+                }
+            }
+            if (skippedBeforeQueue > 0)
+            {
+                var message = $"VISIONARY prequeue: {request.SrcSite} -> {request.DstSite}; existing targets skipped={skippedBeforeQueue}; remaining={selectedFiles.Count}; no transfer slots used for skipped files";
+                LogText.AppendText(Environment.NewLine + message); _raceLog.Write("PREQUEUE", message);
+            }
+        }
         var queuedEntries = selectedFiles.OrderBy(file => PriorityRank(file.Entry.Name, file.Entry.FullPath))
             .ThenBy(file => file.Entry.Name, NaturalNameComparer.Instance)
             .Select(file => AddQueue(file.Entry.Name, file.Entry.FullPath, file.Destination, TransferDirection.ApiFxp,

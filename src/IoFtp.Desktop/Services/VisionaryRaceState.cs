@@ -160,6 +160,7 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
     public bool NeedsTransfer(string path, long? size, DateTimeOffset? modified, Func<Guid, string?> status)
     {
         ThrowIfStopped();
+        if (_existingTargets.Contains(path)) return false;
         if (DestinationAlreadyComplete || size is null or <= 0) return false;
         if (!_files.TryGetValue(path, out var prior)) return true;
         var state = status(prior.Job);
@@ -187,7 +188,9 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
         _files[path] = new(job, size, modified, final, attempts);
     }
 
-    public bool IsSkipped(string path, Func<Guid, string?> status) => _files.TryGetValue(path, out var file) && status(file.Job) == "Skipped";
-    public bool Finished(Func<Guid, string?> status) => DestinationAlreadyComplete || !HasPendingPayload && SourceComplete && _files.Count > 0 &&
+    private readonly HashSet<string> _existingTargets = new(StringComparer.OrdinalIgnoreCase);
+    public void SkipExistingTarget(string path) => _existingTargets.Add(path);
+    public bool IsSkipped(string path, Func<Guid, string?> status) => _existingTargets.Contains(path) || _files.TryGetValue(path, out var file) && status(file.Job) == "Skipped";
+    public bool Finished(Func<Guid, string?> status) => DestinationAlreadyComplete || !HasPendingPayload && SourceComplete && (_files.Count + _existingTargets.Count) > 0 &&
         _files.All(pair => status(pair.Value.Job) == "Skipped" || IsFinal(pair.Key) && pair.Value.Final && status(pair.Value.Job) == "Completed");
 }
