@@ -166,6 +166,8 @@ public partial class MainWindow : Window
         ConfigureTrayIcon();
         StateChanged += MainWindow_StateChanged;
         _legendTimer.Tick += (_, _) => { UpdateLegendBar(); UpdateConnectionButtons(); };
+        _statusScrollTimer.Tick += (_, _) => AnimateStatusScroll();
+        _statusScrollTimer.Start();
         _legendTimer.Start(); UpdateLegendBar();
     }
 
@@ -2775,6 +2777,7 @@ public partial class MainWindow : Window
         await _racePoolGate.WaitAsync();
         _racePoolGate.Release();
         _legendTimer.Stop();
+        _statusScrollTimer.Stop();
         _raceLogTimer.Stop();
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
@@ -2864,6 +2867,12 @@ public partial class MainWindow : Window
         _visibleLogHeight = new GridLength(Math.Max(70, FiniteLayoutValue(layout.LogHeight, 150)));
         if (layout.QueueVisible && QueueRow.Height.Value == 0) ToggleQueue_Click(this, new RoutedEventArgs());
         if (!layout.LogVisible && LogRow.Height.Value > 0) ToggleLog_Click(this, new RoutedEventArgs());
+        if (layout.LogVisible) LogRow.Height = _visibleLogHeight;
+        _metricsHeight = new GridLength(Math.Max(200, FiniteLayoutValue(layout.MetricsHeight, 300)));
+        if (layout.MetricsVisible) Metrics_Click(this, new RoutedEventArgs());
+        _statusHeight = new GridLength(Math.Max(150, FiniteLayoutValue(layout.StatusHeight, 300)));
+        if (layout.StatusVisible) SiteStatus_Click(this, new RoutedEventArgs());
+        if (!layout.ManagerVisible) ToggleManager_Click(this, new RoutedEventArgs());
         if (layout.Maximized) WindowState = WindowState.Maximized;
     }
 
@@ -2877,7 +2886,10 @@ public partial class MainWindow : Window
             FiniteLayoutValue(bounds.Height, Math.Max(MinHeight, ActualHeight)),
             WindowState == WindowState.Maximized, FiniteLayoutValue(LeftPaneColumn.ActualWidth, 500),
             QueueRow.Height.Value > 0, QueueRow.Height.Value > 0 ? QueueRow.ActualHeight : _visibleQueueHeight.Value,
-            LogRow.Height.Value > 0, LogRow.Height.Value > 0 ? LogRow.ActualHeight : _visibleLogHeight.Value));
+            LogRow.Height.Value > 0, LogRow.Height.Value > 0 ? LogRow.ActualHeight : _visibleLogHeight.Value,
+            _managerVisible, MetricsHost.Visibility == Visibility.Visible,
+            MetricsHost.Visibility == Visibility.Visible ? MetricsRow.ActualHeight : _metricsHeight.Value,
+            StatusHost.Visibility == Visibility.Visible, StatusHost.Visibility == Visibility.Visible ? StatusRow.ActualHeight : _statusHeight.Value));
     }
 
     private static double FiniteLayoutValue(double value, double fallback) =>
@@ -2895,10 +2907,33 @@ public partial class MainWindow : Window
     private void LogSplitter_DragDelta(object sender, System.Windows.Controls.Primitives.DragDeltaEventArgs e)
     {
         if (LogPanel.Visibility != Visibility.Visible) return;
-        var height = Math.Clamp(LogRow.ActualHeight - e.VerticalChange, 70, Math.Max(70, ActualHeight * 0.75));
-        LogRow.Height = new GridLength(height);
-        _visibleLogHeight = LogRow.Height;
+        ResizeVisiblePanels(LogRow, e.VerticalChange);
+        _visibleLogHeight = new GridLength(LogRow.ActualHeight);
         e.Handled = true;
+    }
+
+    private void PanelSplitter_DragDelta(object sender, System.Windows.Controls.Primitives.DragDeltaEventArgs e)
+    {
+        var lower = ReferenceEquals(sender, StatusSplitter) ? StatusRow : MetricsRow;
+        ResizeVisiblePanels(lower, e.VerticalChange);
+        e.Handled = true;
+    }
+
+    private void ResizeVisiblePanels(RowDefinition lower, double change)
+    {
+        var rows = new[] { ManagerRow, QueueRow, MetricsRow, StatusRow, LogRow };
+        var index = Array.IndexOf(rows, lower);
+        var upper = rows.Take(index).LastOrDefault(row => row.Height.Value > 0 && row.ActualHeight > 0);
+        if (upper is null) return;
+        var upperMinimum = ReferenceEquals(upper, ManagerRow) ? 80 : Math.Max(70, upper.MinHeight);
+        var lowerMinimum = Math.Max(70, lower.MinHeight);
+        var delta = Math.Clamp(change, upperMinimum - upper.ActualHeight, Math.Max(upperMinimum - upper.ActualHeight, lower.ActualHeight - lowerMinimum));
+        var upperHeight = upper.ActualHeight + delta;
+        var lowerHeight = lower.ActualHeight - delta;
+        // Keep the flexible row flexible; resize only the adjacent visible panels.
+        if (upper.Height.IsStar) lower.Height = new GridLength(lowerHeight);
+        else if (lower.Height.IsStar) upper.Height = new GridLength(upperHeight);
+        else { upper.Height = new GridLength(upperHeight); lower.Height = new GridLength(lowerHeight); }
     }
 
     private void ToggleLog_Click(object sender, RoutedEventArgs e)
@@ -2919,7 +2954,7 @@ public partial class MainWindow : Window
             LogSplitter.Visibility = Visibility.Visible;
             LogSplitterRow.Height = new GridLength(8);
             LogRow.MinHeight = 70;
-            LogRow.Height = _visibleLogHeight.Value > 0 ? _visibleLogHeight : new GridLength(150);
+            LogRow.Height = !_managerVisible ? new GridLength(1, GridUnitType.Star) : _visibleLogHeight.Value > 0 ? _visibleLogHeight : new GridLength(150);
             ToggleLogButton.Content = "Hide Log";
         }
     }
@@ -2953,10 +2988,82 @@ public partial class MainWindow : Window
         window.Show();
     }
 
-    private void Metrics_Click(object sender, RoutedEventArgs e) => new MetricsWindow(GetMetricsSnapshot,
-        () => TransferJobs_Click(this, new RoutedEventArgs()),
-        () => RaceLog_Click(this, new RoutedEventArgs()),
-        () => SpreadJobs_Click(this, new RoutedEventArgs())) { Owner = this }.Show();
+    private bool _managerVisible = true;
+    private void SiteStatus_Click(object sender, RoutedEventArgs e)
+    {
+        var show = StatusHost.Visibility != Visibility.Visible;
+        if (!show)
+        {
+            _statusHeight = new GridLength(Math.Max(150, StatusRow.ActualHeight));
+            StatusHost.Visibility = StatusSplitter.Visibility = Visibility.Collapsed;
+            StatusRow.MinHeight = 0; StatusRow.Height = new GridLength(0); StatusSplitterRow.Height = new GridLength(0);
+            StatusButton.Content = "Show Status";
+            return;
+        }
+        var profiles = new ProfileStore().Load();
+        if (StatusHost.Content is null) StatusHost.Content = new SiteStatusPanel(() => profiles.Select(p => (p.Id, p.Name)).ToArray(), id =>
+        {
+            var profile = profiles.First(p => p.Id == id);
+            var workers = _sessionWorkers.Where(p => p.Value.Id == id).ToArray();
+            var idle = _workerPool.Where(p => p.Key.Id == id).SelectMany(p => p.Value.ToArray()).ToArray();
+            var running = _queue.Where(p => p.State == "Transferring").ToArray();
+            var uploads = running.Count(p => p.DestinationProfileId == id);
+            var downloads = running.Count(p => p.SourceProfileId == id);
+            var browsing = (_leftProfile?.Id == id && _leftRemoteSession?.IsConnected == true ? 1 : 0) +
+                (_rightProfile?.Id == id && _remoteSession?.IsConnected == true ? 1 : 0);
+            var text = new System.Text.StringBuilder();
+            text.AppendLine($"DETAILED STATUS: {profile.Name}");
+            text.AppendLine($"Login connections: {workers.Count(p => p.Key.IsConnected) + browsing} / {profile.EffectiveOptions.MaxSlots}");
+            text.AppendLine($"Upload jobs: {uploads} / {profile.EffectiveOptions.MaxUploadSlots}");
+            text.AppendLine($"Download jobs: {downloads} / {profile.EffectiveOptions.MaxDownloadSlots}");
+            text.AppendLine($"Browsing connections: {browsing}    Idle pool: {idle.Length}");
+            text.AppendLine("\nTransfer connections:");
+            var index = 0;
+            foreach (var worker in workers)
+            {
+                var pooled = idle.FirstOrDefault(p => ReferenceEquals(p.Session, worker.Key));
+                text.AppendLine($"#{index++}  {(worker.Key.IsConnected ? pooled is null ? "In use" : $"IDLE {(DateTimeOffset.UtcNow - pooled.ReturnedAt).TotalSeconds:0}s" : "Disconnected")}");
+            }
+            text.AppendLine("\nCurrent jobs:");
+            foreach (var job in _queue.Where(p => (p.SourceProfileId == id || p.DestinationProfileId == id) && p.State is "Queued" or "Transferring"))
+                text.AppendLine($"{job.State}: {job.Name} | {FormatSize(job.BytesTransferred)} / {FormatSize(job.TotalBytes)}");
+            text.AppendLine("\nLocal FluxFTP status; job counts are not server-reported slot usage.");
+            return text.ToString();
+        });
+        StatusHost.Visibility = StatusSplitter.Visibility = Visibility.Visible;
+        StatusSplitterRow.Height = new GridLength(6);
+        StatusRow.MinHeight = 150; StatusRow.Height = _statusHeight;
+        StatusButton.Content = "Hide Status";
+    }
+    private GridLength _statusHeight = new(300);
+    private GridLength _metricsHeight = new(300);
+    private void ToggleManager_Click(object sender, RoutedEventArgs e)
+    {
+        if (_managerVisible && LogPanel.Visibility == Visibility.Visible)
+            _visibleLogHeight = new GridLength(Math.Max(70, LogRow.ActualHeight));
+        _managerVisible = !_managerVisible;
+        foreach (UIElement child in WorkspaceGrid.Children)
+            if (Grid.GetRow(child) == 0) child.Visibility = _managerVisible ? Visibility.Visible : Visibility.Collapsed;
+        ManagerRow.Height = _managerVisible ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
+        if (LogPanel.Visibility == Visibility.Visible) LogRow.Height = _managerVisible ? _visibleLogHeight : new GridLength(1, GridUnitType.Star);
+        ManagerButton.Content = _managerVisible ? "Hide Manager" : "Show Manager";
+    }
+    private void Metrics_Click(object sender, RoutedEventArgs e)
+    {
+        var show = MetricsHost.Visibility != Visibility.Visible;
+        if (show && MetricsHost.Content is null)
+            MetricsHost.Content = new MetricsPanel(GetMetricsSnapshot,
+                () => TransferJobs_Click(this, new RoutedEventArgs()),
+                () => RaceLog_Click(this, new RoutedEventArgs()),
+                () => SpreadJobs_Click(this, new RoutedEventArgs()),
+                () => Metrics_Click(this, new RoutedEventArgs()));
+        if (!show) _metricsHeight = MetricsRow.Height;
+        MetricsHost.Visibility = MetricsSplitter.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        MetricsSplitterRow.Height = new GridLength(show ? 6 : 0);
+        MetricsRow.MinHeight = show ? 200 : 0;
+        MetricsRow.Height = show ? _metricsHeight : new GridLength(0);
+        MetricsButton.Content = show ? "Hide Metrics" : "Show Metrics";
+    }
     private void Scripts_Click(object sender, RoutedEventArgs e) => new ExternalScriptsWindow { Owner = this }.Show();
     private void About_Click(object sender, RoutedEventArgs e) => new AboutWindow { Owner = this }.ShowDialog();
 
@@ -2999,6 +3106,21 @@ public partial class MainWindow : Window
         return new(connected, profiles.Count, active, $"{FormatSize(speed)}/s", FormatSize(bytes), rows);
     }
 
+    private readonly System.Windows.Threading.DispatcherTimer _statusScrollTimer = new() { Interval = TimeSpan.FromMilliseconds(30) };
+    private readonly System.Diagnostics.Stopwatch _statusScrollClock = System.Diagnostics.Stopwatch.StartNew();
+    private double _statusScrollX, _statusScrollLastTime;
+    private void AnimateStatusScroll()
+    {
+        var now = _statusScrollClock.Elapsed.TotalSeconds;
+        var delta = Math.Clamp(now - _statusScrollLastTime, 0, 0.1);
+        _statusScrollLastTime = now;
+        if (ScrollingStatusHost.Visibility != Visibility.Visible) return;
+        _statusScrollX -= Math.Clamp(_settings.StatusBarScrollSpeed, 20, 200) * delta;
+        if (_statusScrollX + ScrollingStatusText.ActualWidth < 0) _statusScrollX = ScrollingStatusHost.ActualWidth;
+        Canvas.SetLeft(ScrollingStatusText, _statusScrollX);
+        Canvas.SetTop(ScrollingStatusText, Math.Max(0, (ScrollingStatusHost.ActualHeight - ScrollingStatusText.ActualHeight) / 2));
+    }
+
     private void UpdateLegendBar()
     {
         var mode = _settings.LegendBarMode;
@@ -3008,14 +3130,22 @@ public partial class MainWindow : Window
         ApplyLegendLayout(scrolling);
         var snapshot = GetMetricsSnapshot();
         var compact = $"Sites {snapshot.ConnectedSites}/{snapshot.ConfiguredSites}   Jobs {snapshot.ActiveJobs}/{_queue.Count}   Speed {snapshot.TotalSpeed}   Transferred {snapshot.Transferred}";
-        LegendText.Text = mode switch
-        {
-            "Static" => "▲ upload   ▼ download   ● idle   ■ queued   ✓ completed   ✕ failed",
-            "Activity" => ConnectionStatus.Text,
-            "Scrolling" => ScrollLegend(compact),
-            _ => compact
-        };
-        if (!scrolling) UpdateStatusProgress();
+        var session = $"Session running: {FormatTransferTime(_sessionStatistics.Uptime)}   UP: {FormatSize(_sessionStatistics.Uploaded)}   DN: {FormatSize(_sessionStatistics.Downloaded)}   Pool: {_workerPool.Values.Sum(pool => pool.Count)}   Transferred: {FormatSize(_sessionStatistics.Uploaded + _sessionStatistics.Downloaded + _sessionStatistics.Fxp + _sessionStatistics.Local)}";
+        SessionStatusText.Text = session;
+        SessionStatusText.Visibility = scrolling ? Visibility.Collapsed : Visibility.Visible;
+        LegendText.Text = ConnectionStatus.Text;
+        UpdateStatusProgress();
+        var fullStatus = compact + "   " + session + "   " + LegendText.Text + "   " + TransferBytesText.Text + "   " + StatusProgressText.Text + "   " + ElapsedText.Text + "   " + RemainingText.Text + "   " + QueueTimeText.Text;
+        var fontSize = Math.Clamp(_settings.StatusBarFontSize, 8, 32);
+        StaticStatusText.FontSize = ScrollingStatusText.FontSize = fontSize;
+        LegendBar.Height = Math.Max(30, fontSize + 20);
+        StaticStatusHost.Visibility = scrolling ? Visibility.Collapsed : Visibility.Visible;
+        ScrollingStatusHost.Visibility = scrolling ? Visibility.Visible : Visibility.Collapsed;
+        ScrollingStatusText.Text = fullStatus;
+        StaticStatusText.Text = mode == "Static"
+            ? fullStatus + "   ▲ upload   ▼ download   ● idle   ■ queued   ✓ completed   ✕ failed"
+            : fullStatus;
+
     }
 
     private void ApplyLegendLayout(bool scrolling)

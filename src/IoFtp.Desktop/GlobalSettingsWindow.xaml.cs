@@ -12,6 +12,11 @@ namespace IoFtp.Desktop;
 
 public partial class GlobalSettingsWindow : Window
 {
+    private void LegendMode_Changed(object sender, System.Windows.Controls.SelectionChangedEventArgs e) => UpdateScrollSpeedVisibility();
+    private void UpdateScrollSpeedVisibility()
+    {
+        if (ScrollSpeedSettings is not null) ScrollSpeedSettings.Visibility = LegendModeBox.SelectedItem?.ToString() == "Scrolling" ? Visibility.Visible : Visibility.Collapsed;
+    }
     private List<AdvancedSkipRule> _advancedSkipRules;
     private readonly ThemeSettings _originalTheme;
     private readonly bool _visionaryBridge;
@@ -106,7 +111,13 @@ public partial class GlobalSettingsWindow : Window
         SkippedColorBox.Text=s.SkippedItemColor;
         ApiPasswordBox.Password=s.ApiPassword;
         MinimizeToTrayBox.IsChecked=s.MinimizeToTray;
+        StatusFontBox.ItemsSource = Enumerable.Range(8, 25).ToArray();
+        StatusFontBox.SelectedItem = Math.Clamp(s.StatusBarFontSize, 8, 32);
+        ScrollSpeedBox.ItemsSource = new[] { 20, 40, 60, 80, 100, 150, 200 };
+        ScrollSpeedBox.SelectedItem = s.StatusBarScrollSpeed;
+        if (ScrollSpeedBox.SelectedIndex < 0) ScrollSpeedBox.SelectedItem = 60;
         LegendModeBox.SelectedItem=s.LegendBarMode; if (LegendModeBox.SelectedIndex < 0) LegendModeBox.SelectedItem="Compact";
+        UpdateScrollSpeedVisibility();
         ProxyTypeBox.SelectedItem=s.ProxyType; ProxyHostBox.Text=s.ProxyHost; ProxyPortBox.Text=$"{s.ProxyPort}"; ProxyUsernameBox.Text=s.ProxyUsername; ProxyPasswordBox.Password=s.ProxyPassword; ProxyDnsBox.IsChecked=s.ProxyDns; ProxyDataBox.IsChecked=s.ProxyDataConnections;
         CheckUpdatesBox.IsChecked=s.CheckForUpdatesAtStartup;
         UpdateStatusText.Text=$"Installed version: {UpdateCheckService.CurrentVersion}";
@@ -141,6 +152,7 @@ public partial class GlobalSettingsWindow : Window
         if (!ThemeManager.TryValidate(theme, out var themeError)) { ErrorText.Text = themeError; return; }
         Settings = new GlobalSettings(BindBox.Text.Trim(),N(PortFromBox),N(PortToBox),ApiEnabledBox.IsChecked==true,N(ApiPortBox),ApiLocalBox.IsChecked==true,N(ExpirationBox),N(StarterBox),N(RuntimeBox),N(JobHistoryBox),N(TransferHistoryBox),N(LogHistoryBox),UsernameBox.Text.Trim(),N(SlotsBox),N(UploadsBox),N(DownloadsBox),((ProtocolChoice)ProtocolBox.SelectedItem).Protocol,N(DefaultIdleBox),LocalPathBox.Text.Trim(),N(LocalDownloadsBox),N(LocalUploadsBox),PriorityPatternsBox.Text.Trim(),SkipPatternsBox.Text.Trim(),ApiPasswordBox.Password,MinimizeToTrayBox.IsChecked==true,LegendModeBox.SelectedItem?.ToString() ?? "Compact",(ProxyType)(ProxyTypeBox.SelectedItem ?? ProxyType.None),ProxyHostBox.Text.Trim(),N(ProxyPortBox),ProxyUsernameBox.Text.Trim(),ProxyPasswordBox.Password,ProxyDnsBox.IsChecked==true,ProxyDataBox.IsChecked==true,CheckUpdatesBox.IsChecked==true, _advancedSkipRules.ToArray(), theme, irc);
         Settings = Settings with { EnableVisionaryBridge = _visionaryBridge, SerializeLocalTransfers = SerializeLocalBox.IsChecked == true,
+            StatusBarFontSize = (int)(StatusFontBox.SelectedItem ?? 12), StatusBarScrollSpeed = (int)(ScrollSpeedBox.SelectedItem ?? 60),
             TransferCategoryOrder = string.Join("\n", PriorityCategoriesList.Items.Cast<string>()),
             EnableFxpSpeedMonitoring = FxpSpeedMonitoringBox.IsChecked == true, Layout = layout, MetadataSkipDefaultsApplied = true, VideoMetadataSkipDefaultsApplied = true,
             EnableDownloadMeasurement = DownloadMeasurementBox.IsChecked == true,

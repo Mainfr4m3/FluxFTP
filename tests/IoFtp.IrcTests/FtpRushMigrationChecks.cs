@@ -34,6 +34,12 @@ internal static class FtpRushMigrationChecks
                 Check(importedProfile.Protocol == expected && importedProfile.ListingMode == IoFtp.Core.Models.DirectoryListingMode.Auto, "Rush imports as AUTH TLS and Auto");
             }
             var defaults = package.Sites[0].Profile.EffectiveOptions;
+            var priorityXml = Path.Combine(directory, "priority.xml");
+            File.WriteAllText(priorityXml, "<SITES><SITE NAME=\"P\" PRIORITY=\"7\"><HOST>example.invalid</HOST></SITE></SITES>");
+            Check(FtpRushSiteImporter.Import(priorityXml).Single().Profile.EffectiveOptions.Priority == 7, "XML site priority imported");
+            var priorityJson = Path.Combine(directory, "priority.json");
+            File.WriteAllText(priorityJson, """{"RootItem":{"Server":{"Name":"P","Host":"example.invalid","Priority":9}}}""");
+            Check(FtpRushSiteImporter.Import(priorityJson).Single().Profile.EffectiveOptions.Priority == 9, "JSON site priority imported");
             Check(defaults.ImportedSkipRules == "01111111(?i)(TVMAZE|IMDB)" && defaults.ImportedPriorityRules == "1*.sfv", "Rush skip flags and priority rules retained verbatim");
             Check(ImportedTransferSettings.PriorityRank("release.sfv", [package.Sites[0].Profile], 5) == 0 &&
                 ImportedTransferSettings.PriorityRank("release.rar", [package.Sites[0].Profile], 5) > 0, "imported SFV priority applied");

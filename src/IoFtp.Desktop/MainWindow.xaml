@@ -22,7 +22,9 @@
                 <TextBlock x:Name="ConnectionStatus" Grid.Column="1" Text="Offline workspace" Foreground="{DynamicResource MutedTextBrush}"
                            VerticalAlignment="Center" HorizontalAlignment="Center" />
                 <WrapPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right">
-                    <Button Content="Metrics" Click="Metrics_Click" />
+                    <Button x:Name="MetricsButton" Content="Show Metrics" Click="Metrics_Click" />
+                    <Button x:Name="StatusButton" Content="Show Status" Click="SiteStatus_Click" />
+                    <Button x:Name="ManagerButton" Content="Hide Manager" Click="ToggleManager_Click" />
                     <Button Content="Scripts" Click="Scripts_Click" />
                     <Button Content="Sections" Click="Sections_Click" />
                     <Button Content="IRC Add-ons" Click="Visionary_Click" />
@@ -34,11 +36,19 @@
             </Grid>
         </Border>
 
-        <Border x:Name="LegendBar" DockPanel.Dock="Bottom" Height="34" Padding="4,2"
+        <Border x:Name="LegendBar" DockPanel.Dock="Bottom" Height="34" Padding="0,2"
                 Background="{DynamicResource SurfaceRaisedBrush}"
                 BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0"
                 SizeChanged="LegendBar_SizeChanged">
-            <Grid HorizontalAlignment="Stretch">
+            <Grid ClipToBounds="True">
+                <ScrollViewer x:Name="StaticStatusHost" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" Padding="0">
+                    <TextBlock x:Name="StaticStatusText" TextWrapping="NoWrap" VerticalAlignment="Center" Foreground="{DynamicResource TextBrush}"/>
+                </ScrollViewer>
+                <Canvas x:Name="ScrollingStatusHost" ClipToBounds="True" Visibility="Collapsed">
+                    <TextBlock x:Name="ScrollingStatusText" TextWrapping="NoWrap" Foreground="{DynamicResource TextBrush}"/>
+                </Canvas>
+<Grid HorizontalAlignment="Stretch" Visibility="Collapsed">
+                <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" MinWidth="120"/>
                     <ColumnDefinition Width="1"/><ColumnDefinition x:Name="TransferBytesColumn" Width="205"/>
@@ -49,6 +59,7 @@
                 </Grid.ColumnDefinitions>
                 <TextBlock x:Name="LegendText" Foreground="White" Text="FluxFTP ready" VerticalAlignment="Center" Margin="6,0"
                            TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+                <TextBlock x:Name="SessionStatusText" Grid.Row="1" Grid.ColumnSpan="11" Foreground="{DynamicResource TextBrush}" Margin="6,0"/>
                 <Border x:Name="TransferBytesSeparator" Grid.Column="1" Background="{DynamicResource BorderBrush}" Margin="0,3"/>
                 <TextBlock x:Name="TransferBytesText" Foreground="White" Grid.Column="2" Text="—" VerticalAlignment="Center" HorizontalAlignment="Center"/>
                 <Border x:Name="ProgressSeparator" Grid.Column="3" Background="{DynamicResource BorderBrush}" Margin="0,3"/>
@@ -65,13 +76,18 @@
                 <TextBlock x:Name="QueueTimeText" Foreground="White" Grid.Column="10" Text="Queue: 00:00" VerticalAlignment="Center" HorizontalAlignment="Center"/>
                 <TextBlock x:Name="QueueStatus" Foreground="White" Text="0 queued" Visibility="Collapsed"/>
             </Grid>
+            </Grid>
         </Border>
 
-        <Grid Background="{DynamicResource WindowBrush}">
+        <Grid x:Name="WorkspaceGrid" Background="{DynamicResource WindowBrush}">
             <Grid.RowDefinitions>
-                <RowDefinition Height="*" />
+                <RowDefinition x:Name="ManagerRow" Height="*" />
                 <RowDefinition Height="0" x:Name="QueueSplitterRow" />
                 <RowDefinition Height="0" MinHeight="0" x:Name="QueueRow" />
+                <RowDefinition x:Name="MetricsSplitterRow" Height="0"/>
+                <RowDefinition x:Name="MetricsRow" Height="0"/>
+                <RowDefinition x:Name="StatusSplitterRow" Height="0"/>
+                <RowDefinition x:Name="StatusRow" Height="0"/>
                 <RowDefinition Height="8" x:Name="LogSplitterRow" />
                 <RowDefinition Height="150" MinHeight="70" x:Name="LogRow" />
             </Grid.RowDefinitions>
@@ -271,7 +287,7 @@
                 </DockPanel>
             </Border>
 
-            <primitives:Thumb x:Name="LogSplitter" Grid.Row="3" Grid.ColumnSpan="3" Height="8"
+            <primitives:Thumb x:Name="LogSplitter" Grid.Row="7" Grid.ColumnSpan="3" Height="8"
                               Cursor="SizeNS" DragDelta="LogSplitter_DragDelta"
                               ToolTip="Drag to resize the connection log">
                 <primitives:Thumb.Template><ControlTemplate TargetType="{x:Type primitives:Thumb}">
@@ -280,7 +296,7 @@
                 </ControlTemplate></primitives:Thumb.Template>
             </primitives:Thumb>
 
-            <Border x:Name="LogPanel" Grid.Row="4" Grid.ColumnSpan="3" Background="{DynamicResource WindowBrush}" Margin="8,3,8,8"
+            <Border x:Name="LogPanel" Grid.Row="8" Grid.ColumnSpan="3" Background="{DynamicResource WindowBrush}" Margin="8,3,8,8"
                     BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="3">
                 <DockPanel>
                     <Grid DockPanel.Dock="Top" Margin="10,4">
@@ -297,6 +313,10 @@
                              FontFamily="{DynamicResource AppMonospaceFontFamily}" />
                 </DockPanel>
             </Border>
+            <primitives:Thumb x:Name="MetricsSplitter" Grid.Row="3" Grid.ColumnSpan="3" Height="6" HorizontalAlignment="Stretch" Cursor="SizeNS" DragDelta="PanelSplitter_DragDelta" Visibility="Collapsed" Background="{DynamicResource BorderBrush}"/>
+            <ContentControl x:Name="MetricsHost" Grid.Row="4" Grid.ColumnSpan="3" Visibility="Collapsed"/>
+            <primitives:Thumb x:Name="StatusSplitter" Grid.Row="5" Grid.ColumnSpan="3" Height="6" HorizontalAlignment="Stretch" Cursor="SizeNS" DragDelta="PanelSplitter_DragDelta" Visibility="Collapsed" Background="{DynamicResource BorderBrush}"/>
+            <ContentControl x:Name="StatusHost" Grid.Row="6" Grid.ColumnSpan="3" Visibility="Collapsed"/>
         </Grid>
     </DockPanel>
 </Window>

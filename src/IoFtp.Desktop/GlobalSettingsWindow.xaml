@@ -90,10 +90,17 @@
                     <TextBox x:Name="PriorityPatternsBox" Grid.Row="4" Margin="0,10" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" FontFamily="{DynamicResource AppMonospaceFontFamily}"/>
                     <TextBlock Grid.Row="5" Text="One wildcard per line; earlier matches go first within their category. Active imported site rules take precedence over these wildcards within the same category." Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap"/>
                 </Grid></TabItem>
-                <TabItem Header="Appearance"><Grid Margin="16"><Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="220"/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                    <TextBlock Text="Legend bar mode" VerticalAlignment="Center"/><ComboBox x:Name="LegendModeBox" Grid.Column="1" Margin="0,4"/>
-                    <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Margin="0,14,0,0" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" Text="Scrolling shows a moving activity summary. Static shows the color legend. Activity shows the latest connection state. Compact shows sites, jobs and speed. Hidden removes the bottom bar."/>
-                </Grid></TabItem>
+                <TabItem Header="Appearance"><StackPanel Margin="16">
+                    <TextBlock Text="Status bar mode"/>
+                    <ComboBox x:Name="LegendModeBox" Width="220" HorizontalAlignment="Left" SelectionChanged="LegendMode_Changed"/>
+                    <TextBlock Text="Status bar font size" Margin="0,12,0,0"/>
+                    <ComboBox x:Name="StatusFontBox" Width="220" HorizontalAlignment="Left"/>
+                    <StackPanel x:Name="ScrollSpeedSettings" Visibility="Collapsed" Margin="0,12,0,0">
+                        <TextBlock Text="Scroll speed (pixels per second)"/>
+                        <ComboBox x:Name="ScrollSpeedBox" Width="220" HorizontalAlignment="Left"/>
+                    </StackPanel>
+                    <TextBlock Margin="0,14,0,0" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" Text="One status line in every mode. Scrolling moves all status information across the full width. In other modes, drag the horizontal scrollbar if the information does not fit."/>
+                </StackPanel></TabItem>
                 <TabItem Header="Layout"><ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel x:Name="LayoutPanel" Margin="16"/></ScrollViewer></TabItem>
                 <TabItem Header="Themes">
                     <ScrollViewer VerticalScrollBarVisibility="Auto">

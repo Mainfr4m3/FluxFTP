@@ -120,6 +120,7 @@ internal static class FtpRushSiteImporter
             var profile = new ConnectionProfile(Guid.NewGuid(), string.IsNullOrWhiteSpace(name) ? host : name, host, port,
                 LegacyValue(node, "USERNAME", "USER"), protocol, "", false, DirectoryListingMode.Auto,
                 new SiteOptions(BasePath: remotePath,
+                    Priority: int.TryParse(LegacyValue(node, "PRIORITY", "SITEPRIORITY", "SITE_PRIORITY"), out var priority) ? priority : 0,
                     ImportedSkipRules: string.Join("\n", node.Elements("SKIP").Elements("I").Select(item => item.Value.Trim())),
                     ImportedPriorityRules: string.Join("\n", node.Elements("PRIO").Elements("I").Select(item => item.Value.Trim()))));
             result.Add(new(profile, parentPath));
@@ -200,7 +201,7 @@ internal static class FtpRushSiteImporter
                 var password = DecodeBase64(Text(server, "Base64Password"));
                 var profile = new ConnectionProfile(Guid.NewGuid(), name, host, port, Text(server, "Username"),
                     protocol == TransferProtocol.Sftp ? TransferProtocol.Sftp : TransferProtocol.FtpsExplicit,
-                    password, false, DirectoryListingMode.Auto, new SiteOptions(BasePath: remotePath));
+                    password, false, DirectoryListingMode.Auto, new SiteOptions(BasePath: remotePath, Priority: Number(server, "Priority", Number(server, "SitePriority", 0))));
                 result.Add(new(profile, parentPath));
                 ReadBookmarks(server, profile.Name, bookmarks);
             }

@@ -1,0 +1,23 @@
+<UserControl x:Class="IoFtp.Desktop.MetricsPanel" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Background="{DynamicResource WindowBrush}" Foreground="{DynamicResource TextBrush}">
+    <DockPanel Margin="8" Background="{DynamicResource WindowBrush}">
+        <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+            <Button Content="Transfer Jobs" Click="TransferJobs_Click"/>
+            <Button Content="RACE-Log" Click="RaceLog_Click"/>
+            <Button Content="Spread Jobs" Click="SpreadJobs_Click"/>
+        </WrapPanel>
+        <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" Padding="12,9" Margin="0,0,0,8"><Grid><TextBlock Text="FLUXFTP METRICS" Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold"/><TextBlock x:Name="UpdatedText" HorizontalAlignment="Right" Foreground="{DynamicResource MutedTextBrush}"/></Grid></Border>
+        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0"><Button Content="Refresh" Click="Refresh_Click"/><Button Content="Hide Metrics" Click="Close_Click"/></StackPanel>
+        <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+            <UniformGrid Columns="4" Margin="0,0,0,8">
+                <Border Style="{StaticResource MetricCard}"><StackPanel><TextBlock Text="SITES" Foreground="{DynamicResource MutedTextBrush}"/><TextBlock x:Name="SitesText" FontSize="24"/></StackPanel></Border>
+                <Border Style="{StaticResource MetricCard}"><StackPanel><TextBlock Text="ACTIVE JOBS" Foreground="{DynamicResource MutedTextBrush}"/><TextBlock x:Name="ActiveText" FontSize="24"/></StackPanel></Border>
+                <Border Style="{StaticResource MetricCard}"><StackPanel><TextBlock Text="TOTAL SPEED" Foreground="{DynamicResource MutedTextBrush}"/><TextBlock x:Name="SpeedText" FontSize="24"/></StackPanel></Border>
+                <Border Style="{StaticResource MetricCard}"><StackPanel><TextBlock Text="TRANSFERRED" Foreground="{DynamicResource MutedTextBrush}"/><TextBlock x:Name="BytesText" FontSize="24"/></StackPanel></Border>
+            </UniformGrid>
+            <ListView x:Name="MetricsList" Grid.Row="1"><ListView.View><GridView>
+                <GridViewColumn Header="METRIC" DisplayMemberBinding="{Binding Name}" Width="260"/><GridViewColumn Header="VALUE" DisplayMemberBinding="{Binding Value}" Width="230"/><GridViewColumn Header="DETAIL" DisplayMemberBinding="{Binding Detail}" Width="280"/>
+            </GridView></ListView.View></ListView>
+        </Grid>
+    </DockPanel>
+</UserControl>
