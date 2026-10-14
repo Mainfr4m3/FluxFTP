@@ -3135,7 +3135,7 @@ public partial class MainWindow : Window
         SessionStatusText.Visibility = scrolling ? Visibility.Collapsed : Visibility.Visible;
         LegendText.Text = ConnectionStatus.Text;
         UpdateStatusProgress();
-        var fullStatus = compact + "   " + session + "   " + LegendText.Text + "   " + TransferBytesText.Text + "   " + StatusProgressText.Text + "   " + ElapsedText.Text + "   " + RemainingText.Text + "   " + QueueTimeText.Text;
+        var fullStatus = compact + "   " + session + "   " + TransferBytesText.Text + "   " + StatusProgressText.Text + "   " + ElapsedText.Text + "   " + RemainingText.Text + "   " + QueueTimeText.Text;
         var fontSize = Math.Clamp(_settings.StatusBarFontSize, 8, 32);
         StaticStatusText.FontSize = ScrollingStatusText.FontSize = fontSize;
         LegendBar.Height = Math.Max(30, fontSize + 20);
