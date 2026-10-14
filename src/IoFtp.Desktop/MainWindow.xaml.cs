@@ -2086,9 +2086,35 @@ public partial class MainWindow : Window
                                 }
                             }
                         }
+                        try
+                        {
                         await ResumeRecovery.RunAsync(fxpOffset, _settings.OverwriteIfResumeFails, TransferAttempt,
                             () => { resumeOverwriteAttempted = true; return Task.WhenAll(sourceSession.ReconnectForRetryAsync(cancellationToken), destinationSession.ReconnectForRetryAsync(cancellationToken)); },
                             message => { LogText.AppendText(Environment.NewLine + entry.Name + ": " + message); _raceLog.Write("RESUME", entry.Id + " " + message); }, cancellationToken);
+                        }
+                        catch (FtpCommandException exception) when (exception.StatusCode == 426 && !cancellationToken.IsCancellationRequested)
+                        {
+                            void RecoveryLog(string message) { LogText.AppendText(Environment.NewLine + message); _raceLog.Write("FXP-426", entry.Id + " " + message); }
+                            RecoveryLog($"FXP 426: reconnecting both sessions before checking target; preserving configured TLS: {entry.Name}");
+                            // Prevent all recovery failures from falling through to relay.
+                            resumeOverwriteAttempted = true;
+                            await Task.WhenAll(sourceSession.ReconnectForRetryAsync(cancellationToken), destinationSession.ReconnectForRetryAsync(cancellationToken));
+                            var targetSize = await destinationSession.GetSizeAsync(entry.Destination, cancellationToken);
+                            var sourceSize = await sourceSession.GetSizeAsync(entry.Source, cancellationToken);
+                            if (sourceSize is null or <= 0) throw new IOException("FXP 426 recovery stopped: source size unavailable or zero.");
+                            var action = targetSize is null ? ExistingTargetAction.Overwrite : FxpExistingFilePolicy.Resolve(_settings, sourceSize, targetSize, entry.VisionaryRace);
+                            RecoveryLog($"FXP 426 target check: {entry.Name}; source={sourceSize}; target={targetSize}; action={action}");
+                            if (action == ExistingTargetAction.Skip)
+                            {
+                                entry.State = "Skipped"; _skippedTransferJobs.Add(entry.Id); reuseWorkers = true; return;
+                            }
+                            entry.TotalBytes = sourceSize.Value;
+                            var offset = action == ExistingTargetAction.Resume && targetSize is > 0 &&
+                                FtpTransferMode.CanResume(entry.Source, sourceProfile.EffectiveOptions) && FtpTransferMode.CanResume(entry.Destination, destinationProfile.EffectiveOptions)
+                                ? targetSize.Value : 0;
+                            RecoveryLog($"FXP 426: one direct retry; offset={offset}; {entry.Name}");
+                            await TransferAttempt(offset);
+                        }
                         if (entry.TotalBytes > 0) entry.BytesTransferred = entry.TotalBytes;
                         if (measureAverage && !asciiFxp && PassiveFxpAverage.Calculate(sessionNewBytes, sourceSession.LastFxpTransferElapsed) is { } average)
                         {
