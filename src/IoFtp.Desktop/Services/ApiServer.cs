@@ -22,6 +22,7 @@ internal sealed class ApiServer : IAsyncDisposable
 {
     private WebApplication? _app;
     private VisionaryPipeServer? _visionaryPipe;
+    private UdpControlServer? _udp;
     private readonly Dictionary<string, SpreadJobState> _spreadJobs = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _spreadJobsLock = new();
     private int _nextSpreadJobId;
@@ -34,11 +35,14 @@ internal sealed class ApiServer : IAsyncDisposable
         Func<IrcConnectRequest, Task>? connectIrc = null,
         Func<ApiTransferRequest, VisionaryRaceState, CancellationToken, Task<bool>>? visionaryStep = null)
     {
-        if (settings.EnableVisionaryBridge)
+        if (settings.EnableVisionaryBridge || settings.EnableHttpsApi)
         {
             _visionaryPipe = new VisionaryPipeServer(startTransfer, diagnosticLog, visionaryStep);
+            if (settings.EnableVisionaryBridge)
+            {
             _visionaryPipe.Start();
             diagnosticLog?.Invoke("VISIONARY local bridge started.");
+            }
         }
         if (!settings.EnableHttpsApi) return;
         var certificate = LoadOrCreateCertificate();
@@ -72,7 +76,7 @@ internal sealed class ApiServer : IAsyncDisposable
             }
         });
 
-        _app.MapGet("/info", () => Results.Json(new { name = "FluxFTP", version = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "1.0.0", api = "cbftp-compatible", tls = true, udp = false }));
+        _app.MapGet("/info", () => Results.Json(new { name = "FluxFTP", version = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "1.0.0", api = "cbftp-compatible", tls = true, udp = true }));
         _app.MapPost("/irc/connect", async (HttpContext context) =>
         {
             if (connectIrc is null) return Results.StatusCode(503);
@@ -298,11 +302,33 @@ internal sealed class ApiServer : IAsyncDisposable
         _app.MapPost("/transferjobs/{id:guid}/reset", (Guid id) => { resetJob(id); return Results.Ok(new { reset = id }); });
 
         await _app.StartAsync();
+        _udp = new UdpControlServer(settings.HttpsApiPort, settings.ApiLocalhostOnly, settings.ApiPassword, async command =>
+        {
+            if (command.Any(char.IsControl)) throw new ArgumentException("Invalid UDP command");
+            var parts = command.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0) throw new ArgumentException("Empty command");
+            switch (parts[0].ToLowerInvariant())
+            {
+                case "raw" when parts.Length >= 3:
+                    return JsonSerializer.Serialize(await ExecuteRawAsync(new RawRequest(string.Join(' ', parts.Skip(2)), parts[1].Split(','))));
+                case "fxp" when parts.Length == 5:
+                    return "OK " + JsonSerializer.Serialize(await startTransfer(new(parts[1], parts[2], null, parts[3], parts[4])));
+                case "download" when parts.Length == 3:
+                    return "OK " + JsonSerializer.Serialize(await startDownload(new(parts[1], parts[2])));
+                case "race" when parts.Length == 4:
+                    var sites = parts[3].Split(',', StringSplitOptions.RemoveEmptyEntries);
+                    var pairs = parts[3].Contains(';') ? parts[3] : string.Join(',', sites.Skip(1).Select(site => sites[0] + ";" + site));
+                    return await _visionaryPipe!.SubmitChainsAsync(parts[1], parts[2], pairs);
+                default: throw new ArgumentException("Expected raw, fxp, race or download command");
+            }
+        });
+        diagnosticLog?.Invoke($"UDP control API listening on {(settings.ApiLocalhostOnly ? "localhost" : "IPv4 interfaces")}:{settings.HttpsApiPort}");
     }
 
     public async ValueTask DisposeAsync()
     {
         _spreadLifetime.Cancel();
+        if (_udp is not null) { await _udp.DisposeAsync(); _udp = null; }
         Task[] spreadTasks; lock (_spreadJobsLock) spreadTasks = _spreadTasks.ToArray();
         await Task.WhenAll(spreadTasks);
         if (_visionaryPipe is not null) { await _visionaryPipe.DisposeAsync(); _visionaryPipe = null; }
@@ -615,3 +641,4 @@ internal sealed record ApiTransferStartResult(
     string Source,
     string Target,
     [property: JsonPropertyName("job_ids")] IReadOnlyList<Guid> JobIds);
+

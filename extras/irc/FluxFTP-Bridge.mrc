@@ -246,7 +246,7 @@ alias -l fluxdll.menu.download {
 
 
 ; Component: visionary/Visionary-FluxFTP.mrc
-; Visionary -> FluxFTP named-pipe bridge v1.02 (local transfer and mapped IRC DONE notifications)
+; Visionary -> FluxFTP named-pipe bridge v1.03 (batch chains and mapped IRC DONE notifications)
 ; Load after Visionary.mrc. Keep both DLL files beside this script.
 
 alias -l fluxvisi.dll return $scriptdir $+ $iif($bits == 64,FluxFTPVisionary64.dll,FluxFTPVisionary32.dll)
@@ -298,24 +298,26 @@ on *:SIGNAL:FU_FXP_CHAINS:{
   window -kze @FluxFTP
   if (!%section || !%release || !%chains) { echo @FluxFTP $timestamp ERROR invalid FU_FXP_CHAINS signal: $1- | return }
   if (!$isfile(%dll)) { echo @FluxFTP $timestamp ERROR missing $qt(%dll) | return }
-  var %i = 1
-  while ($gettok(%chains,%i,32) != $null) {
-    var %pair = $gettok(%chains,%i,32)
-    var %source = $gettok(%pair,1,59), %target = $gettok(%pair,2,59)
-    if (%source && %target) {
-      echo @FluxFTP $timestamp QUEUE %section %release %source -> %target
-      var %reply = $dll(%dll,FluxFTPTransfer,%section %release %source %target %chain.tick)
-      echo @FluxFTP $timestamp %reply
-    }
-    else echo @FluxFTP $timestamp ERROR invalid chain pair: %pair
-    inc %i
-  }
+  var %packed = $replace(%chains,$chr(32),$chr(44))
+  echo @FluxFTP $timestamp CHAINS %section %release %chains
+  var %reply = $dll(%dll,FluxFTPChains,%section %release %packed %chain.tick)
+  echo @FluxFTP $timestamp %reply
 }
 
 
 
+alias fluxbridge {
+  if ($1 == version || $1 == $null) {
+    echo -ag FluxFTP Bridge v1.03 - batch chains, UDP commands and Visionary DLL v1.05 expected
+    return
+  }
+  echo -ag Usage: /fluxbridge version
+}
+on *:LOAD:{ fluxbridge version }
+
 menu menubar {
   FluxFTP
+  .Bridge version:fluxbridge version
   .Raw command...:fluxftp.menu.raw
   .FXP transfer...:fluxftp.menu.fxp
   .Race...:fluxftp.menu.race
@@ -331,6 +333,7 @@ menu menubar {
 }
 menu channel {
   FluxFTP
+  .Bridge version:fluxbridge version
   .Raw command...:fluxftp.menu.raw
   .FXP transfer...:fluxftp.menu.fxp
   .Race...:fluxftp.menu.race

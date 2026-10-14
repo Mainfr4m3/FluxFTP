@@ -24,6 +24,15 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
 
     public void Start() => _listener = ListenAsync(_cancellation.Token);
 
+    public async Task<string> SubmitChainsAsync(string section, string release, string pairs)
+    {
+        using var stream = new MemoryStream();
+        var input = Encoding.UTF8.GetBytes($"CHAINS\t{section}\t{release}\t{pairs}\t0\t0\n");
+        stream.Write(input); stream.Position = 0;
+        await HandleAsync(stream, _cancellation.Token);
+        return Encoding.UTF8.GetString(stream.ToArray(), input.Length, (int)stream.Length - input.Length).Trim();
+    }
+
     private async Task ListenAsync(CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
@@ -43,14 +52,43 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
         }
     }
 
-    private async Task HandleAsync(Stream stream, CancellationToken cancellationToken)
+    private async Task HandleAsync(Stream stream, CancellationToken cancellationToken, long batchReceived = 0)
     {
         using var reader = new StreamReader(stream, new UTF8Encoding(false), false, 4096, true);
         using var writer = new StreamWriter(stream, new UTF8Encoding(false), 4096, true) { AutoFlush = true };
         var line = await reader.ReadLineAsync(cancellationToken).AsTask().WaitAsync(TimeSpan.FromSeconds(15), cancellationToken);
         if (string.IsNullOrWhiteSpace(line)) { await writer.WriteLineAsync("ERROR Empty request"); return; }
-        var received = RaceStartTrace.Now;
+        var received = batchReceived > 0 ? batchReceived : RaceStartTrace.Now;
         var fields = line.Split('\t');
+        if (fields.Length == 6 && fields[0] == "CHAINS")
+        {
+            var acknowledged = false;
+            try
+            {
+                VisionaryTransferProfiles.ReleasePath(fields[2]);
+                var pairs = fields[3].Split(',', StringSplitOptions.RemoveEmptyEntries).Select(pair => pair.Split(';')).ToArray();
+                if (pairs.Length is < 1 or > 256 || pairs.Any(pair => pair.Length != 2 || pair.Any(site => string.IsNullOrWhiteSpace(site) || site.Any(char.IsWhiteSpace) || site.Contains('/') || site.Contains('\\'))))
+                    throw new ArgumentException("Invalid chain batch (maximum 256 pairs).");
+                await writer.WriteLineAsync($"OK RECEIVED {pairs.Length} chain pairs; per-pair results are in the FluxFTP log");
+                acknowledged = true;
+                foreach (var pair in pairs)
+                {
+                    var request = $"TRANSFER\t{fields[1]}\t{fields[2]}\t{pair[0]}\t{pair[1]}\t{fields[4]}\t{fields[5]}\n";
+                    var input = Encoding.UTF8.GetBytes(request);
+                    using var local = new MemoryStream();
+                    local.Write(input); local.Position = 0;
+                    await HandleAsync(local, cancellationToken, received);
+                    var result = Encoding.UTF8.GetString(local.ToArray(), input.Length, (int)local.Length - input.Length).Trim();
+                    _log?.Invoke($"VISIONARY batch {pair[0]} -> {pair[1]}: {result}");
+                }
+            }
+            catch (Exception exception)
+            {
+                if (!acknowledged) await writer.WriteLineAsync("ERROR " + exception.Message.Replace('\r', ' ').Replace('\n', ' '));
+                _log?.Invoke("VISIONARY batch error: " + exception.Message);
+            }
+            return;
+        }
         if ((fields.Length != 5 && fields.Length != 7) || !fields[0].Equals("TRANSFER", StringComparison.OrdinalIgnoreCase) || fields.Skip(1).Any(string.IsNullOrWhiteSpace))
         { await writer.WriteLineAsync("ERROR Expected TRANSFER<TAB>section<TAB>release<TAB>source<TAB>target"); return; }
         try
@@ -103,6 +141,7 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
 
     private async Task WatchAsync(ApiTransferRequest request, VisionaryRaceState state, VisionaryRaceOptions options, CancellationToken token)
     {
+        await Task.Yield(); // Admit all pairs before beginning potentially expensive race work.
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
         lifetime.CancelAfter(options.EffectiveTimeout);
         var label = $"VISIONARY {request.Name}: {request.SrcSite} -> {request.DstSite}";

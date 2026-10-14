@@ -5,10 +5,21 @@ foreach ($part in @('FluxFTP.mrc', 'FluxFTP-DLL.mrc', 'visionary/Visionary-FluxF
     $content = [regex]::Replace($content, '(?ms)^menu (?:menubar|channel) \{.*?^\}\s*', '')
     $combined += "`r`n; Component: $part`r`n$content`r`n"
 }
+$combined = [regex]::Replace($combined, '(?im)(^on \*:load:\{)', '$1 fluxbridge version |', 1)
 $combined += @'
+
+alias fluxbridge {
+  if ($1 == version || $1 == $null) {
+    echo -ag FluxFTP Bridge v1.03 - batch chains, UDP commands and Visionary DLL v1.05 expected
+    return
+  }
+  echo -ag Usage: /fluxbridge version
+}
+on *:LOAD:{ fluxbridge version }
 
 menu menubar {
   FluxFTP
+  .Bridge version:fluxbridge version
   .Raw command...:fluxftp.menu.raw
   .FXP transfer...:fluxftp.menu.fxp
   .Race...:fluxftp.menu.race
@@ -24,6 +35,7 @@ menu menubar {
 }
 menu channel {
   FluxFTP
+  .Bridge version:fluxbridge version
   .Raw command...:fluxftp.menu.raw
   .FXP transfer...:fluxftp.menu.fxp
   .Race...:fluxftp.menu.race

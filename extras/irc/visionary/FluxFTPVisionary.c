@@ -4,7 +4,7 @@
 #include <string.h>
 #include <stdlib.h>
 
-#define VERSION "1.04"
+#define VERSION "1.05"
 #define PIPE_PATH "\\\\.\\pipe\\FluxFTP.Visionary.v1"
 typedef struct LOADINFO { DWORD mVersion; HWND mHwnd; BOOL mKeep; BOOL mUnicode; DWORD mBeta; DWORD mBytes; } LOADINFO;
 static DWORD g_capacity = 4096;
@@ -32,8 +32,8 @@ __declspec(dllexport) void __stdcall LoadDll(LOADINFO *info)
 __declspec(dllexport) int __stdcall UnloadDll(int timeout) { (void)timeout; return 1; }
 
 /* Input: section release source-site target-site */
-__declspec(dllexport) int __stdcall FluxFTPTransfer(
-    HWND main_window, HWND active_window, char *data, char *parms, BOOL show, BOOL no_pause)
+static int transfer_request(
+    HWND main_window, HWND active_window, char *data, char *parms, BOOL show, BOOL no_pause, BOOL batch)
 {
     char input[4096], request[4096], response[4096];
     char *section, *release, *source, *target, *tick;
@@ -53,7 +53,15 @@ __declspec(dllexport) int __stdcall FluxFTPTransfer(
             if (age <= 300000 && entered >= age) chain = entered - age;
         }
     }
-    snprintf(request, sizeof(request), "TRANSFER\t%s\t%s\t%s\t%s\t%llu\t%llu\n", section, release, source, target, chain, entered);
+    if (batch) {
+        /* Batch input: section release chains tick; source is the chain list, target is its timestamp. */
+        tick = target;
+        ULONGLONG raw = strtoull(tick, NULL, 10);
+        DWORD age = (DWORD)entered - (DWORD)raw;
+        chain = raw > 0 && age <= 300000 && entered >= age ? entered - age : 0;
+        if (strlen(source) + strlen(section) + strlen(release) + 96 >= sizeof(request)) { result(data, "ERROR chain batch too large"); return 3; }
+        snprintf(request, sizeof(request), "CHAINS\t%s\t%s\t%s\t%llu\t%llu\n", section, release, source, chain, entered);
+    } else snprintf(request, sizeof(request), "TRANSFER\t%s\t%s\t%s\t%s\t%llu\t%llu\n", section, release, source, target, chain, entered);
     {
         ULONGLONG deadline = GetTickCount64() + 10000;
         DWORD pipe_error = ERROR_FILE_NOT_FOUND;
@@ -87,3 +95,8 @@ __declspec(dllexport) int __stdcall FluxFTPVersion(HWND m, HWND a, char *data, c
     (void)m; (void)a; (void)parms; (void)show; (void)no_pause;
     result(data, VERSION); return 3;
 }
+
+__declspec(dllexport) int __stdcall FluxFTPTransfer(HWND main_window, HWND active_window, char *data, char *parms, BOOL show, BOOL no_pause)
+{ return transfer_request(main_window, active_window, data, parms, show, no_pause, FALSE); }
+__declspec(dllexport) int __stdcall FluxFTPChains(HWND main_window, HWND active_window, char *data, char *parms, BOOL show, BOOL no_pause)
+{ return transfer_request(main_window, active_window, data, parms, show, no_pause, TRUE); }
