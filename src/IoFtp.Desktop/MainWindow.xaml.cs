@@ -1602,7 +1602,7 @@ public partial class MainWindow : Window
         if (_loggedSkipMatches.Count >= 4096) _loggedSkipMatches.Clear();
         if (!_loggedSkipMatches.Add(text)) return;
         _raceLog.Write("SKIP-MATCH", text);
-        LogText.AppendText(Environment.NewLine + "Skiplist match: " + text);
+        AppendConnectionLog(Environment.NewLine + "Skiplist match: " + text);
     }
     private bool ShouldSkip(string name, bool isDirectory = false, bool automatic = false, long? size = null)
     {
@@ -1836,7 +1836,7 @@ public partial class MainWindow : Window
                 if (entry.VisionaryRace) _hiddenRaceJobStates[entry.Id] = "Skipped";
                 _queue.Remove(entry);
                 _raceLog.Write("SKIP", $"Skip list removed job {entry.Id}: {entry.Name}");
-                LogText.AppendText(Environment.NewLine + "Skip list: " + entry.Name);
+                AppendConnectionLog(Environment.NewLine + "Skip list: " + entry.Name);
                 continue;
             }
             var (sourceSite, destinationSite) = SitesFor(entry.Direction);
@@ -2026,7 +2026,7 @@ public partial class MainWindow : Window
                         if (action == ExistingTargetAction.Skip)
                         {
                             var reason = $"Existing target skipped: {entry.Name}; source={sourceSize} bytes, target={targetSize} bytes; policy=Skip.";
-                            LogText.AppendText(Environment.NewLine + reason); _raceLog.Write("SKIP", reason);
+                            AppendConnectionLog(Environment.NewLine + reason); _raceLog.Write("SKIP", reason);
                             entry.State = "Skipped"; _skippedTransferJobs.Add(entry.Id); reuseWorkers = true; return;
                         }
                         if (action == ExistingTargetAction.Resume && FtpTransferMode.CanResume(entry.Source, sourceProfile.EffectiveOptions) && FtpTransferMode.CanResume(entry.Destination, destinationProfile.EffectiveOptions)) fxpOffset = targetSize.Value;
@@ -2433,8 +2433,7 @@ public partial class MainWindow : Window
             : configuredReverse == false ? "destination PASV / source PORT"
             : sourceSession.LastFxpNegotiation == "None" ? "Auto (negotiation did not complete)"
             : sourceSession.LastFxpNegotiation;
-        LogText.AppendText(
-            $"{Environment.NewLine}FXP diagnostic:" +
+        var diagnostic = $"FXP diagnostic:" +
             $"{Environment.NewLine}  Source: {sourceProfile.Name} ({sourceSession.ConnectedHost}:{sourceSession.ConnectedPort})" +
             $"{Environment.NewLine}  > CWD {RemoteParent(entry.Source)}" +
             $"{Environment.NewLine}  > RETR {RemoteLeaf(entry.Source)}" +
@@ -2443,7 +2442,9 @@ public partial class MainWindow : Window
             $"{Environment.NewLine}  > STOR {RemoteLeaf(entry.Destination)}" +
             $"{Environment.NewLine}  Destination parent: {RemoteParent(entry.Destination)}" +
             $"{Environment.NewLine}  Data protection: {(clearFxp ? "Clear" : "TLS")}; route: {route}" +
-            $"{Environment.NewLine}  PRET: source {(sourceProfile.EffectiveOptions.NeedsPret ? "on" : "off")}, destination {(destinationProfile.EffectiveOptions.NeedsPret ? "on" : "off")}");
+            $"{Environment.NewLine}  PRET: source {(sourceProfile.EffectiveOptions.NeedsPret ? "on" : "off")}, destination {(destinationProfile.EffectiveOptions.NeedsPret ? "on" : "off")}";
+        _raceLog.Write("FXP-DIAGNOSTIC", $"{entry.Id} {diagnostic}");
+        AppendConnectionLog(Environment.NewLine + diagnostic);
     }
 
     private static bool? PreferredReverseFxp(ConnectionProfile source, ConnectionProfile destination)
@@ -3888,7 +3889,7 @@ public partial class MainWindow : Window
                     {
                         selectedFiles.Remove(file);
                         var wait = $"Smart resume waiting: {file.Entry.Name}; source={file.Entry.Size}; target={target.Size}; next incoming update; additional checks={_settings.SmartResumeAttempts}";
-                        LogText.AppendText(Environment.NewLine + wait); _raceLog.Write("SMART-RESUME", wait);
+                        AppendConnectionLog(Environment.NewLine + wait); _raceLog.Write("SMART-RESUME", wait);
                         continue;
                     }
                     race.SkipExistingTarget(file.Entry.FullPath);

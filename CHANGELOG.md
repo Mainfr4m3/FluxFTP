@@ -2,6 +2,10 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.4 — 2026-10-15
+
+- Skiplist matches, existing-target skip notices, Smart resume status and the complete FXP diagnostic block now require Debug in Connection Log. Detailed diagnostics remain in RACE-Log; transfer errors, queued transfers and user statistics stay visible without Debug.
+
 ## 2.1.3 — 2026-10-15
 
 - VISIONARY TIMING messages in Connection Log now require Debug. Queued transfers, errors and user statistics remain visible without Debug. Full timing diagnostics remain in RACE-Log and the Metrics timing card is unchanged.
