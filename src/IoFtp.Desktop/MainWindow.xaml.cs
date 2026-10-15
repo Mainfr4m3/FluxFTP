@@ -2258,6 +2258,12 @@ public partial class MainWindow : Window
         };
         _sessionStatistics.Complete(kind, newBytes);
         _totalStatistics.Complete(kind, newBytes);
+        if (_raceJobOwners.TryGetValue(entry.Id, out var race))
+        {
+            if (entry.SourceProfileId is { } source) _raceListings.Invalidate(source);
+            if (entry.DestinationProfileId is { } destination) _raceListings.Invalidate(destination);
+            race.NotifyTransferCompleted();
+        }
         if (_totalStatistics.LastError is { } error) LogText.AppendText(Environment.NewLine + error);
     }
 
@@ -3707,7 +3713,15 @@ public partial class MainWindow : Window
                 foreach (var file in directory)
                 {
                     if (!targets.TryGetValue(file.Entry.Name, out var target) || target.Size is null ||
-                        FxpExistingFilePolicy.Resolve(_settings, file.Entry.Size, target.Size, true) != ExistingTargetAction.Skip) continue;
+                        FxpExistingFilePolicy.Resolve(_settings, file.Entry.Size, target.Size, true) != ExistingTargetAction.Skip)
+                    { race.DeferSmallerSource(file.Entry.FullPath, null, null, false, 1); continue; }
+                    if (race.DeferSmallerSource(file.Entry.FullPath, file.Entry.Size, target.Size, _settings.SmartResume, _settings.SmartResumeAttempts))
+                    {
+                        selectedFiles.Remove(file);
+                        var wait = $"Smart resume waiting: {file.Entry.Name}; source={file.Entry.Size}; target={target.Size}; next incoming update; additional checks={_settings.SmartResumeAttempts}";
+                        LogText.AppendText(Environment.NewLine + wait); _raceLog.Write("SMART-RESUME", wait);
+                        continue;
+                    }
                     race.SkipExistingTarget(file.Entry.FullPath);
                     selectedFiles.Remove(file); skippedBeforeQueue++;
                 }

@@ -105,6 +105,9 @@ public partial class GlobalSettingsWindow : Window
         UseAdvancedSkipBox.IsChecked = SkipRuleMatcher.UsesAdvanced(s);
         UpdateSkipFilterMode();
         LogSkipMatchesBox.IsChecked = s.LogSkipListMatches;
+        SmartResumeBox.IsChecked = s.SmartResume;
+        SmartResumeAttemptsBox.ItemsSource = new[] { 1, 2, 3 };
+        SmartResumeAttemptsBox.SelectedItem = Math.Clamp(s.SmartResumeAttempts, 1, 3);
         EnableSkipListBox.IsChecked=s.EnableSkipList; SkipZeroByteBox.IsChecked=s.SkipZeroByteFiles;
         SkipEmptyDirectoryBox.IsChecked=s.SkipEmptyDirectories; ApplySkipFoldersBox.IsChecked=s.ApplySkipListToFolders;
         SkipModeBox.ItemsSource = new[] { "Both", "Auto", "Manual" }; SkipModeBox.SelectedItem=s.SkipTransferMode;
@@ -152,6 +155,7 @@ public partial class GlobalSettingsWindow : Window
         if (!ThemeManager.TryValidate(theme, out var themeError)) { ErrorText.Text = themeError; return; }
         Settings = new GlobalSettings(BindBox.Text.Trim(),N(PortFromBox),N(PortToBox),ApiEnabledBox.IsChecked==true,N(ApiPortBox),ApiLocalBox.IsChecked==true,N(ExpirationBox),N(StarterBox),N(RuntimeBox),N(JobHistoryBox),N(TransferHistoryBox),N(LogHistoryBox),UsernameBox.Text.Trim(),N(SlotsBox),N(UploadsBox),N(DownloadsBox),((ProtocolChoice)ProtocolBox.SelectedItem).Protocol,N(DefaultIdleBox),LocalPathBox.Text.Trim(),N(LocalDownloadsBox),N(LocalUploadsBox),PriorityPatternsBox.Text.Trim(),SkipPatternsBox.Text.Trim(),ApiPasswordBox.Password,MinimizeToTrayBox.IsChecked==true,LegendModeBox.SelectedItem?.ToString() ?? "Compact",(ProxyType)(ProxyTypeBox.SelectedItem ?? ProxyType.None),ProxyHostBox.Text.Trim(),N(ProxyPortBox),ProxyUsernameBox.Text.Trim(),ProxyPasswordBox.Password,ProxyDnsBox.IsChecked==true,ProxyDataBox.IsChecked==true,CheckUpdatesBox.IsChecked==true, _advancedSkipRules.ToArray(), theme, irc);
         Settings = Settings with { EnableVisionaryBridge = _visionaryBridge, SerializeLocalTransfers = SerializeLocalBox.IsChecked == true,
+            SmartResume = SmartResumeBox.IsChecked == true, SmartResumeAttempts = (int)(SmartResumeAttemptsBox.SelectedItem ?? 2),
             StatusBarFontSize = (int)(StatusFontBox.SelectedItem ?? 12), StatusBarScrollSpeed = (int)(ScrollSpeedBox.SelectedItem ?? 60),
             TransferCategoryOrder = string.Join("\n", PriorityCategoriesList.Items.Cast<string>()),
             EnableFxpSpeedMonitoring = FxpSpeedMonitoringBox.IsChecked == true, Layout = layout, MetadataSkipDefaultsApplied = true, VideoMetadataSkipDefaultsApplied = true,

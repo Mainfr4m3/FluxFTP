@@ -67,7 +67,8 @@ public sealed record GlobalSettings(
     bool ResumeOverwriteDefaultsApplied = false,
     bool LogSkipListMatches = false,
     bool? UseAdvancedSkipFilters = null,
-    int StatusBarFontSize = 12, int StatusBarScrollSpeed = 60);
+    int StatusBarFontSize = 12, int StatusBarScrollSpeed = 60,
+    bool SmartResume = false, int SmartResumeAttempts = 2);
 
 public sealed record ViewLayoutSettings(string[]? HiddenColumns = null, string SortBy = "Name",
     bool Descending = false, string FontFamily = "", double FontSize = 0, bool Bold = false);

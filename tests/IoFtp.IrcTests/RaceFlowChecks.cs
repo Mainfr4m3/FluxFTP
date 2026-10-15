@@ -8,6 +8,12 @@ internal static class RaceFlowChecks
     {
         var checks = 0;
         void Check(bool value, string name) { if (!value) throw new Exception(name); checks++; }
+        var smartRace = new VisionaryRaceState(new());
+        Check(smartRace.DeferSmallerSource("/r/f", 50, 100, true, 2), "smart initial wait");
+        Check(smartRace.DeferSmallerSource("/r/f", 80, 100, true, 2), "smart first update wait");
+        Check(!smartRace.DeferSmallerSource("/r/f", 90, 100, true, 2), "smart second update exhausts checks");
+        Check(!smartRace.DeferSmallerSource("/r/g", 100, 100, true, 3), "equal sizes follow target policy");
+        Check(!smartRace.DeferSmallerSource("/r/g", 50, 100, false, 3), "disabled smart mode preserves skip");
         var prequeueRace = new VisionaryRaceState(new());
         prequeueRace.SkipExistingTarget("/release/file.rar");
         Check(!prequeueRace.NeedsTransfer("/release/file.rar", 100, null, _ => null), "existing target excluded before creating job");

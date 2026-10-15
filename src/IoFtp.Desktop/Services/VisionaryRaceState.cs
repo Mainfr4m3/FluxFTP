@@ -62,6 +62,8 @@ internal sealed record VisionaryRaceOptions(
 internal sealed class VisionaryRaceState(VisionaryRaceOptions options, VisionaryTransferProfiles? profiles = null, Func<DateTimeOffset>? utcNow = null)
 {
     public RaceStartTrace? StartTrace { get; set; }
+    public Action? TransferCompleted { get; set; }
+    public void NotifyTransferCompleted() => TransferCompleted?.Invoke();
     private sealed record Tracked(Guid Job, long? Size, DateTimeOffset? Modified, bool Final, int Attempts);
     private readonly Dictionary<string, Tracked> _files = new(StringComparer.Ordinal);
     private sealed record PayloadSnapshot(string Signature, DateTimeOffset Changed, bool Complete);
@@ -189,8 +191,18 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
     }
 
     private readonly HashSet<string> _existingTargets = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, int> _deferredTargets = new(StringComparer.OrdinalIgnoreCase);
+    public bool DeferSmallerSource(string path, long? source, long? target, bool enabled, int attempts)
+    {
+        if (!enabled || source is null || target is null || source >= target)
+        { _deferredTargets.Remove(path); return false; }
+        var checks = _deferredTargets.TryGetValue(path, out var prior) ? prior + 1 : 0;
+        if (checks >= Math.Clamp(attempts, 1, 3)) { _deferredTargets.Remove(path); return false; }
+        _deferredTargets[path] = checks;
+        return true;
+    }
     public void SkipExistingTarget(string path) => _existingTargets.Add(path);
     public bool IsSkipped(string path, Func<Guid, string?> status) => _existingTargets.Contains(path) || _files.TryGetValue(path, out var file) && status(file.Job) == "Skipped";
-    public bool Finished(Func<Guid, string?> status) => DestinationAlreadyComplete || !HasPendingPayload && SourceComplete && (_files.Count + _existingTargets.Count) > 0 &&
+    public bool Finished(Func<Guid, string?> status) => DestinationAlreadyComplete || _deferredTargets.Count == 0 && !HasPendingPayload && SourceComplete && (_files.Count + _existingTargets.Count) > 0 &&
         _files.All(pair => status(pair.Value.Job) == "Skipped" || IsFinal(pair.Key) && pair.Value.Final && status(pair.Value.Job) == "Completed");
 }

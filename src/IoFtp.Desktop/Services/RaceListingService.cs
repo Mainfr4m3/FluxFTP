@@ -15,6 +15,7 @@ internal sealed class RaceListingService : IAsyncDisposable
     private readonly TimeSpan _freshness;
     private sealed class Source
     {
+        public int Invalidated;
         public readonly SemaphoreSlim Gate = new(1, 1);
         public readonly Dictionary<string, Snapshot> Listings = new(StringComparer.Ordinal);
         public ConnectionProfile? Profile;
@@ -30,6 +31,10 @@ internal sealed class RaceListingService : IAsyncDisposable
         _cleanup = CleanupAsync();
     }
 
+    public void Invalidate(Guid site)
+    {
+        if (_sources.TryGetValue(site, out var source)) Interlocked.Exchange(ref source.Invalidated, 1);
+    }
     public async Task<IReadOnlyList<RemoteEntry>> ListAsync(ConnectionProfile profile, string path, CancellationToken token)
     {
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token, _shutdown.Token);
@@ -40,6 +45,7 @@ internal sealed class RaceListingService : IAsyncDisposable
         try
         {
             token.ThrowIfCancellationRequested();
+            if (Interlocked.Exchange(ref source.Invalidated, 0) != 0) source.Listings.Clear();
             if (source.Profile != profile)
             {
                 await CloseAsync(source).ConfigureAwait(false);

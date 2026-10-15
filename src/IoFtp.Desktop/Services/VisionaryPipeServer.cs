@@ -130,6 +130,11 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
                 var state = new VisionaryRaceState(options) { StartTrace = new RaceStartTrace($"{fields[1]} {fields[2]}: {fields[3]} -> {fields[4]}", received, chain, dll, _log) };
                 var request = new ApiTransferRequest(fields[3], null, fields[1], fields[4], null, fields[1], fields[2]);
                 var notification = _notifications.GetOrAdd(key, _ => new SemaphoreSlim(0, 1));
+                state.TransferCompleted = () =>
+                {
+                    state.StartTrace?.Mark("transfer-completed-wakeup", "fresh listing and verification requested");
+                    if (notification.CurrentCount == 0) try { notification.Release(); } catch (SemaphoreFullException) { }
+                };
                 _races[key] = WatchAsync(request, state, options, cancellationToken, notification);
                 await writer.WriteLineAsync("OK ACCEPTED " + fields[2] + " — queued or watching; progress is in the FluxFTP log");
                 return;
@@ -175,6 +180,7 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
         catch (Exception ex) { _log?.Invoke(label + " FAILED: " + ex.Message); }
         finally
         {
+            state.TransferCompleted = null;
             // Let the UI cancel this race's pending jobs even when cancellation occurred during the delay.
             state.StartTrace?.Mark("watch-ended");
             lifetime.Cancel();

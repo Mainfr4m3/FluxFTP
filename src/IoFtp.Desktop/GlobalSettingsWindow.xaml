@@ -67,6 +67,9 @@
                 <TabItem Header="Skiplist"><Grid Margin="16"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                     <StackPanel>
                         <CheckBox x:Name="LogSkipMatchesBox" Content="Log skiplist matches (rule and file size)" Margin="0,4"/>
+                        <CheckBox x:Name="SmartResumeBox" Content="Smart resume — wait for source growth on incoming updates" Margin="0,4"/>
+                        <WrapPanel><TextBlock Text="Additional checks (1–3)" VerticalAlignment="Center"/><ComboBox x:Name="SmartResumeAttemptsBox" Width="60" Margin="8,2"/></WrapPanel>
+                        <TextBlock Text="For RACE: when source is smaller than an existing target, defer Skip until incoming updates. Size equality is not proof of COMPLETE; target Skip/Resume/Overwrite policy still applies." TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}"/>
                         <WrapPanel><CheckBox x:Name="EnableSkipListBox" Content="Enable Skip List" Margin="0,4,20,4"/><CheckBox x:Name="SkipZeroByteBox" Content="Skip Zero Byte File" Margin="0,4,20,4"/><CheckBox x:Name="SkipEmptyDirectoryBox" Content="Skip Empty Directory" Margin="0,4"/></WrapPanel>
                         <CheckBox x:Name="ApplySkipFoldersBox" Content="Apply Skip List to Folder" Margin="0,4"/>
                         <WrapPanel Margin="0,8"><TextBlock Text="Skip mode" VerticalAlignment="Center" Margin="0,0,10,0"/><ComboBox x:Name="SkipModeBox" Width="170"/><TextBlock Text="Skipped item color" VerticalAlignment="Center" Margin="15,0,10,0"/><TextBox x:Name="SkippedColorBox" Width="90"/><Button Content="Choose…" Click="SkippedColor_Click"/></WrapPanel>
