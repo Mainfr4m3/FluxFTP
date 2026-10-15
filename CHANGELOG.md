@@ -2,6 +2,10 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.3 — 2026-10-15
+
+- VISIONARY TIMING messages in Connection Log now require Debug. Queued transfers, errors and user statistics remain visible without Debug. Full timing diagnostics remain in RACE-Log and the Metrics timing card is unchanged.
+
 ## 2.1.2 — 2026-10-15
 
 - Server CRC/size verification failures retain Failed status and show a concise integrity error. The full server reply is available under Debug and in RACE-Log.
