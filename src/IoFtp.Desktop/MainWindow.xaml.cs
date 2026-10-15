@@ -2976,6 +2976,8 @@ public partial class MainWindow : Window
 
     private void NormalizePanelSpace()
     {
+        foreach (var row in new[] { ManagerRow, QueueRow, MetricsRow, StatusRow, LogRow })
+            if (row.Height.Value == 0) row.MinHeight = 0;
         var visible = new[] { ManagerRow, QueueRow, MetricsRow, StatusRow, LogRow }
             .Where(row => row.Height.Value > 0).ToArray();
         var available = Math.Max(200, WorkspaceGrid.ActualHeight - 32);

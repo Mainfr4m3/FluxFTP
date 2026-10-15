@@ -47,7 +47,7 @@ public partial class MetricsPanel : UserControl
         SizeControl("scale", "Dashboard scale (%)", 65, 125, 85, value => DashboardBody.LayoutTransform = new ScaleTransform(value / 100, value / 100));
         SizeControl("cards", "Card width", 130, 260, 165, value =>
         {
-            foreach (Border card in CardsPanel.Children)
+            foreach (var card in CardsPanel.Children.OfType<Border>())
             {
                 card.Width = value; card.Padding = new Thickness(8); card.Margin = new Thickness(0, 0, 5, 5);
                 if (card.Child is StackPanel stack)
@@ -70,6 +70,8 @@ public partial class MetricsPanel : UserControl
         catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException) { }
     }
     private void Refresh_Click(object sender, RoutedEventArgs e) => RefreshMetrics();
+    private void ToggleSizes_Click(object sender, RoutedEventArgs e) => SizeOptions.Visibility =
+        SizeOptions.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
     private void TransferJobs_Click(object sender, RoutedEventArgs e) => _transferJobs();
     private void RaceLog_Click(object sender, RoutedEventArgs e) => _raceLog();
     private void SpreadJobs_Click(object sender, RoutedEventArgs e) => _spreadJobs();

@@ -1,10 +1,16 @@
 <UserControl x:Class="IoFtp.Desktop.MetricsPanel" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Background="{DynamicResource WindowBrush}" Foreground="{DynamicResource TextBrush}">
  <DockPanel Margin="10">
   <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
-   <WrapPanel DockPanel.Dock="Right"><Button Content="Transfer Jobs" Click="TransferJobs_Click"/><Button Content="RACE-Log" Click="RaceLog_Click"/><Button Content="Spread Jobs" Click="SpreadJobs_Click"/><Button Content="Hide Metrics" Click="Close_Click"/></WrapPanel>
-   <StackPanel><TextBlock Text="FLUXFTP METRICS" FontSize="20" FontWeight="SemiBold" Foreground="{DynamicResource AccentBrush}"/><TextBlock x:Name="UpdatedText" Foreground="{DynamicResource MutedTextBrush}"/></StackPanel>
+   
+   <StackPanel>
+    <StackPanel Orientation="Horizontal">
+     <TextBlock Text="FLUXFTP METRICS" FontSize="20" FontWeight="SemiBold" Foreground="{DynamicResource AccentBrush}" VerticalAlignment="Center"/>
+     <Button Content="⚙" ToolTip="Size and layout" Margin="12,0,0,0" Padding="6,2" Click="ToggleSizes_Click"/>
+    </StackPanel>
+    <TextBlock x:Name="UpdatedText" Foreground="{DynamicResource MutedTextBrush}"/>
+   </StackPanel>
   </DockPanel>
-  <Expander x:Name="SizeOptions" DockPanel.Dock="Top" Header="Size and layout" Margin="0,0,0,6"/><ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+  <ContentControl x:Name="SizeOptions" DockPanel.Dock="Top" Visibility="Collapsed" Margin="0,0,0,6" Foreground="{DynamicResource TextBrush}"/><ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
    <StackPanel x:Name="DashboardBody">
     <WrapPanel x:Name="CardsPanel">
      <Border Style="{StaticResource MetricCard}" Width="195"><StackPanel><TextBlock Text="TRANSFERRED · SESSION" Foreground="{DynamicResource MutedTextBrush}"/><TextBlock x:Name="BytesText" FontSize="26" FontWeight="SemiBold" Foreground="{DynamicResource AccentBrush}"/></StackPanel></Border>
@@ -13,6 +19,7 @@
      <Border Style="{StaticResource MetricCard}" Width="165"><StackPanel><TextBlock Text="QUEUED / ACTIVE" Foreground="{DynamicResource MutedTextBrush}"/><TextBlock x:Name="ActiveText" FontSize="26" FontWeight="SemiBold"/></StackPanel></Border>
      <Border Style="{StaticResource MetricCard}" Width="165"><StackPanel><TextBlock Text="IDLE POOL" Foreground="{DynamicResource MutedTextBrush}"/><TextBlock x:Name="PoolText" FontSize="26" FontWeight="SemiBold"/></StackPanel></Border>
      <Border Style="{StaticResource MetricCard}" Width="165"><StackPanel><TextBlock Text="SESSION RUNNING" Foreground="{DynamicResource MutedTextBrush}"/><TextBlock x:Name="UptimeText" FontSize="26" FontWeight="SemiBold"/></StackPanel></Border>
+     <WrapPanel VerticalAlignment="Center" Margin="8,0,0,5"><Button Content="Transfer Jobs" Click="TransferJobs_Click"/><Button Content="RACE-Log" Click="RaceLog_Click"/><Button Content="Spread Jobs" Click="SpreadJobs_Click"/><Button Content="Hide Metrics" Click="Close_Click"/></WrapPanel>
     </WrapPanel>
     <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="3" Padding="12" Margin="0,10,0,0">
      <StackPanel>
@@ -32,4 +39,5 @@
   </ScrollViewer>
  </DockPanel>
 </UserControl>
+
 
