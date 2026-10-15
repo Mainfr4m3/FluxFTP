@@ -92,6 +92,7 @@ public partial class MainWindow : Window
     private readonly SemaphoreSlim _leftNavigationGate = new(1, 1);
     private readonly SemaphoreSlim _rightNavigationGate = new(1, 1);
     private readonly System.Windows.Forms.NotifyIcon _trayIcon = new();
+    private readonly List<System.Windows.Forms.ToolStripMenuItem> _trayMetrics = [];
     private readonly System.Windows.Threading.DispatcherTimer _legendTimer = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly ExternalScriptRunner _scriptRunner = new();
     private readonly UpdateCheckService _updateCheckService = new();
@@ -165,7 +166,7 @@ public partial class MainWindow : Window
         Loaded += async (_, _) => { RestoreWindowLayout(); await RestartApiServerAsync(); await RestartIrcAsync(); if (_settings.CheckForUpdatesAtStartup) await CheckForUpdatesAsync(); };
         ConfigureTrayIcon();
         StateChanged += MainWindow_StateChanged;
-        _legendTimer.Tick += (_, _) => { TrimConnectionLog(); UpdateLegendBar(); UpdateConnectionButtons(); };
+        _legendTimer.Tick += (_, _) => { TrimConnectionLog(); UpdateLegendBar(); UpdateConnectionButtons(); UpdateTrayMetrics(); };
         _statusScrollTimer.Tick += (_, _) => AnimateStatusScroll();
         _statusScrollTimer.Start();
         _legendTimer.Start(); UpdateLegendBar();
@@ -3385,10 +3386,40 @@ public partial class MainWindow : Window
         {
             var menu = new System.Windows.Forms.ContextMenuStrip();
             menu.Items.Add("Open FluxFTP", null, (_, _) => Dispatcher.Invoke(RestoreFromTray));
+            menu.Items.Add("Show Metrics", null, (_, _) => Dispatcher.Invoke(() =>
+            {
+                RestoreFromTray();
+                if (MetricsHost.Visibility != Visibility.Visible) Metrics_Click(this, new RoutedEventArgs());
+            }));
+            menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
+            foreach (var label in new[] { "Transferred", "Completed files", "FXP rate", "Queued / active", "Idle pool", "Session running" })
+            {
+                var item = new System.Windows.Forms.ToolStripMenuItem(label) { Enabled = false };
+                _trayMetrics.Add(item); menu.Items.Add(item);
+            }
+            menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
             menu.Items.Add("Exit FluxFTP", null, (_, _) => Dispatcher.Invoke(RequestExit));
+            menu.Opening += (_, _) => Dispatcher.Invoke(UpdateTrayMetrics);
             _trayIcon.ContextMenuStrip = menu;
             _trayIcon.DoubleClick += (_, _) => Dispatcher.Invoke(RestoreFromTray);
         }
+        UpdateTrayMetrics();
+    }
+
+    private void UpdateTrayMetrics()
+    {
+        if (_trayMetrics.Count != 6) return;
+        var transferred = FormatSize(_sessionStatistics.Uploaded + _sessionStatistics.Downloaded + _sessionStatistics.Fxp + _sessionStatistics.Local);
+        var queued = _queue.Count(entry => entry.State == "Queued");
+        var active = _queue.Count(entry => entry.State == "Transferring");
+        var pool = _workerPool.Values.Sum(items => items.Count);
+        var rate = $"{_sessionStatistics.FxpRecentRate / 1_000_000d:0.00} MB/s";
+        var uptime = FormatTransferTime(_sessionStatistics.Uptime);
+        var rows = new[] { $"Transferred · session: {transferred}", $"Completed files: {_sessionStatistics.Completed:N0}",
+            $"FXP rate · last 60 s: {rate}", $"Queued / active: {queued} / {active}", $"Idle pool: {pool}", $"Session running: {uptime}" };
+        for (var i = 0; i < rows.Length; i++) _trayMetrics[i].Text = rows[i];
+        var tip = $"FluxFTP · {transferred} · {rate}\nFiles {_sessionStatistics.Completed} · Jobs {queued}/{active} · Pool {pool}\nSession {uptime}";
+        _trayIcon.Text = tip.Length <= 127 ? tip : tip[..127];
     }
 
     private void MainWindow_StateChanged(object? sender, EventArgs e)

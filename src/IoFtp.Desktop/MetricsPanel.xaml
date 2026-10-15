@@ -4,9 +4,9 @@
    <WrapPanel DockPanel.Dock="Right"><Button Content="Transfer Jobs" Click="TransferJobs_Click"/><Button Content="RACE-Log" Click="RaceLog_Click"/><Button Content="Spread Jobs" Click="SpreadJobs_Click"/><Button Content="Hide Metrics" Click="Close_Click"/></WrapPanel>
    <StackPanel><TextBlock Text="FLUXFTP METRICS" FontSize="20" FontWeight="SemiBold" Foreground="{DynamicResource AccentBrush}"/><TextBlock x:Name="UpdatedText" Foreground="{DynamicResource MutedTextBrush}"/></StackPanel>
   </DockPanel>
-  <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-   <StackPanel>
-    <WrapPanel>
+  <Expander x:Name="SizeOptions" DockPanel.Dock="Top" Header="Size and layout" Margin="0,0,0,6"/><ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+   <StackPanel x:Name="DashboardBody">
+    <WrapPanel x:Name="CardsPanel">
      <Border Style="{StaticResource MetricCard}" Width="195"><StackPanel><TextBlock Text="TRANSFERRED · SESSION" Foreground="{DynamicResource MutedTextBrush}"/><TextBlock x:Name="BytesText" FontSize="26" FontWeight="SemiBold" Foreground="{DynamicResource AccentBrush}"/></StackPanel></Border>
      <Border Style="{StaticResource MetricCard}" Width="165"><StackPanel><TextBlock Text="COMPLETED FILES" Foreground="{DynamicResource MutedTextBrush}"/><TextBlock x:Name="FilesText" FontSize="26" FontWeight="SemiBold"/></StackPanel></Border>
      <Border Style="{StaticResource MetricCard}" Width="195"><StackPanel><TextBlock Text="FXP RATE · LAST 60 S" Foreground="{DynamicResource MutedTextBrush}"/><TextBlock x:Name="SpeedText" FontSize="26" FontWeight="SemiBold"/></StackPanel></Border>
@@ -32,3 +32,4 @@
   </ScrollViewer>
  </DockPanel>
 </UserControl>
+
