@@ -8,9 +8,9 @@
     <AssemblyName>FluxFTP</AssemblyName>
     <Product>FluxFTP</Product>
     <Title>FluxFTP</Title>
-    <Version>1.0.116</Version>
-    <AssemblyVersion>1.0.116.0</AssemblyVersion>
-    <FileVersion>1.0.116.0</FileVersion>
+    <Version>2.1.0</Version>
+    <AssemblyVersion>2.1.0.0</AssemblyVersion>
+    <FileVersion>2.1.0.0</FileVersion>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <RootNamespace>IoFtp.Desktop</RootNamespace>
     <ApplicationIcon>Assets\fluxftp-server.ico</ApplicationIcon>
@@ -23,6 +23,8 @@
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="..\..\CHANGELOG.md" Link="CHANGELOG.md" />
+    <EmbeddedResource Include="..\..\extras\irc\Bridge-README.md" LogicalName="FluxFTP.Bridge.irc.Bridge-README.md" />
+    <EmbeddedResource Include="..\..\extras\irc\visionary\fluxftp_chains.pl" LogicalName="FluxFTP.Bridge.visionary.fluxftp_chains.pl" />
     <EmbeddedResource Include="..\..\extras\irc\*.mrc;..\..\extras\irc\FluxFTP32.dll;..\..\extras\irc\FluxFTP64.dll;..\..\extras\irc\README.md" LogicalName="FluxFTP.Bridge.irc.%(Filename)%(Extension)" />
     <EmbeddedResource Include="..\..\extras\irc\visionary\*.mrc;..\..\extras\irc\visionary\FluxFTPVisionary32.dll;..\..\extras\irc\visionary\FluxFTPVisionary64.dll;..\..\extras\irc\visionary\README.md" LogicalName="FluxFTP.Bridge.visionary.%(Filename)%(Extension)" />
     <Content Include="..\..\extras\irc\visionary\*.mrc;..\..\extras\irc\visionary\*.dll;..\..\extras\irc\visionary\README.md" Link="extras\irc\visionary\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />

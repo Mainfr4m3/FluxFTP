@@ -4,7 +4,7 @@
 #include <string.h>
 #include <stdlib.h>
 
-#define VERSION "1.05"
+#define VERSION "2.0"
 #define PIPE_PATH "\\\\.\\pipe\\FluxFTP.Visionary.v1"
 typedef struct LOADINFO { DWORD mVersion; HWND mHwnd; BOOL mKeep; BOOL mUnicode; DWORD mBeta; DWORD mBytes; } LOADINFO;
 static DWORD g_capacity = 4096;

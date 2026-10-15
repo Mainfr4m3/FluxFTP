@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Net.Http;
 using System.Diagnostics;
 using System.Collections.Concurrent;
@@ -254,7 +254,7 @@ public partial class MainWindow : Window
             AttachProtocolLog(session, profile.Name);
             if (left) { _leftRemoteSession = session; _leftProfile = profile; LeftMode.SelectedIndex = 1; }
             else { _remoteSession = session; _rightProfile = profile; RightMode.SelectedIndex = 1; }
-            var options = profile.EffectiveOptions;
+            var options = RaceSlotOptions(profile);
             _engine.RegisterOrUpdateSite(new SitePolicy(profile.Id, profile.Name,
                 MaxSlots: TransferSlotLimit(profile),
                 MaxDownloads: options.AllowDownload ? options.MaxDownloadSlots : 0,
@@ -2281,9 +2281,20 @@ public partial class MainWindow : Window
         finally { if (_sessionWorkers.TryRemove(worker, out _)) _sessionStatistics.WorkerClosed(); }
     }
 
-    private int TransferSlotLimit(ConnectionProfile profile)
+    private readonly Dictionary<string, (int? Downloads, int? Uploads)> _visionaryLiveSlots = new(StringComparer.OrdinalIgnoreCase);
+
+    private SiteOptions RaceSlotOptions(ConnectionProfile profile)
     {
         var options = profile.EffectiveOptions;
+        if (_settings.EnableVisionaryBridge && _visionaryLiveSlots.TryGetValue(profile.Name, out var live))
+            return options with { MaxDownloadSlots = live.Downloads ?? options.MaxDownloadSlots,
+                MaxUploadSlots = live.Uploads ?? options.MaxUploadSlots };
+        return options;
+    }
+
+    private int TransferSlotLimit(ConnectionProfile profile)
+    {
+        var options = RaceSlotOptions(profile);
         if (!_settings.EnableVisionaryBridge || !_raceReadySites.ContainsKey(profile.Id)) return options.MaxSlots;
         // One shared listing/verifier connection plus open panes.
         // Passive file averages require no auxiliary connections.
@@ -2315,7 +2326,7 @@ public partial class MainWindow : Window
                 _raceReadySites[profile.Id] = profile;
                 await DisposeStalePooledWorkersAsync(profile);
                 var limit = TransferSlotLimit(profile);
-                var options = profile.EffectiveOptions;
+                var options = RaceSlotOptions(profile);
                 _engine.RegisterOrUpdateSite(new SitePolicy(profile.Id, profile.Name, limit,
                     options.AllowDownload ? Math.Min(limit, options.MaxDownloadSlots) : 0,
                     options.AllowUpload ? Math.Min(limit, options.MaxUploadSlots) : 0, options.Priority));
@@ -3508,8 +3519,8 @@ public partial class MainWindow : Window
                     ReloadQuickSites(LeftQuickSites); ReloadQuickSites(RightQuickSites);
                     foreach (var profile in new ProfileStore().Load())
                     {
-                        var options = profile.EffectiveOptions;
-                        _engine.RegisterOrUpdateSite(new SitePolicy(profile.Id, profile.Name, TransferSlotLimit(profile), options.MaxDownloadSlots, options.MaxUploadSlots, options.Priority));
+                        var options = RaceSlotOptions(profile);
+                        _engine.RegisterOrUpdateSite(new SitePolicy(profile.Id, profile.Name, TransferSlotLimit(profile), options.AllowDownload ? options.MaxDownloadSlots : 0, options.AllowUpload ? options.MaxUploadSlots : 0, options.Priority));
                     }
                 }
                 catch { LogText.AppendText($"{Environment.NewLine}IRC settings saved; reopen the site selector to refresh the view."); }
@@ -3548,7 +3559,7 @@ public partial class MainWindow : Window
                     _settingsStore.Save(updated);
                     _settings = updated;
                     await RestartIrcAsync();
-                }), visionaryStep: RunVisionaryStepAsync);
+                }), visionaryStep: RunVisionaryStepAsync, visionarySlots: UpdateVisionarySlotsAsync);
             if (_settings.EnableHttpsApi)
                 LogText.AppendText($"{Environment.NewLine}HTTPS/JSON API listening on {(_settings.ApiLocalhostOnly ? "localhost" : "0.0.0.0")}:{_settings.HttpsApiPort}");
         }
@@ -3602,6 +3613,31 @@ public partial class MainWindow : Window
         }
     }
 
+    private async Task UpdateVisionarySlotsAsync(ApiTransferRequest request) => await Dispatcher.InvokeAsync(() =>
+    {
+        if (!_settings.EnableVisionaryBridge) return;
+        void Update(string? site, int? downloads, int? uploads)
+        {
+            if (site is null || (downloads is null && uploads is null)) return;
+            _visionaryLiveSlots.TryGetValue(site, out var previous);
+            var next = (downloads ?? previous.Downloads, uploads ?? previous.Uploads);
+            if (next == previous) return;
+            _visionaryLiveSlots[site] = next;
+            var message = $"VISIONARY live slots {site}: downloads={next.Item1}, uploads={next.Item2}; total connection cap still applies";
+            _raceLog.Write("VISIONARY", message);
+            LogText.AppendText(Environment.NewLine + message);
+            foreach (var profile in _raceReadySites.Values.Where(profile => profile.Name.Equals(site, StringComparison.OrdinalIgnoreCase)))
+            {
+                var options = RaceSlotOptions(profile);
+                _engine.RegisterOrUpdateSite(new SitePolicy(profile.Id, profile.Name, TransferSlotLimit(profile),
+                    options.AllowDownload ? options.MaxDownloadSlots : 0,
+                    options.AllowUpload ? options.MaxUploadSlots : 0, options.Priority));
+            }
+        }
+        Update(request.SrcSite, request.SourceDownloadSlots, null);
+        Update(request.DstSite, null, request.DestinationUploadSlots);
+    });
+
     private async Task<object> StartApiTransferCoreAsync(ApiTransferRequest request, VisionaryRaceState? race = null, CancellationToken cancellationToken = default) => await await Dispatcher.InvokeAsync(async () =>
     {
         race?.StartTrace?.Mark("ui-entered");
@@ -3642,8 +3678,8 @@ public partial class MainWindow : Window
         }
         foreach (var profile in new[] { sourceProfile, destinationProfile })
         {
-            var options = profile.EffectiveOptions;
-            _engine.RegisterOrUpdateSite(new SitePolicy(profile.Id, profile.Name, TransferSlotLimit(profile), options.MaxDownloadSlots, options.MaxUploadSlots, options.Priority));
+            var options = RaceSlotOptions(profile);
+            _engine.RegisterOrUpdateSite(new SitePolicy(profile.Id, profile.Name, TransferSlotLimit(profile), options.AllowDownload ? options.MaxDownloadSlots : 0, options.AllowUpload ? options.MaxUploadSlots : 0, options.Priority));
         }
         var sourceBase = NormalizeRemotePath(request.SrcSection is not null ? ResolveApiSection(request.SrcSite, request.SrcSection) : request.SrcPath ?? "/");
         var destinationBase = NormalizeRemotePath(request.DstSection is not null ? ResolveApiSection(request.DstSite, request.DstSection) : request.DstPath ?? "/");
@@ -3836,8 +3872,8 @@ public partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(localRoot)) throw new ArgumentException("local_path is required when no global local download path is configured.");
         localRoot = Path.GetFullPath(Environment.ExpandEnvironmentVariables(localRoot)); Directory.CreateDirectory(localRoot);
         var remote = NormalizeRemotePath(request.RemoteSection is not null ? ResolveApiSection(profile.Name, request.RemoteSection) : request.RemotePath ?? "/");
-        var options = profile.EffectiveOptions;
-        _engine.RegisterOrUpdateSite(new SitePolicy(profile.Id, profile.Name, TransferSlotLimit(profile), options.MaxDownloadSlots, options.MaxUploadSlots, options.Priority));
+        var options = RaceSlotOptions(profile);
+        _engine.RegisterOrUpdateSite(new SitePolicy(profile.Id, profile.Name, TransferSlotLimit(profile), options.AllowDownload ? options.MaxDownloadSlots : 0, options.AllowUpload ? options.MaxUploadSlots : 0, options.Priority));
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(5)); await using var session = new FtpRemoteSession(); await session.ConnectAsync(ApplyGlobalProxy(profile), timeout.Token);
         var queued = 0;
         var downloadFiles = new List<(RemoteEntry Entry, string Destination)>();

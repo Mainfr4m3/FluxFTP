@@ -2,6 +2,13 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.0 — 2026-10-15
+
+- Bridge 2.0 reads live Visionary slot settings for each incoming chain through the supplied read-only `custom/fluxftp_chains.pl` module. Section overrides take precedence over site values; active watches receive changes without reimporting INI exports. Flux total connection caps and disabled directions still apply.
+- Waiting RACE watches release scheduler admission slots, allowing further destinations to start instead of blocking behind 32 idle watches.
+- In-app bridge export and the release ZIP both include the unified script, four DLLs, live-slot module and installation instructions.
+- Bridge and Visionary DLL versions are 2.0; the application and release package version is 2.1.0.
+
 ## 1.0.84 — 2026-10-12
 
 - OpenSSL TLS retries WANT_READ/WANT_WRITE during handshake and I/O using socket readiness instead of treating temporary wait states as fatal unknown errors. Per-thread error queues are cleared before operations and SSL_get_error receives the actual result immediately on the same thread.

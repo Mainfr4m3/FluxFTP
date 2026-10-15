@@ -33,11 +33,12 @@ internal sealed class ApiServer : IAsyncDisposable
         Func<ApiTransferRequest, Task<object>> startTransfer, Func<ApiDownloadRequest, Task<object>> startDownload,
         Action<Guid> removeJob, Action<Guid> resetJob, Action<string>? diagnosticLog = null,
         Func<IrcConnectRequest, Task>? connectIrc = null,
-        Func<ApiTransferRequest, VisionaryRaceState, CancellationToken, Task<bool>>? visionaryStep = null)
+        Func<ApiTransferRequest, VisionaryRaceState, CancellationToken, Task<bool>>? visionaryStep = null,
+        Func<ApiTransferRequest, Task>? visionarySlots = null)
     {
         if (settings.EnableVisionaryBridge || settings.EnableHttpsApi)
         {
-            _visionaryPipe = new VisionaryPipeServer(startTransfer, diagnosticLog, visionaryStep);
+            _visionaryPipe = new VisionaryPipeServer(startTransfer, diagnosticLog, visionaryStep, visionarySlots);
             if (settings.EnableVisionaryBridge)
             {
             _visionaryPipe.Start();
@@ -625,7 +626,7 @@ internal sealed record ApiTransferRequest(
     [property: JsonPropertyName("dst_site")] string? DstSite = null,
     [property: JsonPropertyName("dst_path")] string? DstPath = null,
     [property: JsonPropertyName("dst_section")] string? DstSection = null,
-    string? Name = null);
+    string? Name = null, int? SourceDownloadSlots = null, int? DestinationUploadSlots = null);
 
 internal sealed record ApiDownloadRequest(
     string? Site = null,

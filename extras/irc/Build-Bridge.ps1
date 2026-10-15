@@ -10,7 +10,7 @@ $combined += @'
 
 alias fluxbridge {
   if ($1 == version || $1 == $null) {
-    echo -ag FluxFTP Bridge v1.03 - batch chains, UDP commands and Visionary DLL v1.05 expected
+    echo -ag FluxFTP Bridge v2.0 - live Visionary slots, batch chains and UDP commands; Visionary DLL v2.0 expected
     return
   }
   echo -ag Usage: /fluxbridge version

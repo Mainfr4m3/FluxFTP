@@ -6,8 +6,8 @@ internal static class BridgeBundle
 {
     internal static readonly string[] Files =
     [
-        "FluxFTP.mrc", "FluxFTP-DLL.mrc", "FluxFTP32.dll", "FluxFTP64.dll", "README.md",
-        "visionary/Visionary-FluxFTP.mrc", "visionary/FluxFTPVisionary32.dll", "visionary/FluxFTPVisionary64.dll", "visionary/README.md"
+        "FluxFTP-Bridge.mrc", "FluxFTP32.dll", "FluxFTP64.dll", "README.md",
+        "FluxFTPVisionary32.dll", "FluxFTPVisionary64.dll", "fluxftp_chains.pl"
     ];
 
     public static void Export(string directory)
@@ -15,7 +15,8 @@ internal static class BridgeBundle
         var assembly = typeof(BridgeBundle).Assembly;
         var payloads = Files.Select(file =>
         {
-            var resource = "FluxFTP.Bridge." + (file.StartsWith("visionary/") ? file.Replace('/', '.') : "irc." + file);
+            var resource = "FluxFTP.Bridge." + (file.StartsWith("FluxFTPVisionary") || file == "fluxftp_chains.pl"
+                ? "visionary." + file : "irc." + (file == "README.md" ? "Bridge-README.md" : file));
             using var stream = assembly.GetManifestResourceStream(resource) ?? throw new FileNotFoundException("Missing embedded bridge: " + file);
             using var buffer = new MemoryStream(); stream.CopyTo(buffer);
             var path = Path.Combine(directory, file.Replace('/', Path.DirectorySeparatorChar));

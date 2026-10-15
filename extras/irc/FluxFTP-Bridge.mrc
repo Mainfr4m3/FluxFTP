@@ -246,7 +246,7 @@ alias -l fluxdll.menu.download {
 
 
 ; Component: visionary/Visionary-FluxFTP.mrc
-; Visionary -> FluxFTP named-pipe bridge v1.03 (batch chains and mapped IRC DONE notifications)
+; Visionary -> FluxFTP named-pipe bridge v2.0 (live slots, batch chains and mapped IRC DONE notifications)
 ; Load after Visionary.mrc. Keep both DLL files beside this script.
 
 alias -l fluxvisi.dll return $scriptdir $+ $iif($bits == 64,FluxFTPVisionary64.dll,FluxFTPVisionary32.dll)
@@ -304,17 +304,31 @@ on *:SIGNAL:FU_FXP_CHAINS:{
   window -kze @FluxFTP
   if (!%section || !%release || !%chains) { echo @FluxFTP $timestamp ERROR invalid FU_FXP_CHAINS signal: $1- | return }
   if (!$isfile(%dll)) { echo @FluxFTP $timestamp ERROR missing $qt(%dll) | return }
-  var %packed = $replace(%chains,$chr(32),$chr(44))
   echo @FluxFTP $timestamp CHAINS %section %release %chains
-  var %reply = $dll(%dll,FluxFTPChains,%section %release %packed %chain.tick)
+  var %root = $deltok($replace(%visi_folder,$chr(92),/),-1,47)
+  if ($isfile($+(%root,/custom/fluxftp_chains.pl))) {
+    custom fluxftp_chains.pl FLUXFTP_LIVE_CHAINS %section %release %chain.tick %chains
+    return
+  }
+  echo @FluxFTP $timestamp WARNING live slots unavailable; install custom/fluxftp_chains.pl in Visionary. Using Flux site limits.
+  fluxvisi.sendchains %section %release $replace(%chains,$chr(32),$chr(44)) %chain.tick
+}
+
+alias -l fluxvisi.sendchains {
+  var %reply = $dll($fluxvisi.dll,FluxFTPChains,$1-)
   echo @FluxFTP $timestamp %reply
+}
+
+on *:SIGNAL:FLUXFTP_LIVE_CHAINS:{
+  if ($1 == ERROR) { echo @FluxFTP $timestamp ERROR reading live Visionary slots: $2- | return }
+  fluxvisi.sendchains $1 $2 $4 $3
 }
 
 
 
 alias fluxbridge {
   if ($1 == version || $1 == $null) {
-    echo -ag FluxFTP Bridge v1.03 - batch chains, UDP commands and Visionary DLL v1.05 expected
+    echo -ag FluxFTP Bridge v2.0 - live Visionary slots, batch chains and UDP commands; Visionary DLL v2.0 expected
     return
   }
   echo -ag Usage: /fluxbridge version

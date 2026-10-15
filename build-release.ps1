@@ -35,6 +35,7 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'extras/irc/Bridge-README.md') -
 foreach ($name in @('FluxFTPVisionary32.dll', 'FluxFTPVisionary64.dll')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "extras/irc/visionary/$name") -Destination (Join-Path $bridgeStage $name)
 }
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'extras/irc/visionary/fluxftp_chains.pl') -Destination $bridgeStage
 Compress-Archive -LiteralPath $bridgeStage -DestinationPath (Join-Path $output "FluxFTP-v$Version-bridge.zip")
 $guides = Join-Path $staging 'rules-and-guides'
 New-Item -ItemType Directory -Force -Path $guides | Out-Null
