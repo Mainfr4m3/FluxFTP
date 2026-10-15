@@ -31,6 +31,12 @@ internal static class RaceLogChecks
             Check(File.ReadAllText(archive).Contains("firstline"), "old archive unchanged");
             File.AppendAllText(log.ActivePath, new string('x', 600 * 1024) + "\nlast\n");
             Check(log.ReadTail(log.ActivePath).EndsWith("last\n") && log.ReadTail(log.ActivePath).Length < 513 * 1024, "bounded viewer tail");
+            var exported = Path.Combine(directory, "export.txt");
+            log.ExportAsync(log.ActivePath, exported).GetAwaiter().GetResult();
+            Check(File.ReadAllText(exported) == File.ReadAllText(log.ActivePath), "TXT export preserves full log");
+            using (var large = new FileStream(log.ActivePath, FileMode.Open, FileAccess.Write)) large.SetLength(RaceLogStore.MaxBytes);
+            log.Write("TEST", "after-cap-reset");
+            Check(new FileInfo(log.ActivePath).Length < 1024 && File.ReadAllText(log.ActivePath).Contains("after-cap-reset"), "100 MB clears active log and retains next event");
             var blocked = Path.Combine(directory, "not-a-folder"); File.WriteAllText(blocked, "x");
             var failing = new RaceLogStore(blocked, () => now);
             failing.Write("TEST", "does not crash transfers");

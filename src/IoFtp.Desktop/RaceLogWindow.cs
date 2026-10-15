@@ -15,6 +15,7 @@ internal sealed class RaceLogWindow : Window
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly CheckBox _follow = new() { Content = "Follow live", IsChecked = true, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 5, 5, 5) };
     private bool _updating;
+    private bool _reading;
     public RaceLogWindow(RaceLogStore store)
     {
         _store = store; Title = "FluxFTP — RACE-Log"; Width = 1050; Height = 650;
@@ -28,6 +29,18 @@ internal sealed class RaceLogWindow : Window
         var refresh = new Button { Content = "Refresh", Margin = new Thickness(5) };
         refresh.Click += (_, _) => Refresh();
         bar.Children.Add(_files); bar.Children.Add(refresh); bar.Children.Add(_follow);
+        var export = new Button { Content = "Export TXT…", Margin = new Thickness(5) };
+        export.Click += async (_, _) =>
+        {
+            if (_files.SelectedItem is not string path) return;
+            var picker = new Microsoft.Win32.SaveFileDialog { Filter = "Text files (*.txt)|*.txt", FileName = $"FluxFTP-RACE-{DateTime.Now:yyyyMMdd-HHmmss}.txt", DefaultExt = ".txt" };
+            if (picker.ShowDialog(this) != true) return;
+            export.IsEnabled = false;
+            try { await _store.ExportAsync(path, picker.FileName); _status.Text = "Exported: " + picker.FileName; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { _status.Text = "Export failed: " + ex.Message; }
+            finally { export.IsEnabled = true; }
+        };
+        bar.Children.Add(export);
         _follow.Checked += (_, _) => FollowLatest();
         _text.AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler((_, e) =>
         {
@@ -62,12 +75,14 @@ internal sealed class RaceLogWindow : Window
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { _status.Text = "Unable to read the RACE log folder."; }
     }
-    private void Read()
+    private async void Read()
     {
-        if (_files.SelectedItem is not string path) return;
+        if (_reading || _files.SelectedItem is not string path) return;
+        _reading = true;
         try
         {
-            var value = _store.ReadTail(path);
+            var value = await Task.Run(() => _store.ReadTail(path));
+            if (!Equals(_files.SelectedItem, path) || !IsLoaded) return;
             if (_text.Text != value)
             {
                 var offset = _text.VerticalOffset;
@@ -86,9 +101,10 @@ internal sealed class RaceLogWindow : Window
                 finally { _updating = false; }
                 FollowLatest();
             }
-            _status.Text = _store.LastError ?? (_follow.IsChecked == true ? "Live — following latest events." : "Live updates continue; following paused. Enable Follow live to jump to the latest event.") + " Logs rotate every 24 hours.";
+            _status.Text = _store.LastError ?? (_follow.IsChecked == true ? "Live — following latest events." : "Live updates continue; following paused. Enable Follow live to jump to the latest event.") + " Active log clears at 100 MB. Export TXT to retain history.";
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { _status.Text = "Log unavailable; refresh to try again."; }
+        finally { _reading = false; }
     }
 
     private void FollowLatest()

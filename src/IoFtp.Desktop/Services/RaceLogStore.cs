@@ -13,11 +13,15 @@ internal sealed class RaceLogStore(string? directory = null, Func<DateTimeOffset
     public string ArchiveDirectory => Path.Combine(_directory, "logs");
     public string? LastError { get; private set; }
     private const string Header = "# FluxFTP RACE log started UTC: ";
+    public const long MaxBytes = 100_000_000;
     public void Write(string category, string message) => TryWrite(() =>
     {
         var now = _clock();
         Rotate(now);
-        File.AppendAllText(ActivePath, $"{now:O} [{Clean(category)}] {Clean(message)}{Environment.NewLine}", new UTF8Encoding(false));
+        var line = $"{now:O} [{Clean(category)}] {Clean(message)}{Environment.NewLine}";
+        if (new FileInfo(ActivePath).Length + Encoding.UTF8.GetByteCount(line) > MaxBytes)
+            File.WriteAllText(ActivePath, Header + now.ToString("O", CultureInfo.InvariantCulture) + Environment.NewLine, new UTF8Encoding(false));
+        File.AppendAllText(ActivePath, line, new UTF8Encoding(false));
     });
     public void Maintain() => TryWrite(() => Rotate(_clock()));
     private void TryWrite(Action action)
@@ -34,6 +38,11 @@ internal sealed class RaceLogStore(string? directory = null, Func<DateTimeOffset
         Directory.CreateDirectory(_directory);
         if (File.Exists(ActivePath))
         {
+            if (new FileInfo(ActivePath).Length >= MaxBytes)
+            {
+                File.WriteAllText(ActivePath, Header + now.ToString("O", CultureInfo.InvariantCulture) + Environment.NewLine, new UTF8Encoding(false));
+                return;
+            }
             DateTimeOffset started;
             using (var reader = new StreamReader(ActivePath))
             {
@@ -49,6 +58,21 @@ internal sealed class RaceLogStore(string? directory = null, Func<DateTimeOffset
         File.WriteAllText(ActivePath, Header + now.ToString("O", CultureInfo.InvariantCulture) + Environment.NewLine, new UTF8Encoding(false));
     }
     private static string Clean(string text) => new(text.Where(c => !char.IsControl(c)).ToArray());
+    public async Task ExportAsync(string path, string destination)
+    {
+        if (Path.GetFullPath(path).Equals(Path.GetFullPath(destination), StringComparison.OrdinalIgnoreCase))
+            throw new IOException("Choose a different destination from the live log.");
+        await using var source = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 65536, true);
+        var remaining = source.Length;
+        await using var target = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None, 65536, true);
+        var buffer = new byte[65536];
+        while (remaining > 0)
+        {
+            var count = await source.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)));
+            if (count == 0) break;
+            await target.WriteAsync(buffer.AsMemory(0, count)); remaining -= count;
+        }
+    }
     public string ReadTail(string path)
     {
         lock (_gate)

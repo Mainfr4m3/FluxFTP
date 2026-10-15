@@ -8,6 +8,20 @@ internal sealed class SessionStatistics(Func<TimeSpan>? elapsed = null)
     private long _uploaded, _downloaded, _fxp, _local, _completed, _created, _closed, _hits;
     public TimeSpan Uptime => elapsed?.Invoke() ?? _uptime.Elapsed;
     private readonly object _rateGate = new();
+    private readonly Dictionary<long, long> _trafficMinutes = new();
+    public IReadOnlyList<(long Minute, long Bytes)> TrafficMinutes
+    {
+        get
+        {
+            lock (_rateGate)
+            {
+                var minute = (long)Uptime.TotalMinutes;
+                var first = Math.Max(0, minute - 59);
+                return Enumerable.Range(0, (int)(minute - first + 1))
+                    .Select(offset => (Minute: first + offset, Bytes: _trafficMinutes.GetValueOrDefault(first + offset))).ToArray();
+            }
+        }
+    }
     private readonly Dictionary<long, long> _fxpSeconds = new();
     public long FxpRecentRate
     {
@@ -36,6 +50,12 @@ internal sealed class SessionStatistics(Func<TimeSpan>? elapsed = null)
     public void Complete(string kind, long newBytes)
     {
         var bytes = Math.Max(0, newBytes);
+        lock (_rateGate)
+        {
+            var minute = (long)Uptime.TotalMinutes;
+            foreach (var old in _trafficMinutes.Keys.Where(value => value < minute - 59).ToArray()) _trafficMinutes.Remove(old);
+            _trafficMinutes[minute] = _trafficMinutes.GetValueOrDefault(minute) + bytes;
+        }
         switch (kind)
         {
             case "Upload": Interlocked.Add(ref _uploaded, bytes); break;

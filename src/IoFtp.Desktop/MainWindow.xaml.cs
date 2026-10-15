@@ -165,7 +165,7 @@ public partial class MainWindow : Window
         Loaded += async (_, _) => { RestoreWindowLayout(); await RestartApiServerAsync(); await RestartIrcAsync(); if (_settings.CheckForUpdatesAtStartup) await CheckForUpdatesAsync(); };
         ConfigureTrayIcon();
         StateChanged += MainWindow_StateChanged;
-        _legendTimer.Tick += (_, _) => { UpdateLegendBar(); UpdateConnectionButtons(); };
+        _legendTimer.Tick += (_, _) => { TrimConnectionLog(); UpdateLegendBar(); UpdateConnectionButtons(); };
         _statusScrollTimer.Tick += (_, _) => AnimateStatusScroll();
         _statusScrollTimer.Start();
         _legendTimer.Start(); UpdateLegendBar();
@@ -3162,7 +3162,10 @@ public partial class MainWindow : Window
             new("Transferred this queue", FormatSize(bytes), $"Remaining: {FormatSize(_queue.Sum(item => Math.Max(0, item.TotalBytes - item.BytesTransferred)))}"),
             new("API", _settings.EnableHttpsApi ? "Enabled" : "Disabled", _settings.EnableHttpsApi ? $"HTTPS port {_settings.HttpsApiPort}" : "—")
         };
-        return new(connected, profiles.Count, active, $"{FormatSize(speed)}/s", FormatSize(bytes), rows);
+        return new(connected, profiles.Count, active, $"{FormatSize(speed)}/s", FormatSize(bytes), rows,
+            new MetricsDashboard(FormatSize(_sessionStatistics.Uploaded + _sessionStatistics.Downloaded + _sessionStatistics.Fxp + _sessionStatistics.Local),
+                _sessionStatistics.Completed, FormatTransferTime(_sessionStatistics.Uptime), _workerPool.Values.Sum(pool => pool.Count),
+                _sessionStatistics.Hits, $"{_sessionStatistics.FxpRecentRate / 1_000_000d:0.00} MB/s", _sessionStatistics.TrafficMinutes));
     }
 
     private readonly System.Windows.Threading.DispatcherTimer _statusScrollTimer = new() { Interval = TimeSpan.FromMilliseconds(30) };
@@ -3180,6 +3183,14 @@ public partial class MainWindow : Window
         Canvas.SetTop(ScrollingStatusText, Math.Max(0, (ScrollingStatusHost.ActualHeight - ScrollingStatusText.ActualHeight) / 2));
     }
 
+    private void TrimConnectionLog()
+    {
+        if (LogText.Text.Length <= 512 * 1024) return;
+        var text = LogText.Text;
+        var start = text.IndexOf('\n', text.Length - 256 * 1024);
+        LogText.Text = text[(start < 0 ? text.Length - 256 * 1024 : start + 1)..];
+        LogText.ScrollToEnd();
+    }
     private void UpdateLegendBar()
     {
         var mode = _settings.LegendBarMode;
