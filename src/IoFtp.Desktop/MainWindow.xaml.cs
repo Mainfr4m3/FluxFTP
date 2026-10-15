@@ -2224,7 +2224,12 @@ public partial class MainWindow : Window
             if (rejection == "DIRECTORY-DENIED" && _raceJobOwners.TryGetValue(entry.Id, out var raceOwner))
                 raceOwner.Stop(FriendlyMessage(exception));
             _raceLog.Write(rejection ?? "ERROR", $"{entry.Id} {entry.Name}: {exception.GetType().Name}: {exception.Message}");
-            LogText.AppendText(Environment.NewLine + TransferRejection.FormatFailure(entry.Name, exception is FtpCommandException ? exception.Message : FriendlyMessage(exception)));
+            if (exception is TransferVerificationException)
+            {
+                LogText.AppendText($"{Environment.NewLine}Transfer integrity FAILED ({entry.Name}): server rejected CRC/size verification; file is not marked complete.");
+                AppendConnectionLog($"{Environment.NewLine}SERVER DETAILS [{entry.Name}]{Environment.NewLine}{exception.Message}");
+            }
+            else LogText.AppendText(Environment.NewLine + TransferRejection.FormatFailure(entry.Name, exception is FtpCommandException ? exception.Message : FriendlyMessage(exception)));
             await RunScriptsAsync("TransferFailed", TransferScriptVariables(entry, FriendlyMessage(exception)), true);
             throw;
         }
@@ -2241,6 +2246,7 @@ public partial class MainWindow : Window
     }
 
     private IReadOnlyList<(string Name, TimeSpan Elapsed)> _latestFxpTimings = [];
+    private readonly Dictionary<Guid, MetricServerStats> _serverStats = [];
     private bool _visionaryDebugEnabled = MetricsPanel.ReadDebugPreference();
 
     private void AppendConnectionLog(string message)
@@ -2395,6 +2401,17 @@ public partial class MainWindow : Window
     private void AppendTransferIntegrityNotices(QueueEntryView entry,
         params (string Role, FtpRemoteSession Session)[] sessions)
     {
+        foreach (var (role, session) in sessions)
+        {
+            if (ServerTransferReport.Statistics(session.LastTransferCompletion) is not { } report) continue;
+            var message = $"SERVER STATS [{role}] {entry.RuleRelease ?? entry.Name}{Environment.NewLine}{report}";
+            if (_raceJobOwners.TryGetValue(entry.Id, out var owner)) owner.ServerReports[role] = message;
+            else
+            {
+                _raceLog.Write("SERVER-STATS", message);
+                AppendConnectionLog(Environment.NewLine + message);
+            }
+        }
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (role, session) in sessions)
         foreach (var rawLine in session.LastTransferCompletion.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
@@ -3198,7 +3215,8 @@ public partial class MainWindow : Window
         return new(connected, profiles.Count, active, $"{FormatSize(speed)}/s", FormatSize(bytes), rows,
             new MetricsDashboard(FormatSize(_sessionStatistics.Uploaded + _sessionStatistics.Downloaded + _sessionStatistics.Fxp + _sessionStatistics.Local),
                 _sessionStatistics.Completed, FormatTransferTime(_sessionStatistics.Uptime), _workerPool.Values.Sum(pool => pool.Count),
-                _sessionStatistics.Hits, $"{_sessionStatistics.FxpRecentRate / 1_000_000d:0.00} MB/s", _sessionStatistics.TrafficMinutes, _latestFxpTimings));
+                _sessionStatistics.Hits, $"{_sessionStatistics.FxpRecentRate / 1_000_000d:0.00} MB/s", _sessionStatistics.TrafficMinutes, _latestFxpTimings,
+                _serverStats.Values.OrderBy(value => value.Site, StringComparer.OrdinalIgnoreCase).ToArray()));
     }
 
     private readonly System.Windows.Threading.DispatcherTimer _statusScrollTimer = new() { Interval = TimeSpan.FromMilliseconds(30) };
@@ -3604,7 +3622,19 @@ public partial class MainWindow : Window
             if (finished || !race.SourceAvailable)
             {
                 RaceDestinationLease.Release(race);
-                await Dispatcher.InvokeAsync(() => ForgetRaceJobs(race));
+                await Dispatcher.InvokeAsync(() =>
+                {
+                    if (finished)
+                        foreach (var report in race.ServerReports.Values)
+                        {
+                            var message = $"SERVER STATS [{request.SrcSite} -> {request.DstSite}] race finished {request.Name}{Environment.NewLine}{report}";
+                            _raceLog.Write("SERVER-STATS", message);
+                            AppendConnectionLog(Environment.NewLine + message);
+                        }
+                    race.ServerReports.Clear();
+                    ForgetRaceJobs(race);
+                });
+                if (finished) await ReadRaceServerStatsAsync(request, token);
             }
             return finished;
         }
@@ -3619,6 +3649,46 @@ public partial class MainWindow : Window
                 ForgetRaceJobs(race);
             });
             throw;
+        }
+    }
+
+    private async Task ReadRaceServerStatsAsync(ApiTransferRequest request, CancellationToken token)
+    {
+        try
+        {
+            var profiles = await Dispatcher.InvokeAsync(() => new ProfileStore().Load()
+                .Where(profile => profile.Name.Equals(request.SrcSite, StringComparison.OrdinalIgnoreCase) ||
+                    profile.Name.Equals(request.DstSite, StringComparison.OrdinalIgnoreCase)).Select(ApplyGlobalProxy).ToArray());
+            foreach (var profile in profiles)
+            {
+                string message;
+                MetricServerStats? stats = null;
+                try
+                {
+                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+                    timeout.CancelAfter(TimeSpan.FromSeconds(5));
+                    var reply = await _raceListings.TryReadStatsAsync(profile, timeout.Token);
+                    if (reply is { StatusCode: >= 200 and < 300 } && ServerTransferReport.Clean(reply.Message) is { Length: > 0 } report)
+                    {
+                        stats = new(profile.Name, profile.Username, DateTimeOffset.UtcNow, report);
+                        message = $"SERVER STATS [{profile.Name}] {request.Name} · SITE STATS {profile.Username}{Environment.NewLine}{report}";
+                    }
+                    else message = $"SERVER DETAILS [{profile.Name}] SITE STATS {profile.Username}: " +
+                        (reply is null ? "Skipped: no idle shared control session available." : $"{reply.StatusCode} {reply.Message}");
+                }
+                catch (Exception exception) { message = $"SERVER DETAILS [{profile.Name}] {request.Name}: SITE STATS unavailable ({FriendlyMessage(exception)}). Race result unchanged."; }
+                await Dispatcher.InvokeAsync(() =>
+                {
+                    if (stats is not null) _serverStats[profile.Id] = stats;
+                    _raceLog.Write("SERVER-STATS", message);
+                    AppendConnectionLog(Environment.NewLine + message);
+                    LogText.ScrollToEnd();
+                });
+            }
+        }
+        catch (Exception exception)
+        {
+            await Dispatcher.InvokeAsync(() => _raceLog.Write("SERVER-STATS", "Optional SITE STATS unavailable: " + FriendlyMessage(exception)));
         }
     }
 

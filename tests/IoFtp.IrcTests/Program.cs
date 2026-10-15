@@ -8,6 +8,7 @@ using IoFtp.Desktop.Models;
 using IoFtp.Desktop.Services;
 
 var assertions = 0;
+if (args.FirstOrDefault() == "--server-stats-checks") { await ServerStatsChecks.Run(); return; }
 if (args.FirstOrDefault() == "--metrics-debug-checks")
 {
     foreach (var line in new[] { "VISIONARY TIMING [123] | source-PRET", "VISIONARY queued FXP Release: A -> B (2 files)", "VISIONARY Release: A -> B FAILED: unreachable", "VISIONARY pipe failed: busy", "VISIONARY batch A -> B: ERROR missing site", "VISIONARY Release stopped: maximum lifetime", "VISIONARY WARNING live slots unavailable", "Transfer blocked [DUPE]: 553 File exists", "FXP timings: PRET 25ms | STOR 20ms" })

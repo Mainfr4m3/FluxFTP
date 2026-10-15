@@ -62,6 +62,7 @@ internal sealed record VisionaryRaceOptions(
 internal sealed class VisionaryRaceState(VisionaryRaceOptions options, VisionaryTransferProfiles? profiles = null, Func<DateTimeOffset>? utcNow = null)
 {
     public RaceStartTrace? StartTrace { get; set; }
+    public Dictionary<string, string> ServerReports { get; } = new(StringComparer.OrdinalIgnoreCase);
     public Action? TransferCompleted { get; set; }
     public void NotifyTransferCompleted() => TransferCompleted?.Invoke();
     private sealed record Tracked(Guid Job, long? Size, DateTimeOffset? Modified, bool Final, int Attempts);

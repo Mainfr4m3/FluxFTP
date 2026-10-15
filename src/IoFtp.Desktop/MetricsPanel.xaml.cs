@@ -75,7 +75,7 @@ public partial class MetricsPanel : UserControl
             }
         });
         SizeControl("chart", "Chart height", 40, 350, 85, value => { TrafficChart.Height = value; DrawTraffic(); });
-        SizeControl("details", "Detail list height", 100, 600, 220, value => MetricsList.Height = value);
+        SizeControl("details", "Detail list height", 100, 600, 220, value => { MetricsList.Height = value; ServerStatsScroll.MaxHeight = value; });
         SizeOptions.Content = controls;
         Unloaded += (_, _) => { _saveLayoutTimer.Stop(); SaveSizes(); };
     }
@@ -112,6 +112,12 @@ public partial class MetricsPanel : UserControl
             }
             PretText.Text = "PRET " + Timing("PRET"); CpsvText.Text = "CPSV " + Timing("CPSV");
             StorText.Text = "STOR " + Timing("STOR"); DataText.Text = "DATA " + Timing("Data");
+            var stats = dashboard.ServerStats ?? [];
+            if (!_serverStats.SequenceEqual(stats))
+            {
+                _serverStats = stats;
+                ServerStatsList.ItemsSource = stats;
+            }
             PoolDetailText.Text = $"Pool reuse hits: {dashboard.Hits:N0}";
             using var process = System.Diagnostics.Process.GetCurrentProcess();
             ProcessText.Text = $"Memory: {process.WorkingSet64 / 1048576d:0} MB · Threads: {process.Threads.Count}";
@@ -120,6 +126,7 @@ public partial class MetricsPanel : UserControl
         MetricsList.ItemsSource = value.Rows;
     }
     private IReadOnlyList<(long Minute, long Bytes)> _traffic = [];
+    private IReadOnlyList<MetricServerStats> _serverStats = [];
     private void Chart_SizeChanged(object sender, SizeChangedEventArgs e) => DrawTraffic();
     private void DrawTraffic()
     {

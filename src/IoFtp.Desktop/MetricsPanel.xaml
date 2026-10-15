@@ -33,7 +33,17 @@
     <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" Padding="12" CornerRadius="3" Margin="0,10,0,10">
      <WrapPanel><TextBlock x:Name="SitesText" Margin="0,0,25,0"/><TextBlock x:Name="PoolDetailText" Margin="0,0,25,0"/><TextBlock x:Name="ProcessText"/></WrapPanel>
     </Border>
-    <Expander Header="Detailed statistics · session and all-time" IsExpanded="False">
+    <Expander Header="Top lists · server stats" IsExpanded="False" Margin="0,0,0,8" Foreground="{DynamicResource TextBrush}" ToolTip="Latest SITE STATS response for the logged-in user on each site. Empty until the first successful request; rankings are shown as returned by the server.">
+     <ScrollViewer x:Name="ServerStatsScroll" MaxHeight="220" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+      <ItemsControl x:Name="ServerStatsList"><ItemsControl.ItemTemplate><DataTemplate>
+       <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="3" Padding="10" Margin="0,4,0,4"><StackPanel>
+        <TextBlock Text="{Binding Header}" Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold" Margin="0,0,0,6"/>
+        <TextBlock Text="{Binding Report}" FontFamily="Consolas" Foreground="{DynamicResource TextBrush}"/>
+       </StackPanel></Border>
+      </DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+     </ScrollViewer>
+    </Expander>
+    <Expander Header="Detailed statistics · session and all-time" IsExpanded="False" Foreground="{DynamicResource TextBrush}">
      <ListView x:Name="MetricsList" Height="280"><ListView.View><GridView><GridViewColumn Header="METRIC" DisplayMemberBinding="{Binding Name}" Width="240"/><GridViewColumn Header="VALUE" DisplayMemberBinding="{Binding Value}" Width="175"/><GridViewColumn Header="DETAIL" DisplayMemberBinding="{Binding Detail}" Width="560"/></GridView></ListView.View></ListView>
     </Expander>
    </StackPanel>

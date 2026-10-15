@@ -31,4 +31,9 @@ internal sealed record MetricRow(string Name, string Value, string Detail);
 internal sealed record MetricsSnapshot(int ConnectedSites, int ConfiguredSites, int ActiveJobs, string TotalSpeed, string Transferred, IReadOnlyList<MetricRow> Rows,
     MetricsDashboard? Dashboard = null);
 internal sealed record MetricsDashboard(string Transferred, long Files, string Uptime, int Pool, long Hits, string FxpRate,
-    IReadOnlyList<(long Minute, long Bytes)> Traffic, IReadOnlyList<(string Name, TimeSpan Elapsed)>? FxpTimings = null);
+    IReadOnlyList<(long Minute, long Bytes)> Traffic, IReadOnlyList<(string Name, TimeSpan Elapsed)>? FxpTimings = null,
+    IReadOnlyList<MetricServerStats>? ServerStats = null);
+internal sealed record MetricServerStats(string Site, string User, DateTimeOffset Updated, string Report)
+{
+    public string Header => $"{Site} · {User} · {Updated.ToLocalTime():HH:mm:ss}";
+}

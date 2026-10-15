@@ -2,6 +2,12 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.2 — 2026-10-15
+
+- Server CRC/size verification failures retain Failed status and show a concise integrity error. The full server reply is available under Debug and in RACE-Log.
+- User statistics and server-provided ranking tables are displayed in Connection Log at race completion, independently of Debug. Metrics adds a Top lists / server stats section, initially empty, with the latest successful SITE STATS response per site and logged-in user.
+- Completed races request `SITE STATS <username>` for the account logged into each existing idle shared control session. Busy sessions are skipped, no additional logins are opened, and unsupported/failed statistics requests remain under Debug and cannot change the race result. Ranking availability and length depend on the server's response.
+
 ## 2.1.1 — 2026-10-15
 
 - Metrics adds a saved Debug checkbox between Transfer Jobs and RACE-Log. Visionary timing, queued transfers and errors remain visible; other Visionary status messages require Debug. Full diagnostics remain in RACE-Log.
