@@ -2246,7 +2246,7 @@ public partial class MainWindow : Window
     }
 
     private IReadOnlyList<(string Name, TimeSpan Elapsed)> _latestFxpTimings = [];
-    private readonly Dictionary<Guid, MetricServerStats> _serverStats = [];
+    private readonly Dictionary<(Guid Site, string Command), MetricServerStats> _serverStats = [];
     private bool _visionaryDebugEnabled = MetricsPanel.ReadDebugPreference();
 
     private void AppendConnectionLog(string message)
@@ -3217,7 +3217,7 @@ public partial class MainWindow : Window
             new MetricsDashboard(FormatSize(_sessionStatistics.Uploaded + _sessionStatistics.Downloaded + _sessionStatistics.Fxp + _sessionStatistics.Local),
                 _sessionStatistics.Completed, FormatTransferTime(_sessionStatistics.Uptime), _workerPool.Values.Sum(pool => pool.Count),
                 _sessionStatistics.Hits, $"{_sessionStatistics.FxpRecentRate / 1_000_000d:0.00} MB/s", _sessionStatistics.TrafficMinutes, _latestFxpTimings,
-                _serverStats.Values.OrderBy(value => value.Site, StringComparer.OrdinalIgnoreCase).ToArray()));
+                _serverStats.Values.OrderBy(value => value.Site, StringComparer.OrdinalIgnoreCase).ThenBy(value => value.Command).ToArray()));
     }
 
     private readonly System.Windows.Threading.DispatcherTimer _statusScrollTimer = new() { Interval = TimeSpan.FromMilliseconds(30) };
@@ -3661,6 +3661,7 @@ public partial class MainWindow : Window
                 .Where(profile => profile.Name.Equals(request.SrcSite, StringComparison.OrdinalIgnoreCase) ||
                     profile.Name.Equals(request.DstSite, StringComparison.OrdinalIgnoreCase)).Select(ApplyGlobalProxy).ToArray());
             foreach (var profile in profiles)
+            foreach (var command in new[] { "STATS", "WKUP" })
             {
                 string message;
                 MetricServerStats? stats = null;
@@ -3668,19 +3669,19 @@ public partial class MainWindow : Window
                 {
                     using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
                     timeout.CancelAfter(TimeSpan.FromSeconds(5));
-                    var reply = await _raceListings.TryReadStatsAsync(profile, timeout.Token);
+                    var reply = await _raceListings.TryReadStatsAsync(profile, timeout.Token, weekly: command == "WKUP");
                     if (reply is { StatusCode: >= 200 and < 300 } && ServerTransferReport.Clean(reply.Message) is { Length: > 0 } report)
                     {
-                        stats = new(profile.Name, profile.Username, DateTimeOffset.UtcNow, report);
-                        message = $"SERVER STATS [{profile.Name}] {request.Name} · SITE STATS {profile.Username}{Environment.NewLine}{report}";
+                        stats = new(profile.Name, profile.Username, DateTimeOffset.UtcNow, report, command);
+                        message = $"SERVER STATS [{profile.Name}] {request.Name} · SITE {command} {profile.Username}{Environment.NewLine}{report}";
                     }
-                    else message = $"SERVER DETAILS [{profile.Name}] SITE STATS {profile.Username}: " +
+                    else message = $"SERVER DETAILS [{profile.Name}] SITE {command} {profile.Username}: " +
                         (reply is null ? "Skipped: no idle shared control session available." : $"{reply.StatusCode} {reply.Message}");
                 }
-                catch (Exception exception) { message = $"SERVER DETAILS [{profile.Name}] {request.Name}: SITE STATS unavailable ({FriendlyMessage(exception)}). Race result unchanged."; }
+                catch (Exception exception) { message = $"SERVER DETAILS [{profile.Name}] {request.Name}: SITE {command} unavailable ({FriendlyMessage(exception)}). Race result unchanged."; }
                 await Dispatcher.InvokeAsync(() =>
                 {
-                    if (stats is not null) _serverStats[profile.Id] = stats;
+                    if (stats is not null) _serverStats[(profile.Id, command)] = stats;
                     _raceLog.Write("SERVER-STATS", message);
                     AppendConnectionLog(Environment.NewLine + message);
                     LogText.ScrollToEnd();

@@ -1,4 +1,4 @@
-using IoFtp.Core.Abstractions;
+﻿using IoFtp.Core.Abstractions;
 using IoFtp.Core.Models;
 using IoFtp.Desktop.Services;
 
@@ -20,10 +20,12 @@ internal static class ServerStatsChecks
         if (await listings.TryReadStatsAsync(profile, default) is not null || logins != 0) throw new Exception("Statistics opened a new login");
         await listings.ListAsync(profile, "/release", default);
         if ((await listings.TryReadStatsAsync(profile, default))?.StatusCode != 200 || session.Commands != 1 || logins != 1) throw new Exception("SITE STATS did not reuse existing control session");
+        if ((await listings.TryReadStatsAsync(profile, default, weekly: true))?.StatusCode != 200 || session.Commands != 2 || session.LastCommand != "SITE WKUP user" || logins != 1)
+            throw new Exception("Weekly statistics must reuse the logged-in session and explicitly request that user");
         session.Block = true;
         var busy = listings.ListAsync(profile, "/other", default);
         await session.Started.Task.WaitAsync(TimeSpan.FromSeconds(3));
-        if (await listings.TryReadStatsAsync(profile, default) is not null || session.Commands != 1) throw new Exception("Statistics interrupted an active listing");
+        if (await listings.TryReadStatsAsync(profile, default) is not null || session.Commands != 2) throw new Exception("Statistics interrupted an active listing");
         session.Release.TrySetResult(); await busy;
         session.Unsupported = true;
         if ((await listings.TryReadStatsAsync(profile, default))?.StatusCode != 502 || !session.IsConnected) throw new Exception("Unsupported optional statistics closed a healthy session");
@@ -35,6 +37,7 @@ internal static class ServerStatsChecks
         public IReadOnlySet<string> Capabilities { get; } = new HashSet<string>();
         public bool Block, Unsupported;
         public int Commands;
+        public string? LastCommand;
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Task ConnectAsync(ConnectionProfile profile, CancellationToken token) => Task.CompletedTask;
@@ -45,7 +48,8 @@ internal static class ServerStatsChecks
         }
         public Task<RemoteCommandResult> ExecuteCommandAsync(string command, CancellationToken token)
         {
-            if (command != "SITE STATS user") throw new Exception("Statistics must explicitly query the session's logged-in user");
+            if (command is not ("SITE STATS user" or "SITE WKUP user")) throw new Exception("Statistics must explicitly query the session's logged-in user");
+            LastCommand = command;
             Commands++; return Task.FromResult(new RemoteCommandResult(Unsupported ? 502 : 200, "UserTop: TestUser"));
         }
         public Task DownloadAsync(string path, Stream output, long offset, IProgress<long>? progress, CancellationToken token) => throw new NotSupportedException();

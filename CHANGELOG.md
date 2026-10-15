@@ -2,6 +2,11 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.5 — 2026-10-15
+
+- Verified completed races also request `SITE WKUP <logged-in username>` for weekly upload statistics, alongside SITE STATS. Successful replies appear in Connection Log without Debug.
+- Metrics retains separate Stats and Weekly upload reports for each site, so weekly results do not overwrite account statistics. Optional queries continue to use idle existing control sessions; unsupported or unavailable reports remain under Debug.
+
 ## 2.1.4 — 2026-10-15
 
 - Skiplist matches, existing-target skip notices, Smart resume status and the complete FXP diagnostic block now require Debug in Connection Log. Detailed diagnostics remain in RACE-Log; transfer errors, queued transfers and user statistics stay visible without Debug.

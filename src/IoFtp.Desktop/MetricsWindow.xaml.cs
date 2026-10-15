@@ -33,7 +33,7 @@ internal sealed record MetricsSnapshot(int ConnectedSites, int ConfiguredSites, 
 internal sealed record MetricsDashboard(string Transferred, long Files, string Uptime, int Pool, long Hits, string FxpRate,
     IReadOnlyList<(long Minute, long Bytes)> Traffic, IReadOnlyList<(string Name, TimeSpan Elapsed)>? FxpTimings = null,
     IReadOnlyList<MetricServerStats>? ServerStats = null);
-internal sealed record MetricServerStats(string Site, string User, DateTimeOffset Updated, string Report)
+internal sealed record MetricServerStats(string Site, string User, DateTimeOffset Updated, string Report, string Command = "STATS")
 {
-    public string Header => $"{Site} · {User} · {Updated.ToLocalTime():HH:mm:ss}";
+    public string Header => $"{Site} · {User} · {(Command == "WKUP" ? "Weekly upload" : "Stats")} · {Updated.ToLocalTime():HH:mm:ss}";
 }
