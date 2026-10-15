@@ -8,6 +8,8 @@ using IoFtp.Desktop.Models;
 using IoFtp.Desktop.Services;
 
 var assertions = 0;
+if (args.FirstOrDefault() == "--hard-reset-checks") { HardResetChecks.Run(); return; }
+if (args.FirstOrDefault() == "--fxp-estimate-checks") { FxpEstimateChecks.Run(); return; }
 if (args.FirstOrDefault() == "--server-stats-checks") { await ServerStatsChecks.Run(); return; }
 if (args.FirstOrDefault() == "--metrics-debug-checks")
 {

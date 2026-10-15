@@ -79,6 +79,34 @@ internal sealed class RaceListingService : IAsyncDisposable
         finally { source.LastUsed = Stopwatch.GetTimestamp(); source.Gate.Release(); }
     }
 
+    public async Task<long?> TryReadTransferSizeAsync(ConnectionProfile profile, string path, CancellationToken token)
+    {
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token, _shutdown.Token);
+        token = lifetime.Token;
+        if (!_sources.TryGetValue(profile.Id, out var source) || !await source.Gate.WaitAsync(0, token).ConfigureAwait(false)) return null;
+        try
+        {
+            if (source.Profile != profile || source.Session?.IsConnected != true) return null;
+            var slash = path.LastIndexOf('/');
+            var parent = slash <= 0 ? "/" : path[..slash];
+            var name = path[(slash + 1)..];
+            if (Interlocked.Exchange(ref source.Invalidated, 0) != 0) source.Listings.Clear();
+            if (!source.Listings.TryGetValue(parent, out var cached) || Stopwatch.GetElapsedTime(cached.At) >= _freshness)
+            {
+                try
+                {
+                    var entries = await source.Session.ListAsync(parent, token).ConfigureAwait(false);
+                    cached = new Snapshot(Stopwatch.GetTimestamp(), Array.AsReadOnly(entries.ToArray()));
+                    if (source.Listings.Count >= 512) source.Listings.Clear();
+                    source.Listings[parent] = cached;
+                }
+                catch { await CloseAsync(source).ConfigureAwait(false); throw; }
+            }
+            return cached.Entries.FirstOrDefault(file => !file.IsDirectory && file.Name.Equals(name, StringComparison.Ordinal))?.Size;
+        }
+        finally { source.LastUsed = Stopwatch.GetTimestamp(); source.Gate.Release(); }
+    }
+
     public async Task<RemoteCommandResult?> TryReadStatsAsync(ConnectionProfile profile, CancellationToken token, bool weekly = false)
     {
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token, _shutdown.Token);

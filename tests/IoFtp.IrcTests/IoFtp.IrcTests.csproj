@@ -12,6 +12,8 @@
     <Compile Include="../../src/IoFtp.Desktop/Services/VisionaryPipeServer.cs" Link="VisionaryPipeServer.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/ResumeRecovery.cs" Link="ResumeRecovery.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/PassiveFxpAverage.cs" Link="PassiveFxpAverage.cs" />
+    <Compile Include="../../src/IoFtp.Desktop/Services/FxpLiveEstimate.cs" Link="FxpLiveEstimate.cs" />
+    <Compile Include="../../src/IoFtp.Desktop/Services/HardResetRecovery.cs" Link="HardResetRecovery.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/RaceStartTrace.cs" Link="RaceStartTrace.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/RaceCompletionSignals.cs" Link="RaceCompletionSignals.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/BackupService.cs" Link="BackupService.cs" />

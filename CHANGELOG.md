@@ -2,6 +2,18 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.7 — 2026-10-16
+
+- Transfer Jobs adds Hard reset selected / Hard reset eligible for recent connection and timeout failures, including failed files from still-active Visionary races.
+- Jobs & history adds optional automatic hard reset (off by default), cooldown (30 seconds), maximum retries (2) and lookback (10 minutes). Both modes share the limits. Candidates are bounded to 1024 records in the current session.
+- Reset jobs use fresh control sessions for the original sites, replace only idle pool sessions, and retain current TLS, slot and target-file policies. Paused jobs, expired races, permanent FTP rejections, DUPE, file locks and CRC failures are excluded; removed/replaced jobs and completed races clear their recovery records.
+
+## 2.1.6 — 2026-10-16
+
+- The FXP speed setting now enables cbftp-style display estimates: directional site-pair history (initially 1 MiB/s), destination-size observations and asymmetric speed smoothing, with display interpolation every 50 ms. Sampling reuses existing idle shared listing sessions/cache, at most once per second per active file, without opening extra logins.
+- Estimated speed/progress is marked with ≈ and held below displayed 100% until successful completion. Resume offsets are excluded from speed calculations; full-size/preallocated targets do not count as measurements. Estimated bytes are separate from saved queue bytes and transfer statistics.
+- Successful direct binary FXP retains its measured final byte/time average and updates site-pair history. Retry/fallback attempts reset their display estimates. Existing FXP measurement preferences are retained; enable the renamed speed/progress option in Global Settings to use estimates.
+
 ## 2.1.5 — 2026-10-15
 
 - Verified completed races also request `SITE WKUP <logged-in username>` for weekly upload statistics, alongside SITE STATS. Successful replies appear in Connection Log without Debug.

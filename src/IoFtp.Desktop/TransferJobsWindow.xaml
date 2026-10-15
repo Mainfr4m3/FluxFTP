@@ -12,13 +12,15 @@
         </Border>
 
         <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+            <Button Content="Hard reset selected" Click="HardResetSelected_Click" ToolTip="Retry an eligible failed/timeout job using fresh control sessions. Cooldown, retry and lookback limits apply."/>
+            <Button Content="Hard reset eligible" Click="HardResetEligible_Click"/>
             <Button Content="Refresh" Click="Refresh_Click"/>
             <Button Content="Clear all" Click="ClearAll_Click"/>
             <Button Content="Close" Click="Close_Click"/>
         </StackPanel>
 
         <ListView x:Name="JobsList" FontFamily="{DynamicResource AppMonospaceFontFamily}" PreviewMouseRightButtonDown="JobsList_PreviewMouseRightButtonDown">
-            <ListView.ContextMenu><ContextMenu><MenuItem Header="Remove job" Click="RemoveJob_Click"/></ContextMenu></ListView.ContextMenu>
+            <ListView.ContextMenu><ContextMenu><MenuItem Header="Hard reset" Click="HardResetSelected_Click"/><MenuItem Header="Remove job" Click="RemoveJob_Click"/></ContextMenu></ListView.ContextMenu>
             <ListView.View><GridView>
                 <GridViewColumn Header="QUEUED" DisplayMemberBinding="{Binding Queued}" Width="145"/>
                 <GridViewColumn Header="STARTED" DisplayMemberBinding="{Binding Started}" Width="145"/>

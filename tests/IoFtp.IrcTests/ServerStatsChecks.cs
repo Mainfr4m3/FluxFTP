@@ -18,13 +18,16 @@ internal static class ServerStatsChecks
         var logins = 0;
         await using var listings = new RaceListingService((_, _) => { logins++; return Task.FromResult<IRemoteSession>(session); });
         if (await listings.TryReadStatsAsync(profile, default) is not null || logins != 0) throw new Exception("Statistics opened a new login");
+        if (await listings.TryReadTransferSizeAsync(profile, "/release/file.rar", default) is not null || logins != 0) throw new Exception("Progress sampling opened a new login");
         await listings.ListAsync(profile, "/release", default);
+        if (await listings.TryReadTransferSizeAsync(profile, "/release/file.rar", default) != 500 || session.Lists != 1) throw new Exception("Progress sampling did not share cached directory listing");
         if ((await listings.TryReadStatsAsync(profile, default))?.StatusCode != 200 || session.Commands != 1 || logins != 1) throw new Exception("SITE STATS did not reuse existing control session");
         if ((await listings.TryReadStatsAsync(profile, default, weekly: true))?.StatusCode != 200 || session.Commands != 2 || session.LastCommand != "SITE WKUP user" || logins != 1)
             throw new Exception("Weekly statistics must reuse the logged-in session and explicitly request that user");
         session.Block = true;
         var busy = listings.ListAsync(profile, "/other", default);
         await session.Started.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        if (await listings.TryReadTransferSizeAsync(profile, "/other/file.rar", default) is not null) throw new Exception("Progress sampling interrupted a busy listing");
         if (await listings.TryReadStatsAsync(profile, default) is not null || session.Commands != 2) throw new Exception("Statistics interrupted an active listing");
         session.Release.TrySetResult(); await busy;
         session.Unsupported = true;
@@ -37,14 +40,16 @@ internal static class ServerStatsChecks
         public IReadOnlySet<string> Capabilities { get; } = new HashSet<string>();
         public bool Block, Unsupported;
         public int Commands;
+        public int Lists;
         public string? LastCommand;
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Task ConnectAsync(ConnectionProfile profile, CancellationToken token) => Task.CompletedTask;
         public async Task<IReadOnlyList<RemoteEntry>> ListAsync(string path, CancellationToken token)
         {
+            Lists++;
             if (Block) { Started.TrySetResult(); await Release.Task.WaitAsync(token); }
-            return [];
+            return [new("file.rar", path + "/file.rar", false, 500, null)];
         }
         public Task<RemoteCommandResult> ExecuteCommandAsync(string command, CancellationToken token)
         {

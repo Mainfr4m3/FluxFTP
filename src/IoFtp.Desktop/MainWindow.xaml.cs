@@ -148,6 +148,8 @@ public partial class MainWindow : Window
             catch (Exception exception) { LogText.AppendText(Environment.NewLine + "RACE idle slots: " + FriendlyMessage(exception)); }
         };
         _racePoolTimer.Start();
+        _hardResetTimer.Tick += (_, _) => MaintainHardResetCandidates();
+        _hardResetTimer.Start();
         ReloadQuickSites(LeftQuickSites);
         ReloadQuickSites(RightQuickSites);
         ReloadLocalDrives();
@@ -1814,6 +1816,8 @@ public partial class MainWindow : Window
 
     private QueueEntryView AddQueue(string name, string source, string destination, TransferDirection direction, long totalBytes = 0, Guid? sourceProfileId = null, Guid? destinationProfileId = null, bool persist = true, bool visionaryRace = false)
     {
+        foreach (var old in _hardResetEntries.Values.Where(item => item.Source == source && item.Destination == destination && item.SourceProfileId == sourceProfileId && item.DestinationProfileId == destinationProfileId).ToArray())
+        { _hardResetEntries.Remove(old.Id); _hardResetRecovery.Remove(old.Id); }
         var entry = new QueueEntryView(name, source, destination, direction, totalBytes: totalBytes) { SourceProfileId = sourceProfileId, DestinationProfileId = destinationProfileId, QueuedAt = DateTimeOffset.Now, VisionaryRace = visionaryRace };
         _queue.Add(entry);
         TrackRaceEntry(entry);
@@ -1840,8 +1844,8 @@ public partial class MainWindow : Window
                 continue;
             }
             var (sourceSite, destinationSite) = SitesFor(entry.Direction);
-            sourceSite ??= entry.SourceProfileId;
-            destinationSite ??= entry.DestinationProfileId;
+            if (entry.HardResetConnections) { sourceSite = entry.SourceProfileId; destinationSite = entry.DestinationProfileId; }
+            else { sourceSite ??= entry.SourceProfileId; destinationSite ??= entry.DestinationProfileId; }
             entry.State = "Queued";
             entry.QueuedAt ??= DateTimeOffset.Now;
             work.Add(new TransferWorkItem(entry.Id, entry.Id, entry.Name, sourceSite, destinationSite,
@@ -1878,6 +1882,13 @@ public partial class MainWindow : Window
             profiles.FirstOrDefault(profile => profile.Id == _leftProfile.Id) ?? _leftProfile;
         var rightProfile = _rightProfile is null ? null :
             profiles.FirstOrDefault(profile => profile.Id == _rightProfile.Id) ?? _rightProfile;
+        if (entry.HardResetConnections)
+        {
+            var originalSource = profiles.FirstOrDefault(profile => profile.Id == entry.SourceProfileId);
+            var originalDestination = profiles.FirstOrDefault(profile => profile.Id == entry.DestinationProfileId);
+            if (needsLeft) leftProfile = entry.Direction is TransferDirection.UploadToLeft or TransferDirection.RelayRightToLeft ? originalDestination : originalSource;
+            if (needsRight) rightProfile = entry.Direction is TransferDirection.Download or TransferDirection.RelayRightToLeft ? originalSource : originalDestination;
+        }
         if (leftProfile is not null) leftProfile = ApplyGlobalProxy(leftProfile);
         if (rightProfile is not null) rightProfile = ApplyGlobalProxy(rightProfile);
         var apiProfile = entry.Direction == TransferDirection.ApiDownload ? profiles.FirstOrDefault(profile => profile.Id == entry.SourceProfileId) : null;
@@ -1920,11 +1931,13 @@ public partial class MainWindow : Window
             entry.StartedAt ??= DateTimeOffset.Now;
             SaveQueue();
             await RunScriptsAsync("BeforeTransfer", TransferScriptVariables(entry, "Starting"), false);
-            if (needsLeft) leftWorker = await RentWorkerAsync(leftProfile!, cancellationToken);
-            if (needsRight) rightWorker = await RentWorkerAsync(rightProfile!, cancellationToken);
-            if (apiProfile is not null) apiWorker = await RentWorkerAsync(apiProfile, cancellationToken);
-            if (apiFxpSource is not null) { entry.StartTrace?.Mark("source-worker-wait"); apiFxpSourceWorker = await RentWorkerAsync(apiFxpSource, cancellationToken); entry.StartTrace?.Mark("source-worker-ready"); TraceWorker(apiFxpSourceWorker, "source"); }
-            if (apiFxpDestination is not null) { entry.StartTrace?.Mark("destination-worker-wait"); apiFxpDestinationWorker = await RentWorkerAsync(apiFxpDestination, cancellationToken); entry.StartTrace?.Mark("destination-worker-ready"); TraceWorker(apiFxpDestinationWorker, "destination"); }
+            var freshControls = entry.HardResetConnections;
+            entry.HardResetConnections = false;
+            if (needsLeft) leftWorker = await RentWorkerAsync(leftProfile!, cancellationToken, freshControls);
+            if (needsRight) rightWorker = await RentWorkerAsync(rightProfile!, cancellationToken, freshControls);
+            if (apiProfile is not null) apiWorker = await RentWorkerAsync(apiProfile, cancellationToken, freshControls);
+            if (apiFxpSource is not null) { entry.StartTrace?.Mark("source-worker-wait"); apiFxpSourceWorker = await RentWorkerAsync(apiFxpSource, cancellationToken, freshControls); entry.StartTrace?.Mark("source-worker-ready"); TraceWorker(apiFxpSourceWorker, "source"); }
+            if (apiFxpDestination is not null) { entry.StartTrace?.Mark("destination-worker-wait"); apiFxpDestinationWorker = await RentWorkerAsync(apiFxpDestination, cancellationToken, freshControls); entry.StartTrace?.Mark("destination-worker-ready"); TraceWorker(apiFxpDestinationWorker, "destination"); }
             var speedTimer = Stopwatch.StartNew();
             var speedSampleAt = TimeSpan.Zero;
             long speedSampleBytes = 0;
@@ -2069,19 +2082,22 @@ public partial class MainWindow : Window
                             {
                                 var routeSource = configuredReverse == true ? "configured" : learnedReverse ? "learned" : "source CPSV preferred";
                                 LogText.AppendText($"{Environment.NewLine}Using {routeSource} source-passive FXP route for {sourceProfile.Name} → {destinationProfile.Name}: {entry.Name}");
-                                await sourceSession.FxpToAsync(destinationSession, entry.Source, entry.Destination,
-                                    cancellationToken, reverseDataConnection: true, offset: fxpOffset);
+                                await RunEstimatedFxpAsync(entry, sourceProfile, destinationProfile, sourceSession, destinationSession, fxpOffset, measureAverage && !asciiFxp,
+                                    () => sourceSession.FxpToAsync(destinationSession, entry.Source, entry.Destination,
+                                        cancellationToken, reverseDataConnection: true, offset: fxpOffset), cancellationToken);
                             }
                             else
                             {
-                                try { await sourceSession.FxpToAsync(destinationSession, entry.Source, entry.Destination, cancellationToken, offset: fxpOffset); }
+                                try { await RunEstimatedFxpAsync(entry, sourceProfile, destinationProfile, sourceSession, destinationSession, fxpOffset, measureAverage && !asciiFxp,
+                                    () => sourceSession.FxpToAsync(destinationSession, entry.Source, entry.Destination, cancellationToken, offset: fxpOffset), cancellationToken); }
                                 catch (FtpCommandException exception) when (exception.StatusCode == 425 && configuredReverse is null &&
                                     (clearFxp || sourceSession.Capabilities.Contains("CPSV") ||
                                     sourceSession.Capabilities.Contains("SSCN") && destinationSession.Capabilities.Contains("SSCN")))
                                 {
                                     LogText.AppendText($"{Environment.NewLine}Standard FXP returned 425; retrying with source passive and destination PORT, preserving data protection: {entry.Name}");
-                                    await sourceSession.RetryFxpWithReversedTopologyAsync(
-                                        destinationSession, entry.Source, entry.Destination, cancellationToken, offset: fxpOffset);
+                                    await RunEstimatedFxpAsync(entry, sourceProfile, destinationProfile, sourceSession, destinationSession, fxpOffset, measureAverage && !asciiFxp,
+                                        () => sourceSession.RetryFxpWithReversedTopologyAsync(
+                                            destinationSession, entry.Source, entry.Destination, cancellationToken, offset: fxpOffset), cancellationToken);
                                     if (_reverseFxpPairs.Add(pair)) _fxpRouteStore.SaveReverseRoutes(_reverseFxpPairs);
                                     LogText.AppendText($"{Environment.NewLine}Remembered reverse FXP route permanently for {sourceProfile.Name} → {destinationProfile.Name}.");
                                 }
@@ -2121,6 +2137,7 @@ public partial class MainWindow : Window
                         {
                             entry.FxpAverageMeasured = true;
                             entry.SpeedBytesPerSecond = average;
+                            _fxpPairSpeeds.Record(sourceProfile.Id, destinationProfile.Id, sessionNewBytes, sourceSession.LastFxpTransferElapsed);
                             var measurement = FormattableString.Invariant($"FXP average: {entry.Name} | bytes={sessionNewBytes}; transfer={sourceSession.LastFxpTransferElapsed.TotalSeconds:F3}s; average={average / 1000000.0:F2} MB/s; mode=passive");
                             LogText.AppendText(Environment.NewLine + measurement);
                             _raceLog.Write("FXP-AVERAGE", $"{entry.Id} {sourceProfile.Name} -> {destinationProfile.Name}: {measurement}");
@@ -2246,6 +2263,74 @@ public partial class MainWindow : Window
     }
 
     private IReadOnlyList<(string Name, TimeSpan Elapsed)> _latestFxpTimings = [];
+    private readonly FxpPairSpeedHistory _fxpPairSpeeds = new();
+    private readonly Dictionary<Guid, (QueueEntryView Entry, FxpLiveEstimate Estimate)> _fxpEstimates = [];
+    private readonly System.Windows.Threading.DispatcherTimer _fxpEstimateTimer = new() { Interval = TimeSpan.FromMilliseconds(50) };
+    private bool _fxpEstimateTimerAttached;
+
+    private async Task RunEstimatedFxpAsync(QueueEntryView entry, ConnectionProfile source, ConnectionProfile destination,
+        FtpRemoteSession sourceSession, FtpRemoteSession destinationSession, long offset, bool enabled,
+        Func<Task> transfer, CancellationToken token)
+    {
+        if (!enabled) { await transfer(); return; }
+        var estimate = new FxpLiveEstimate(entry.TotalBytes, offset, _fxpPairSpeeds.Get(source.Id, destination.Id));
+        void Started(string message)
+        {
+            if (message.StartsWith("< 150", StringComparison.Ordinal) || message.StartsWith("< 125", StringComparison.Ordinal)) estimate.Start();
+        }
+        sourceSession.ProtocolMessage += Started; destinationSession.ProtocolMessage += Started;
+        _fxpEstimates[entry.Id] = (entry, estimate);
+        if (!_fxpEstimateTimerAttached)
+        {
+            _fxpEstimateTimer.Tick += (_, _) =>
+            {
+                foreach (var item in _fxpEstimates.Values)
+                {
+                    if (!item.Estimate.Started) continue;
+                    var sample = item.Estimate.Read();
+                    item.Entry.FxpSpeedEstimated = true;
+                    item.Entry.FxpEstimatedBytes = sample.Bytes;
+                    item.Entry.SpeedBytesPerSecond = sample.Speed;
+                }
+            };
+            _fxpEstimateTimerAttached = true;
+        }
+        _fxpEstimateTimer.Start();
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(token);
+        async Task SampleSizesAsync()
+        {
+            var failures = 0;
+            try
+            {
+                while (true)
+                {
+                    await Task.Delay(1000, stop.Token);
+                    if (!estimate.Started) continue;
+                    try
+                    {
+                        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stop.Token);
+                        timeout.CancelAfter(TimeSpan.FromSeconds(2));
+                        var size = await _raceListings.TryReadTransferSizeAsync(destination, entry.Destination, timeout.Token);
+                        if (size is { } bytes) estimate.Observe(bytes);
+                        failures = 0;
+                    }
+                    catch (Exception) when (!stop.IsCancellationRequested) { if (++failures >= 2) return; }
+                    catch (Exception) when (stop.IsCancellationRequested) { return; }
+                }
+            }
+            catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+        }
+        var sampling = SampleSizesAsync();
+        try { await transfer(); }
+        finally
+        {
+            sourceSession.ProtocolMessage -= Started; destinationSession.ProtocolMessage -= Started;
+            stop.Cancel(); await sampling;
+            _fxpEstimates.Remove(entry.Id);
+            if (_fxpEstimates.Count == 0) _fxpEstimateTimer.Stop();
+            entry.FxpEstimatedBytes = null; entry.FxpSpeedEstimated = false; entry.SpeedBytesPerSecond = 0;
+        }
+    }
     private readonly Dictionary<(Guid Site, string Command), MetricServerStats> _serverStats = [];
     private bool _visionaryDebugEnabled = MetricsPanel.ReadDebugPreference();
 
@@ -2560,7 +2645,7 @@ public partial class MainWindow : Window
     private sealed record TelemetryActivitySession(string Direction, long SpeedBytesPerSecond, long TransferredBytes,
         string Action, string VirtualPath, string DataPath);
 
-    private async Task<FtpRemoteSession> RentWorkerAsync(ConnectionProfile profile, CancellationToken cancellationToken)
+    private async Task<FtpRemoteSession> RentWorkerAsync(ConnectionProfile profile, CancellationToken cancellationToken, bool forceFresh = false)
     {
         // Maintenance temporarily owns idle sessions. Wait for their return
         // rather than opening extra connections while the bag is drained.
@@ -2569,7 +2654,7 @@ public partial class MainWindow : Window
             await _racePoolGate.WaitAsync(cancellationToken);
             var retry = _raceSlotRetryAt.GetValueOrDefault(profile.Id);
             var hasIdle = _workerPool.TryGetValue(profile, out var available) && !available.IsEmpty;
-            if (hasIdle || retry <= DateTimeOffset.UtcNow) break;
+            if (hasIdle && !forceFresh || retry <= DateTimeOffset.UtcNow) break;
             _racePoolGate.Release();
             await Task.Delay(retry - DateTimeOffset.UtcNow > TimeSpan.Zero ? retry - DateTimeOffset.UtcNow : TimeSpan.Zero, cancellationToken);
         }
@@ -2580,6 +2665,7 @@ public partial class MainWindow : Window
         while (pool.TryTake(out var pooled))
         {
             var session = pooled.Session;
+            if (forceFresh) { await DisposeTransferWorkerAsync(session); break; }
             if (!session.IsConnected) { await DisposeTransferWorkerAsync(session); continue; }
             if (DateTimeOffset.UtcNow - pooled.ReturnedAt < WorkerHealthCheckInterval) { _sessionStatistics.PoolHit(); return session; }
             try
@@ -2721,6 +2807,7 @@ public partial class MainWindow : Window
 
     private void RemoveTransferJob(Guid id)
     {
+        _hardResetEntries.Remove(id); _hardResetRecovery.Remove(id);
         _raceLog.Write("QUEUE", $"Removed job {id}");
         _engine.Remove(id);
         var entry = _queue.FirstOrDefault(item => item.Id == id);
@@ -2734,7 +2821,7 @@ public partial class MainWindow : Window
     private void ClearTransferJobs()
     {
         _raceLog.Write("QUEUE", "Queue cleared");
-        foreach (var entry in _queue.Where(entry => !entry.VisionaryRace).ToArray()) RemoveTransferJob(entry.Id);
+        foreach (var entry in _queue.Concat(_hardResetEntries.Values).Where(entry => !entry.VisionaryRace).DistinctBy(entry => entry.Id).ToArray()) RemoveTransferJob(entry.Id);
         SaveQueue(); UpdateQueueStatus();
     }
 
@@ -2788,8 +2875,12 @@ public partial class MainWindow : Window
                 {
                     if (status.State == TransferWorkState.Failed)
                     {
-                        LogText.AppendText(Environment.NewLine + $"Failed job skipped and removed: {entry.Name} ({status.Error}).");
-                        _raceLog.Write("SKIP", $"Failed job removed: {entry.Id} {entry.Name}; {status.Error}");
+                        entry.SourceProfileId ??= status.Item.SourceSiteId;
+                        entry.DestinationProfileId ??= status.Item.DestinationSiteId;
+                        var recoverable = _hardResetRecovery.Capture(entry.Id, status.Error);
+                        if (recoverable) _hardResetEntries[entry.Id] = entry;
+                        LogText.AppendText(Environment.NewLine + $"Failed job {(recoverable ? "saved for hard reset" : "skipped and removed")}: {entry.Name} ({status.Error}).");
+                        _raceLog.Write(recoverable ? "HARD-RESET" : "SKIP", $"Failed job {(recoverable ? "retained" : "removed")}: {entry.Id} {entry.Name}; {status.Error}");
                     }
                     if (entry.VisionaryRace) _hiddenRaceJobStates[entry.Id] = status.State == TransferWorkState.Failed ? "Failed" : "Skipped";
                     _queue.Remove(entry);
@@ -2799,6 +2890,7 @@ public partial class MainWindow : Window
                 }
                 if (entry.VisionaryRace && status.State == TransferWorkState.Completed)
                 {
+                    _hardResetRecovery.Remove(entry.Id);
                     _hiddenRaceJobStates[entry.Id] = "Completed";
                     _queue.Remove(entry);
                     _engine.Remove(entry.Id);
@@ -2809,6 +2901,7 @@ public partial class MainWindow : Window
                     TransferWorkState.Queued => "Queued", TransferWorkState.Running => "Transferring",
                     TransferWorkState.Paused => "Paused", TransferWorkState.Completed => "Completed", _ => "Failed"
                 };
+                if (status.State == TransferWorkState.Completed) _hardResetRecovery.Remove(entry.Id);
             }
             SaveQueue(); UpdateQueueStatus();
         });
@@ -3090,7 +3183,7 @@ public partial class MainWindow : Window
 
     private void TransferJobs_Click(object sender, RoutedEventArgs e)
     {
-        var window = new TransferJobsWindow(GetTransferJobs, RemoveTransferJob, ClearTransferJobs) { Owner = this };
+        var window = new TransferJobsWindow(GetTransferJobs, RemoveTransferJob, ClearTransferJobs, HardResetJobs) { Owner = this };
         window.Show();
     }
 
@@ -3209,11 +3302,11 @@ public partial class MainWindow : Window
             new("Transfer jobs", _queue.Count.ToString(), $"Queued/active: {active}"),
             new("Completed", _queue.Count(item => item.State == "Completed").ToString(), $"Failed: {_queue.Count(item => item.State == "Failed")}"),
             new("FXP jobs", fxp.Count.ToString(), $"Completed: {fxp.Count(item => item.State == "Completed")}   Failed: {fxp.Count(item => item.State == "Failed")}"),
-            new("Current throughput", $"{FormatSize(speed)}/s", $"Running transfers: {running.Count}"),
+            new("Current throughput", $"{(running.Any(item => item.FxpSpeedEstimated) ? "≈" : "")}{FormatSize(speed)}/s", $"Running transfers: {running.Count}; ≈ includes display-only FXP estimates"),
             new("Transferred this queue", FormatSize(bytes), $"Remaining: {FormatSize(_queue.Sum(item => Math.Max(0, item.TotalBytes - item.BytesTransferred)))}"),
             new("API", _settings.EnableHttpsApi ? "Enabled" : "Disabled", _settings.EnableHttpsApi ? $"HTTPS port {_settings.HttpsApiPort}" : "—")
         };
-        return new(connected, profiles.Count, active, $"{FormatSize(speed)}/s", FormatSize(bytes), rows,
+        return new(connected, profiles.Count, active, $"{(running.Any(item => item.FxpSpeedEstimated) ? "≈" : "")}{FormatSize(speed)}/s", FormatSize(bytes), rows,
             new MetricsDashboard(FormatSize(_sessionStatistics.Uploaded + _sessionStatistics.Downloaded + _sessionStatistics.Fxp + _sessionStatistics.Local),
                 _sessionStatistics.Completed, FormatTransferTime(_sessionStatistics.Uptime), _workerPool.Values.Sum(pool => pool.Count),
                 _sessionStatistics.Hits, $"{_sessionStatistics.FxpRecentRate / 1_000_000d:0.00} MB/s", _sessionStatistics.TrafficMinutes, _latestFxpTimings,
@@ -3316,25 +3409,25 @@ public partial class MainWindow : Window
         LegendText.Text = $"{direction}: {current.Name}";
 
         var percent = current.TotalBytes > 0
-            ? Math.Clamp(current.BytesTransferred * 100d / current.TotalBytes, 0, 100)
+            ? Math.Clamp(current.DisplayBytesTransferred * 100d / current.TotalBytes, 0, current.FxpSpeedEstimated ? 99 : 100)
             : 0;
         StatusProgressBar.IsIndeterminate = current.State == "Transferring" && current.TotalBytes <= 0;
         StatusProgressBar.Value = percent;
-        StatusProgressText.Text = current.TotalBytes > 0 ? $"{percent:0}%" : current.State;
+        StatusProgressText.Text = current.TotalBytes > 0 ? $"{(current.FxpSpeedEstimated ? "≈" : "")}{percent:0}%" : current.State;
         var speedText = current.SpeedBytesPerSecond > 0 || (current.FxpLiveMeasured && !current.FxpSpeedUnavailable)
-            ? $"{current.SpeedBytesPerSecond / 1048576d:0.00} MB/s"
+            ? $"{(current.FxpSpeedEstimated ? "≈" : "")}{current.SpeedBytesPerSecond / 1048576d:0.00} MB/s"
             : "— MB/s";
         TransferBytesText.Text = current.TotalBytes > 0
-            ? $"{FormatSize(current.BytesTransferred)} / {FormatSize(current.TotalBytes)} · {speedText}"
-            : $"{FormatSize(current.BytesTransferred)} · {speedText}";
+            ? $"{(current.FxpSpeedEstimated ? "≈" : "")}{FormatSize(current.DisplayBytesTransferred)} / {FormatSize(current.TotalBytes)} · {speedText}"
+            : $"{FormatSize(current.DisplayBytesTransferred)} · {speedText}";
 
         var elapsed = current.StartedAt is { } started
             ? DateTimeOffset.Now - started.ToLocalTime()
             : TimeSpan.Zero;
         ElapsedText.Text = $"Elapsed: {FormatTransferTime(elapsed)}";
-        var remainingBytes = Math.Max(0, current.TotalBytes - current.BytesTransferred);
+        var remainingBytes = Math.Max(0, current.TotalBytes - current.DisplayBytesTransferred);
         RemainingText.Text = current.SpeedBytesPerSecond > 0 && current.TotalBytes > 0
-            ? $"Remaining: {FormatTransferTime(TimeSpan.FromSeconds(remainingBytes / (double)current.SpeedBytesPerSecond))}"
+            ? $"Remaining: {(current.FxpSpeedEstimated ? "≈" : "")}{FormatTransferTime(TimeSpan.FromSeconds(remainingBytes / (double)current.SpeedBytesPerSecond))}"
             : "Remaining: —";
         var oldestQueued = active.Where(item => item.QueuedAt is not null).MinBy(item => item.QueuedAt)?.QueuedAt;
         QueueTimeText.Text = $"Queue: {FormatTransferTime(oldestQueued is { } queued ? DateTimeOffset.Now - queued.ToLocalTime() : TimeSpan.Zero)}";
@@ -3609,6 +3702,7 @@ public partial class MainWindow : Window
         {
             _hiddenRaceJobStates.Remove(id);
             _raceJobOwners.Remove(id);
+            _hardResetEntries.Remove(id); _hardResetRecovery.Remove(id);
         }
     }
 
@@ -4003,6 +4097,40 @@ public partial class MainWindow : Window
             ?? throw new KeyNotFoundException($"Section {sectionName} is not configured for {site}.");
     }
 
+    private readonly HardResetRecovery _hardResetRecovery = new();
+    private readonly Dictionary<Guid, QueueEntryView> _hardResetEntries = [];
+    private readonly System.Windows.Threading.DispatcherTimer _hardResetTimer = new() { Interval = TimeSpan.FromSeconds(1) };
+    private HardResetPolicy HardResetOptions => new(_settings.HardResetCooldownSeconds, _settings.HardResetRetries, _settings.HardResetLookbackMinutes);
+    private void MaintainHardResetCandidates()
+    {
+        foreach (var id in _hardResetEntries.Keys.Where(id => _hardResetRecovery.Expired(id, HardResetOptions)).ToArray())
+        { _hardResetEntries.Remove(id); _hardResetRecovery.Remove(id); }
+        if (_settings.AutoHardReset && !_workerPoolShuttingDown) HardResetJobs(null);
+    }
+    private int HardResetJobs(Guid? selected)
+    {
+        if (_workerPoolShuttingDown) return 0;
+        var count = 0;
+        foreach (var entry in _hardResetEntries.Values.Where(entry => selected is null || entry.Id == selected).ToArray())
+        {
+            if (entry.VisionaryRace)
+            {
+                if (!_raceJobOwners.TryGetValue(entry.Id, out var race) || race.DestinationAlreadyComplete) continue;
+                try { race.ThrowIfStopped(); } catch { continue; }
+            }
+            if (_queue.Any(other => other.Id == entry.Id || other.Source == entry.Source && other.Destination == entry.Destination && other.SourceProfileId == entry.SourceProfileId && other.DestinationProfileId == entry.DestinationProfileId)) continue;
+            if (!_hardResetRecovery.Claim(entry.Id, HardResetOptions)) continue;
+            _hardResetEntries.Remove(entry.Id); _hiddenRaceJobStates.Remove(entry.Id);
+            entry.HardResetConnections = true; entry.BytesTransferred = 0; entry.SpeedBytesPerSecond = 0;
+            entry.FxpEstimatedBytes = null; entry.FxpSpeedEstimated = false; entry.StartedAt = null;
+            _queue.Add(entry); Schedule(entry); count++;
+            var message = $"Hard reset: queued with fresh control sessions and unchanged TLS/target policy: {entry.Name}";
+            _raceLog.Write("HARD-RESET", message); LogText.AppendText(Environment.NewLine + message);
+        }
+        if (selected is not null && count == 0) LogText.AppendText(Environment.NewLine + "Hard reset: job is not eligible (cooldown, retry limit, lookback or expired race).");
+        return count;
+    }
+
     private void ResetTransferJob(Guid id)
     {
         var entry = _queue.FirstOrDefault(item => item.Id == id); if (entry is null) return;
@@ -4010,7 +4138,7 @@ public partial class MainWindow : Window
         if (_engine.Snapshot().Any(status => status.Item.Id == id)) _engine.Resume(id); else Schedule(entry);
     }
 
-    private IReadOnlyList<TransferJobInfo> GetTransferJobs() => _queue.Where(entry => !entry.VisionaryRace).Select(entry =>
+    private IReadOnlyList<TransferJobInfo> GetTransferJobs() => _queue.Where(entry => !entry.VisionaryRace).Concat(_hardResetEntries.Values).DistinctBy(entry => entry.Id).Select(entry =>
     {
         var remoteToRemote = entry.Direction is TransferDirection.RelayLeftToRight or TransferDirection.RelayRightToLeft or TransferDirection.ApiFxp;
         var direction = entry.Direction switch
@@ -4021,13 +4149,13 @@ public partial class MainWindow : Window
             TransferDirection.ApiFxp => "API FXP",
             _ => "R2→R1"
         };
-        var progressPercent = entry.State == "Completed" ? 100d : entry.TotalBytes > 0 ? Math.Clamp(entry.BytesTransferred * 100d / entry.TotalBytes, 0, 100) : 0d;
-        var done = entry.State == "Completed" ? "100%" : entry.TotalBytes > 0 ? $"{progressPercent:0}%" : entry.State == "Transferring" ? "RUN" : entry.State.ToUpperInvariant();
+        var progressPercent = entry.State == "Completed" ? 100d : entry.TotalBytes > 0 ? Math.Clamp(entry.DisplayBytesTransferred * 100d / entry.TotalBytes, 0, entry.FxpSpeedEstimated ? 99 : 100) : 0d;
+        var done = entry.State == "Completed" ? "100%" : entry.TotalBytes > 0 ? $"{(entry.FxpSpeedEstimated ? "≈" : "")}{progressPercent:0}%" : entry.State == "Transferring" ? "RUN" : entry.State.ToUpperInvariant();
         return new TransferJobInfo(entry.Id, entry.QueuedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "—", entry.StartedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "—", direction,
             remoteToRemote ? "FXP" : "FTP", entry.Name, $"{entry.Source} → {entry.Destination}",
             entry.TotalBytes > 0 ? FormatSize(entry.TotalBytes) : entry.ProgressText, "1",
-            entry.TotalBytes > 0 ? FormatSize(Math.Max(0, entry.TotalBytes - entry.BytesTransferred)) : "—",
-            entry.SpeedBytesPerSecond > 0 ? $"{entry.SpeedBytesPerSecond / 1048576d:0.00} MB/s" : "—", done, entry.State, progressPercent);
+            entry.TotalBytes > 0 ? FormatSize(Math.Max(0, entry.TotalBytes - entry.DisplayBytesTransferred)) : "—",
+            entry.SpeedBytesPerSecond > 0 ? $"{(entry.FxpSpeedEstimated ? "≈" : "")}{entry.SpeedBytesPerSecond / 1048576d:0.00} MB/s" : "—", done, entry.State, progressPercent);
     }).ToList();
 
     private static string RemoteLeaf(string path) => path.TrimEnd('/').Split('/').LastOrDefault() ?? path;
@@ -4092,6 +4220,10 @@ public partial class MainWindow : Window
         private long _totalBytes = totalBytes;
         public long TotalBytes { get => _totalBytes; set { _totalBytes = value; Changed(); Changed(nameof(ProgressPercent)); Changed(nameof(ProgressDisplay)); } }
         private long _speedBytesPerSecond;
+        public bool FxpSpeedEstimated { get; set; }
+        private long? _fxpEstimatedBytes;
+        public long? FxpEstimatedBytes { get => _fxpEstimatedBytes; set { _fxpEstimatedBytes = value; Changed(nameof(ProgressPercent)); Changed(nameof(ProgressDisplay)); Changed(nameof(ProgressText)); } }
+        public long DisplayBytesTransferred => FxpEstimatedBytes ?? BytesTransferred;
         public bool FxpSpeedUnavailable { get; set; }
         public bool FxpLiveMeasured { get; set; }
         public bool FxpAverageMeasured { get; set; }
@@ -4100,6 +4232,7 @@ public partial class MainWindow : Window
         public Guid? SourceProfileId { get; set; }
         public RaceStartTrace? StartTrace { get; set; }
         public bool VisionaryRace { get; set; }
+        public bool HardResetConnections { get; set; }
         public Guid? DestinationProfileId { get; set; }
         public string? RuleSection { get; set; }
         public string? RuleRelease { get; set; }
@@ -4108,9 +4241,9 @@ public partial class MainWindow : Window
         public DateTime LastPersistedAt { get; set; }
         public string State { get => _state; set { _state = value; Changed(); Changed(nameof(ProgressPercent)); Changed(nameof(ProgressDisplay)); } }
         public long BytesTransferred { get => _bytesTransferred; set { _bytesTransferred = value; Changed(); Changed(nameof(ProgressText)); Changed(nameof(ProgressPercent)); Changed(nameof(ProgressDisplay)); } }
-        public string ProgressText => FormatSize(BytesTransferred);
-        public double ProgressPercent => State == "Completed" ? 100 : TotalBytes > 0 ? Math.Clamp(BytesTransferred * 100d / TotalBytes, 0, 100) : 0;
-        public string ProgressDisplay => TotalBytes > 0 ? $"{FormatSize(BytesTransferred)} / {FormatSize(TotalBytes)}  ({ProgressPercent:0}%)" : ProgressText;
+        public string ProgressText => (FxpSpeedEstimated ? "≈" : "") + FormatSize(DisplayBytesTransferred);
+        public double ProgressPercent => State == "Completed" ? 100 : TotalBytes > 0 ? Math.Clamp(DisplayBytesTransferred * 100d / TotalBytes, 0, FxpSpeedEstimated ? 99 : 100) : 0;
+        public string ProgressDisplay => TotalBytes > 0 ? $"{(FxpSpeedEstimated ? "≈" : "")}{FormatSize(DisplayBytesTransferred)} / {FormatSize(TotalBytes)}  ({ProgressPercent:0}%)" : ProgressText;
         public event PropertyChangedEventHandler? PropertyChanged;
         private void Changed([CallerMemberName] string? property = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(property));
     }

@@ -11,20 +11,30 @@ public partial class TransferJobsWindow : Window
     private readonly Func<IReadOnlyList<TransferJobInfo>> _getJobs;
     private readonly Action<Guid> _removeJob;
     private readonly Action _clearJobs;
+    private readonly Func<Guid?, int> _hardReset;
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
 
-    internal TransferJobsWindow(Func<IReadOnlyList<TransferJobInfo>> getJobs, Action<Guid> removeJob, Action clearJobs)
+    internal TransferJobsWindow(Func<IReadOnlyList<TransferJobInfo>> getJobs, Action<Guid> removeJob, Action clearJobs, Func<Guid?, int> hardReset)
     {
         InitializeComponent();
         _getJobs = getJobs;
         _removeJob = removeJob;
         _clearJobs = clearJobs;
+        _hardReset = hardReset;
         _timer.Tick += (_, _) => RefreshJobs();
         Loaded += (_, _) => { RefreshJobs(); _timer.Start(); };
         Closed += (_, _) => _timer.Stop();
     }
 
     private void Refresh_Click(object sender, RoutedEventArgs e) => RefreshJobs();
+    private void HardResetSelected_Click(object sender, RoutedEventArgs e)
+    {
+        if (JobsList.SelectedItem is TransferJobInfo job) { var count = _hardReset(job.Id); RefreshJobs(); CountersText.Text += $"   Hard reset queued: {count}"; }
+    }
+    private void HardResetEligible_Click(object sender, RoutedEventArgs e)
+    {
+        var count = _hardReset(null); RefreshJobs(); CountersText.Text += $"   Hard reset queued: {count}";
+    }
     private void Close_Click(object sender, RoutedEventArgs e) => Close();
     private void RemoveJob_Click(object sender, RoutedEventArgs e)
     {
@@ -44,7 +54,9 @@ public partial class TransferJobsWindow : Window
     private void RefreshJobs()
     {
         var jobs = _getJobs();
+        var selected = (JobsList.SelectedItem as TransferJobInfo)?.Id;
         JobsList.ItemsSource = jobs;
+        if (selected is not null) JobsList.SelectedItem = jobs.FirstOrDefault(job => job.Id == selected);
         var active = jobs.Count(job => job.State is "Queued" or "Transferring");
         CountersText.Text = $"Active: {active}   Total: {jobs.Count}";
     }
