@@ -2964,7 +2964,12 @@ public partial class MainWindow : Window
         var upperHeight = upper.ActualHeight + delta;
         var lowerHeight = lower.ActualHeight - delta;
         // Keep the flexible row flexible; resize only the adjacent visible panels.
-        if (upper.Height.IsStar) lower.Height = new GridLength(lowerHeight);
+        if (upper.Height.IsStar && lower.Height.IsStar)
+        {
+            upper.Height = new GridLength(upperHeight, GridUnitType.Star);
+            lower.Height = new GridLength(lowerHeight, GridUnitType.Star);
+        }
+        else if (upper.Height.IsStar) lower.Height = new GridLength(lowerHeight);
         else if (lower.Height.IsStar) upper.Height = new GridLength(upperHeight);
         else { upper.Height = new GridLength(upperHeight); lower.Height = new GridLength(lowerHeight); }
     }
@@ -2973,11 +2978,16 @@ public partial class MainWindow : Window
     {
         var visible = new[] { ManagerRow, QueueRow, MetricsRow, StatusRow, LogRow }
             .Where(row => row.Height.Value > 0).ToArray();
-        var flexible = _managerVisible ? ManagerRow : visible.LastOrDefault();
+        var available = Math.Max(200, WorkspaceGrid.ActualHeight - 32);
+        var logVisible = visible.Contains(LogRow);
+        var minimum = Math.Min(70, available / Math.Max(1, visible.Length) / 2);
         foreach (var row in visible)
         {
-            if (ReferenceEquals(row, flexible)) row.Height = new GridLength(1, GridUnitType.Star);
-            else if (row.Height.IsStar) row.Height = new GridLength(Math.Max(row.MinHeight, row.ActualHeight));
+            var desired = row.ActualHeight > 0 ? row.ActualHeight : row.Height.IsAbsolute ? row.Height.Value : 200;
+            if (ReferenceEquals(row, MetricsRow) && logVisible) desired = Math.Min(desired, available * 0.45);
+            if (ReferenceEquals(row, LogRow) && visible.Length > 1) desired = Math.Max(desired, available * 0.35);
+            row.MinHeight = ReferenceEquals(row, LogRow) ? Math.Min(180, available * 0.3) : minimum;
+            row.Height = new GridLength(Math.Max(row.MinHeight, desired), GridUnitType.Star);
         }
         void Divider(RowDefinition row, RowDefinition splitterRow, UIElement splitter, double height)
         {
@@ -2995,7 +3005,7 @@ public partial class MainWindow : Window
     {
         if (LogRow.Height.Value > 0)
         {
-            _visibleLogHeight = LogRow.Height;
+            _visibleLogHeight = new GridLength(Math.Max(70, LogRow.ActualHeight));
             LogRow.MinHeight = 0;
             LogRow.Height = new GridLength(0);
             LogSplitterRow.Height = new GridLength(0);
