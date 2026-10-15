@@ -125,7 +125,7 @@ public partial class MainWindow : Window
             _settingsStore.Save(updated);
             _settings = updated;
         });
-        void ReportColumnError(string message) => LogText.AppendText(Environment.NewLine + message);
+        void ReportColumnError(string message) => AppendConnectionLog(Environment.NewLine + message);
         _columnVisibility.Attach(LocalList, "Left", () => FitFileColumns(LocalList), ReportColumnError);
         _columnVisibility.Attach(RemoteList, "Right", () => FitFileColumns(RemoteList), ReportColumnError);
         _columnVisibility.Attach(QueueList, "Queue", FitQueueColumns, ReportColumnError);
@@ -1275,7 +1275,7 @@ public partial class MainWindow : Window
                 var profile = left ? _leftProfile : _rightProfile;
                 if (session?.IsConnected != true) throw new IOException("Reconnect to the site before deleting.");
                 await RemoteDeletion.DeleteAsync(session, path, directory, profile?.Protocol != TransferProtocol.Sftp, timeout.Token,
-                    message => LogText.AppendText($"{Environment.NewLine}{message}"));
+                    message => AppendConnectionLog($"{Environment.NewLine}{message}"));
             }
             LogText.AppendText($"{Environment.NewLine}Deleted: {path}");
             return true;
@@ -2095,7 +2095,7 @@ public partial class MainWindow : Window
                         }
                         catch (FtpCommandException exception) when (exception.StatusCode == 426 && !cancellationToken.IsCancellationRequested)
                         {
-                            void RecoveryLog(string message) { LogText.AppendText(Environment.NewLine + message); _raceLog.Write("FXP-426", entry.Id + " " + message); }
+                            void RecoveryLog(string message) { AppendConnectionLog(Environment.NewLine + message); _raceLog.Write("FXP-426", entry.Id + " " + message); }
                             RecoveryLog($"FXP 426: reconnecting both sessions before checking target; preserving configured TLS: {entry.Name}");
                             // Prevent all recovery failures from falling through to relay.
                             resumeOverwriteAttempted = true;
@@ -2240,9 +2240,18 @@ public partial class MainWindow : Window
         }
     }
 
+    private IReadOnlyList<(string Name, TimeSpan Elapsed)> _latestFxpTimings = [];
+    private bool _visionaryDebugEnabled = MetricsPanel.ReadDebugPreference();
+
+    private void AppendConnectionLog(string message)
+    {
+        if (VisionaryLogVisibility.Show(message, _visionaryDebugEnabled)) LogText.AppendText(message);
+    }
+
     private void AppendFxpTimings(FtpRemoteSession session)
     {
         if (session.LastFxpStageTimings.Count == 0) return;
+        _latestFxpTimings = session.LastFxpStageTimings.ToArray();
         var values = session.LastFxpStageTimings.Select(stage =>
             $"{stage.Name} {(stage.Elapsed.TotalSeconds >= 1 ? $"{stage.Elapsed.TotalSeconds:0.00}s" : $"{stage.Elapsed.TotalMilliseconds:0}ms")}");
         LogText.AppendText($"{Environment.NewLine}FXP timings: {string.Join(" | ", values)}");
@@ -3138,7 +3147,7 @@ public partial class MainWindow : Window
                 () => TransferJobs_Click(this, new RoutedEventArgs()),
                 () => RaceLog_Click(this, new RoutedEventArgs()),
                 () => SpreadJobs_Click(this, new RoutedEventArgs()),
-                () => Metrics_Click(this, new RoutedEventArgs()));
+                () => Metrics_Click(this, new RoutedEventArgs()), enabled => _visionaryDebugEnabled = enabled);
         if (!show) _metricsHeight = MetricsRow.Height;
         MetricsHost.Visibility = MetricsSplitter.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
         MetricsSplitterRow.Height = new GridLength(show ? 6 : 0);
@@ -3189,7 +3198,7 @@ public partial class MainWindow : Window
         return new(connected, profiles.Count, active, $"{FormatSize(speed)}/s", FormatSize(bytes), rows,
             new MetricsDashboard(FormatSize(_sessionStatistics.Uploaded + _sessionStatistics.Downloaded + _sessionStatistics.Fxp + _sessionStatistics.Local),
                 _sessionStatistics.Completed, FormatTransferTime(_sessionStatistics.Uptime), _workerPool.Values.Sum(pool => pool.Count),
-                _sessionStatistics.Hits, $"{_sessionStatistics.FxpRecentRate / 1_000_000d:0.00} MB/s", _sessionStatistics.TrafficMinutes));
+                _sessionStatistics.Hits, $"{_sessionStatistics.FxpRecentRate / 1_000_000d:0.00} MB/s", _sessionStatistics.TrafficMinutes, _latestFxpTimings));
     }
 
     private readonly System.Windows.Threading.DispatcherTimer _statusScrollTimer = new() { Interval = TimeSpan.FromMilliseconds(30) };
@@ -3504,7 +3513,7 @@ public partial class MainWindow : Window
         var setup = new IrcSetupCommands(() => new ProfileStore().Load(), profiles => new ProfileStore().Save(profiles), rules, _settings.Irc.AdminSiteId, routing, catcher, _settings.Irc.NetworkName);
         _ircService = new IrcManager(_settings, message => Dispatcher.BeginInvoke(() =>
         {
-            LogText.AppendText($"{Environment.NewLine}{message}");
+            AppendConnectionLog($"{Environment.NewLine}{message}");
             LogText.ScrollToEnd();
         }), setupCommand: async (command, stillAuthorized) => await Dispatcher.InvokeAsync(() =>
         {
@@ -3551,7 +3560,7 @@ public partial class MainWindow : Window
                 message => Dispatcher.BeginInvoke(() =>
                 {
                     if (message.StartsWith("VISIONARY", StringComparison.OrdinalIgnoreCase)) _raceLog.Write("VISIONARY", message);
-                    LogText.AppendText($"{Environment.NewLine}{message}");
+                    AppendConnectionLog($"{Environment.NewLine}{message}");
                     LogText.ScrollToEnd();
                 }), connectIrc: async request => await await Dispatcher.InvokeAsync(async () =>
                 {
@@ -3625,7 +3634,7 @@ public partial class MainWindow : Window
             _visionaryLiveSlots[site] = next;
             var message = $"VISIONARY live slots {site}: downloads={next.Item1}, uploads={next.Item2}; total connection cap still applies";
             _raceLog.Write("VISIONARY", message);
-            LogText.AppendText(Environment.NewLine + message);
+            AppendConnectionLog(Environment.NewLine + message);
             foreach (var profile in _raceReadySites.Values.Where(profile => profile.Name.Equals(site, StringComparison.OrdinalIgnoreCase)))
             {
                 var options = RaceSlotOptions(profile);
@@ -3780,7 +3789,7 @@ public partial class MainWindow : Window
                         var message = $"VISIONARY skipped {request.Name}: {request.DstSite} already COMPLETE; destination marker and {apiFiles.Count} files verified";
                         if (pending.Length > 0) message += $"; removed {pending.Length} pending/active jobs";
                         _raceLog.Write("SKIP", message);
-                        LogText.AppendText(Environment.NewLine + message); LogText.ScrollToEnd();
+                        AppendConnectionLog(Environment.NewLine + message); LogText.ScrollToEnd();
                         return new ApiTransferStartResult(request.Name, "SKIPPED", 0, request.SrcSite, request.DstSite, jobIds);
                     }
                 }
@@ -3819,7 +3828,7 @@ public partial class MainWindow : Window
             if (skippedBeforeQueue > 0)
             {
                 var message = $"VISIONARY prequeue: {request.SrcSite} -> {request.DstSite}; existing targets skipped={skippedBeforeQueue}; remaining={selectedFiles.Count}; no transfer slots used for skipped files";
-                LogText.AppendText(Environment.NewLine + message); _raceLog.Write("PREQUEUE", message);
+                AppendConnectionLog(Environment.NewLine + message); _raceLog.Write("PREQUEUE", message);
             }
         }
         var queuedEntries = selectedFiles.OrderBy(file => PriorityRank(file.Entry.Name, file.Entry.FullPath))
@@ -3857,7 +3866,7 @@ public partial class MainWindow : Window
             race.DestinationVerified = verified;
         }
         if (race is null || queued > 0)
-        { LogText.AppendText($"{Environment.NewLine}{(race is null ? "API" : "VISIONARY")} queued FXP {request.Name}: {request.SrcSite} → {request.DstSite} ({queued} files)"); LogText.ScrollToEnd(); }
+        { AppendConnectionLog($"{Environment.NewLine}{(race is null ? "API" : "VISIONARY")} queued FXP {request.Name}: {request.SrcSite} → {request.DstSite} ({queued} files)"); LogText.ScrollToEnd(); }
         return new ApiTransferStartResult(request.Name, "QUEUED", queued, request.SrcSite, request.DstSite, jobIds);
     });
 

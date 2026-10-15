@@ -50,6 +50,9 @@ internal static class SecureReverseFxpChecks
             catch (FtpResumeRejectedException exception) when (resume && rejection >= 2 && exception.CanOverwrite) { failed = true; }
             if (resume && rejection >= 2 && !failed) throw new Exception("Destination append rejection must be eligible for resume recovery");
             if ((!failed && from.LastFxpTransferElapsed <= TimeSpan.Zero) || (failed && from.LastFxpTransferElapsed != TimeSpan.Zero)) throw new Exception("Passive timing must require successful replies from both servers.");
+            if (!from.LastFxpStageTimings.Any(stage => stage.Name == "STOR") ||
+                from.LastFxpStageTimings.Single(stage => stage.Name == "STOR").Elapsed > from.LastFxpStageTimings.Single(stage => stage.Name == "STOR/RETR").Elapsed)
+                throw new Exception("Destination STOR must be measured separately within the parallel start stage.");
             if (failed != rejected) throw new Exception("Secure reverse FXP misclassified rejection.");
             var sentSource = Encoding.UTF8.GetString(sourceOutput.ToArray()).TrimStart('\uFEFF');
             var sentTarget = Encoding.UTF8.GetString(targetOutput.ToArray()).TrimStart('\uFEFF');

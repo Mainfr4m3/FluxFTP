@@ -8,6 +8,14 @@ using IoFtp.Desktop.Models;
 using IoFtp.Desktop.Services;
 
 var assertions = 0;
+if (args.FirstOrDefault() == "--metrics-debug-checks")
+{
+    foreach (var line in new[] { "VISIONARY TIMING [123] | source-PRET", "VISIONARY queued FXP Release: A -> B (2 files)", "VISIONARY Release: A -> B FAILED: unreachable", "VISIONARY pipe failed: busy", "VISIONARY batch A -> B: ERROR missing site", "VISIONARY Release stopped: maximum lifetime", "VISIONARY WARNING live slots unavailable", "Transfer blocked [DUPE]: 553 File exists", "FXP timings: PRET 25ms | STOR 20ms" })
+        if (!VisionaryLogVisibility.Show(Environment.NewLine + line, false)) throw new Exception("Essential log hidden: " + line);
+    foreach (var line in new[] { "VISIONARY Release: A -> B watching source", "VISIONARY batch A -> B: OK ACCEPTED Release — queued or watching", "VISIONARY prequeue: A -> B; existing targets skipped=4", "VISIONARY live slots A: downloads=8", "VISIONARY batch A -> B: OK WATCH UPDATED Release" })
+        if (VisionaryLogVisibility.Show(line, false) || !VisionaryLogVisibility.Show(line, true)) throw new Exception("Debug toggle failed: " + line);
+    Console.WriteLine("PASS: timing, queued transfers and errors remain visible; Visionary chatter requires Debug."); return;
+}
 if (args.FirstOrDefault() == "--race-log-checks") { RaceLogChecks.Run(); return; }
 if (args.FirstOrDefault() == "--udp-control-checks") { await UdpControlChecks.Run(); return; }
 if (args.FirstOrDefault() == "--chain-batch-checks") { await ChainBatchChecks.Run(); return; }

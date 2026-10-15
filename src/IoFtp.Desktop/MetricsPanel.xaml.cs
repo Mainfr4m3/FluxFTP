@@ -10,17 +10,37 @@ public partial class MetricsPanel : UserControl
 {
     private readonly Func<MetricsSnapshot> _snapshot;
     private readonly Action _transferJobs, _raceLog, _spreadJobs, _hide;
+    private readonly Action<bool> _debugChanged;
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly DispatcherTimer _saveLayoutTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
     private readonly Dictionary<string, double> _sizes = new();
     private static string LayoutPath => System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FluxFTP", "metrics-layout.json");
-    internal MetricsPanel(Func<MetricsSnapshot> snapshot, Action transferJobs, Action raceLog, Action spreadJobs, Action hide)
+    internal MetricsPanel(Func<MetricsSnapshot> snapshot, Action transferJobs, Action raceLog, Action spreadJobs, Action hide, Action<bool> debugChanged)
     {
         _transferJobs = transferJobs; _raceLog = raceLog; _spreadJobs = spreadJobs; _hide = hide;
+        _debugChanged = debugChanged;
         InitializeComponent(); _snapshot = snapshot; _timer.Tick += (_, _) => RefreshMetrics();
         ConfigureSizes();
+        DebugBox.IsChecked = _sizes.GetValueOrDefault("debug") == 1;
+        _debugChanged(DebugBox.IsChecked == true);
         Loaded += (_, _) => { RefreshMetrics(); _timer.Start(); }; Unloaded += (_, _) => _timer.Stop();
         IsVisibleChanged += (_, _) => { if (IsVisible) { RefreshMetrics(); _timer.Start(); } else _timer.Stop(); };
+    }
+    internal static bool ReadDebugPreference()
+    {
+        try
+        {
+            return System.IO.File.Exists(LayoutPath) &&
+                System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, double>>(System.IO.File.ReadAllText(LayoutPath))?.GetValueOrDefault("debug") == 1;
+        }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException or System.Text.Json.JsonException) { return false; }
+    }
+    private void Debug_Changed(object sender, RoutedEventArgs e)
+    {
+        var enabled = DebugBox.IsChecked == true;
+        _sizes["debug"] = enabled ? 1 : 0;
+        _debugChanged(enabled);
+        _saveLayoutTimer.Stop(); _saveLayoutTimer.Start();
     }
     private void ConfigureSizes()
     {
@@ -84,6 +104,14 @@ public partial class MetricsPanel : UserControl
         {
             BytesText.Text = dashboard.Transferred; FilesText.Text = dashboard.Files.ToString("N0");
             SpeedText.Text = dashboard.FxpRate; PoolText.Text = dashboard.Pool.ToString(); UptimeText.Text = dashboard.Uptime;
+            string Timing(string name)
+            {
+                var stage = dashboard.FxpTimings?.LastOrDefault(stage => stage.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                return stage is { Name: not null } measured
+                    ? (measured.Elapsed.TotalSeconds >= 1 ? $"{measured.Elapsed.TotalSeconds:0.00}s" : $"{measured.Elapsed.TotalMilliseconds:0}ms") : "—";
+            }
+            PretText.Text = "PRET " + Timing("PRET"); CpsvText.Text = "CPSV " + Timing("CPSV");
+            StorText.Text = "STOR " + Timing("STOR"); DataText.Text = "DATA " + Timing("Data");
             PoolDetailText.Text = $"Pool reuse hits: {dashboard.Hits:N0}";
             using var process = System.Diagnostics.Process.GetCurrentProcess();
             ProcessText.Text = $"Memory: {process.WorkingSet64 / 1048576d:0} MB · Threads: {process.Threads.Count}";

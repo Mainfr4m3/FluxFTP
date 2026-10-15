@@ -2,6 +2,12 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.1 — 2026-10-15
+
+- Metrics adds a saved Debug checkbox between Transfer Jobs and RACE-Log. Visionary timing, queued transfers and errors remain visible; other Visionary status messages require Debug. Full diagnostics remain in RACE-Log.
+- A matching FXP timings card between Idle Pool and Session Running shows the latest direct FXP attempt's PRET, CPSV, STOR and DATA times. Unmeasured stages show a dash and values reset per attempt instead of mixing transfers.
+- Destination STOR is measured separately from the parallel STOR/RETR setup stage without changing command ordering or TLS settings.
+
 ## 2.1.0 — 2026-10-15
 
 - Bridge 2.0 reads live Visionary slot settings for each incoming chain through the supplied read-only `custom/fluxftp_chains.pl` module. Section overrides take precedence over site values; active watches receive changes without reimporting INI exports. Flux total connection caps and disabled directions still apply.

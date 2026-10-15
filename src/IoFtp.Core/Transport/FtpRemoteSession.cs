@@ -460,7 +460,7 @@ public sealed class FtpRemoteSession : IRemoteSession
         // the peer has actually opened the negotiated data connection; awaiting
         // STOR before sending RETR can therefore deadlock until a 425 timeout.
         var starts = await MeasureFxpStageAsync("STOR/RETR", async () => await Task.WhenAll(
-            destination.StartTransferCommandAsync($"STOR {destinationPath}", cancellationToken, _fxpResumeOffset),
+            MeasureFxpStageAsync("STOR", () => destination.StartTransferCommandAsync($"STOR {destinationPath}", cancellationToken, _fxpResumeOffset)),
             StartTransferCommandAsync($"RETR {sourcePath}", cancellationToken)));
 
         var completions = await MeasureFxpStageAsync("Data", async () => await Task.WhenAll(
