@@ -92,6 +92,7 @@ public partial class MainWindow : Window
     private readonly SemaphoreSlim _leftNavigationGate = new(1, 1);
     private readonly SemaphoreSlim _rightNavigationGate = new(1, 1);
     private readonly System.Windows.Forms.NotifyIcon _trayIcon = new();
+    private readonly IrcMetricsFile _ircMetricsFile = new();
     private readonly List<System.Windows.Forms.ToolStripMenuItem> _trayMetrics = [];
     private readonly System.Windows.Threading.DispatcherTimer _legendTimer = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly ExternalScriptRunner _scriptRunner = new();
@@ -1956,6 +1957,7 @@ public partial class MainWindow : Window
                 {
                     var elapsedSeconds = (now - speedSampleAt).TotalSeconds;
                     entry.SpeedBytesPerSecond = Math.Max(0, (long)((bytes - speedSampleBytes) / elapsedSeconds));
+                    RecordMeasuredPeakSpeed();
                     speedSampleBytes = bytes;
                     speedSampleAt = now;
                 }
@@ -2350,6 +2352,7 @@ public partial class MainWindow : Window
 
     private void RecordSessionCompletion(QueueEntryView entry, long newBytes)
     {
+        RecordMeasuredPeakSpeed(entry);
         var kind = entry.Direction switch
         {
             TransferDirection.Download or TransferDirection.DownloadFromLeft or TransferDirection.ApiDownload => "Download",
@@ -2366,6 +2369,17 @@ public partial class MainWindow : Window
             race.NotifyTransferCompleted();
         }
         if (_totalStatistics.LastError is { } error) LogText.AppendText(Environment.NewLine + error);
+    }
+
+    private void RecordMeasuredPeakSpeed(QueueEntryView? completed = null)
+    {
+        // Match measured aggregate throughput; display-only FXP estimates cannot set records.
+        var speed = _queue.Where(entry => entry.State == "Transferring" && !entry.FxpSpeedEstimated)
+            .Sum(entry => Math.Max(0, entry.SpeedBytesPerSecond));
+        if (completed is { State: "Completed" } && (!completed.FxpSpeedEstimated || completed.FxpAverageMeasured))
+            speed += Math.Max(0, completed.SpeedBytesPerSecond);
+        _sessionStatistics.RecordSpeed(speed);
+        _totalStatistics.RecordSpeed(speed);
     }
 
     private async Task<FtpRemoteSession> CreateTransferWorkerAsync(ConnectionProfile profile, CancellationToken token)
@@ -3553,12 +3567,32 @@ public partial class MainWindow : Window
     private void UpdateTrayMetrics()
     {
         if (_trayMetrics.Count != 6) return;
+        RecordMeasuredPeakSpeed();
         var transferred = FormatSize(_sessionStatistics.Uploaded + _sessionStatistics.Downloaded + _sessionStatistics.Fxp + _sessionStatistics.Local);
         var queued = _queue.Count(entry => entry.State == "Queued");
         var active = _queue.Count(entry => entry.State == "Transferring");
         var pool = _workerPool.Values.Sum(items => items.Count);
         var rate = $"{_sessionStatistics.FxpRecentRate / 1_000_000d:0.00} MB/s";
         var uptime = FormatTransferTime(_sessionStatistics.Uptime);
+        var total = _totalStatistics.Snapshot();
+        var allTime = FormatSize(total.Uploaded + total.Downloaded + total.Fxp + total.Local);
+        var liveSpeed = _queue.Where(entry => entry.State == "Transferring").Sum(entry => entry.SpeedBytesPerSecond);
+        var estimated = _queue.Any(entry => entry.State == "Transferring" && entry.FxpSpeedEstimated) ? "~" : "";
+        var current = _queue.FirstOrDefault(entry => entry.State == "Transferring")
+            ?? _queue.FirstOrDefault(entry => entry.State == "Queued");
+        var progress = "Idle";
+        if (current is not null)
+        {
+            if (current.TotalBytes > 0)
+            {
+                var percent = Math.Clamp(current.DisplayBytesTransferred * 100d / current.TotalBytes,
+                    0, current.FxpSpeedEstimated ? 99 : 100);
+                var filled = (int)Math.Floor(percent / 5);
+                progress = $"[{new string(':', filled)}{new string('.', 20 - filled)}] {(current.FxpSpeedEstimated ? "~" : "")}{percent:0}% Complete";
+            }
+            else progress = current.State == "Transferring" ? "Progress unknown" : "Queued";
+        }
+        _ircMetricsFile.Publish($"FluxFTP - {progress} - Traffic {estimated}{FormatSize(liveSpeed)}/s - Session {transferred} - Total {allTime} - FXP(60s) {rate} - Files {_sessionStatistics.Completed} - Jobs {queued}/{active} - Pool {pool} - Uptime {uptime} - Session peak {FormatSize(_sessionStatistics.PeakSpeedBytesPerSecond)}/s - Total peak {FormatSize(total.PeakSpeedBytesPerSecond)}/s - Total files {total.Completed}");
         var rows = new[] { $"Transferred · session: {transferred}", $"Completed files: {_sessionStatistics.Completed:N0}",
             $"FXP rate · last 60 s: {rate}", $"Queued / active: {queued} / {active}", $"Idle pool: {pool}", $"Session running: {uptime}" };
         for (var i = 0; i < rows.Length; i++) _trayMetrics[i].Text = rows[i];

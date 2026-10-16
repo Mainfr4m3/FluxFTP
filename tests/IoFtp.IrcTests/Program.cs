@@ -8,6 +8,60 @@ using IoFtp.Desktop.Models;
 using IoFtp.Desktop.Services;
 
 var assertions = 0;
+if (args.FirstOrDefault() == "--peak-speed-checks")
+{
+    var directory = Path.Combine(AppContext.BaseDirectory, "peak-test-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(directory);
+    try
+    {
+        var session = new SessionStatistics();
+        Parallel.For(0, 1000, speed => session.RecordSpeed(speed));
+        session.RecordSpeed(-1);
+        session.RecordSpeed(10);
+        if (session.PeakSpeedBytesPerSecond != 999 || new SessionStatistics().PeakSpeedBytesPerSecond != 0)
+            throw new Exception("Session maximum or restart reset failed");
+        var path = Path.Combine(directory, "total-statistics.json");
+        File.WriteAllText(path, "{\"StartedAt\":\"2026-01-01T00:00:00Z\",\"Uploaded\":123,\"Completed\":5}");
+        var totals = new TotalStatisticsStore(directory);
+        if (totals.Snapshot().PeakSpeedBytesPerSecond != 0) throw new Exception("Legacy totals migration failed");
+        totals.RecordSpeed(123456789);
+        totals.RecordSpeed(100);
+        totals.Complete("Download", 456);
+        var saved = new TotalStatisticsStore(directory).Snapshot();
+        if (saved.PeakSpeedBytesPerSecond != 123456789 || saved.Uploaded != 123 || saved.Downloaded != 456 || saved.Completed != 6)
+            throw new Exception("Peak persistence changed totals or lost the record");
+        File.WriteAllText(path, "invalid");
+        if (new TotalStatisticsStore(directory).Snapshot().PeakSpeedBytesPerSecond != 123456789)
+            throw new Exception("Backup lost peak record");
+        Console.WriteLine("PASS: concurrent session maximum, session reset, legacy totals, persistent peak, totals preservation and backup recovery.");
+    }
+    finally { Directory.Delete(directory, true); }
+    return;
+}
+if (args.FirstOrDefault() == "--irc-metrics-checks")
+{
+    var directory = Path.Combine(Path.GetTempPath(), "fluxftp-metrics-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+        var metrics = new IrcMetricsFile(directory);
+        var path = Path.Combine(directory, "irc-metrics.txt");
+        metrics.Publish("FluxFTP - Session 1 GB - Total 2 GB");
+        var parts = File.ReadAllText(path).TrimEnd('\n').Split('\t');
+        if (parts.Length != 2 || !long.TryParse(parts[0], out var stamp) ||
+            Math.Abs(DateTimeOffset.UtcNow.ToUnixTimeSeconds() - stamp) > 2 || parts[1] != "FluxFTP - Session 1 GB - Total 2 GB")
+            throw new Exception("Metrics heartbeat or text invalid");
+        using (var locked = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
+            metrics.Publish("Locked update must not throw");
+        metrics.Publish("FluxFTP - Session 3 GB - Total 4 GB");
+        if (!File.ReadAllText(path).Contains("Session 3 GB - Total 4 GB")) throw new Exception("Did not recover after locked file");
+        var blocked = Path.Combine(directory, "not-a-directory");
+        File.WriteAllText(blocked, "blocked");
+        new IrcMetricsFile(blocked).Publish("Unwritable directory must not throw");
+        Console.WriteLine("PASS: metrics heartbeat, replacement, locked/missing directory handling and recovery.");
+    }
+    finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    return;
+}
 if (args.FirstOrDefault() == "--hard-reset-checks") { HardResetChecks.Run(); return; }
 if (args.FirstOrDefault() == "--fxp-estimate-checks") { FxpEstimateChecks.Run(); return; }
 if (args.FirstOrDefault() == "--server-stats-checks") { await ServerStatsChecks.Run(); return; }

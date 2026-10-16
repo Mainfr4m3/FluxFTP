@@ -2,6 +2,19 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.10 — 2026-10-16
+
+- Channel sharing now includes transferred bytes, maximum measured speed and completed files; session sharing also includes uptime. Session speed records reset on restart; all-time records persist with total statistics. Records start with this version and exclude display-only FXP speed estimates; measured direct FXP completion averages are included.
+
+## 2.1.9 — 2026-10-16
+
+- The mIRC metrics titlebar adds a 20-character progress bar and percentage for the same current transfer as FluxFTP's status bar, for example `[::::::::::..........] 50% Complete`. Estimated FXP progress is marked with `~` and capped at 99%. Idle, queued and unknown-size transfers show their status instead.
+
+## 2.1.8 — 2026-10-16
+
+- The mIRC bridge displays traffic, session and all-time totals, FXP rate, files, jobs, idle pool and uptime in the titlebar. Use `/fluxbridge metrics on` or `/fluxbridge metrics off` to control it.
+- FluxFTP publishes a local metrics heartbeat even when idle or minimized. The bridge shows offline when the heartbeat is missing or stale and recovers automatically, without blocking API or DLL calls. Both the updated application and bridge script are required.
+
 ## 2.1.7 — 2026-10-16
 
 - Transfer Jobs adds Hard reset selected / Hard reset eligible for recent connection and timeout failures, including failed files from still-active Visionary races.

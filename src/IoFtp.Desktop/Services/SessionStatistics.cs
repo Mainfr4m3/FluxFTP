@@ -5,7 +5,17 @@ namespace IoFtp.Desktop.Services;
 internal sealed class SessionStatistics(Func<TimeSpan>? elapsed = null)
 {
     private readonly Stopwatch _uptime = Stopwatch.StartNew();
-    private long _uploaded, _downloaded, _fxp, _local, _completed, _created, _closed, _hits;
+    private long _uploaded, _downloaded, _fxp, _local, _completed, _created, _closed, _hits, _peakSpeed;
+    public long PeakSpeedBytesPerSecond => Interlocked.Read(ref _peakSpeed);
+    public void RecordSpeed(long bytesPerSecond)
+    {
+        long previous;
+        do
+        {
+            previous = Interlocked.Read(ref _peakSpeed);
+            if (bytesPerSecond <= previous) return;
+        } while (Interlocked.CompareExchange(ref _peakSpeed, bytesPerSecond, previous) != previous);
+    }
     public TimeSpan Uptime => elapsed?.Invoke() ?? _uptime.Elapsed;
     private readonly object _rateGate = new();
     private readonly Dictionary<long, long> _trafficMinutes = new();
