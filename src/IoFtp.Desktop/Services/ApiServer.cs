@@ -38,11 +38,12 @@ internal sealed class ApiServer : IAsyncDisposable
     {
         if (settings.EnableVisionaryBridge || settings.EnableHttpsApi)
         {
-            _visionaryPipe = new VisionaryPipeServer(startTransfer, diagnosticLog, visionaryStep, visionarySlots);
+            _visionaryPipe = new VisionaryPipeServer(startTransfer, diagnosticLog, visionaryStep, visionarySlots,
+                settings.VisionaryConcurrentScheduling);
             if (settings.EnableVisionaryBridge)
             {
             _visionaryPipe.Start();
-            diagnosticLog?.Invoke("VISIONARY local bridge started.");
+            diagnosticLog?.Invoke($"VISIONARY local bridge started; concurrent scheduling limit={Math.Clamp(settings.VisionaryConcurrentScheduling, 1, 2048)}.");
             }
         }
         if (!settings.EnableHttpsApi) return;

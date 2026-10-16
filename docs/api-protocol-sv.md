@@ -1,6 +1,6 @@
 # FluxFTP API – enkel protokollspecifikation
 
-Kontrollerad mot källkoden för FluxFTP 2.1.11, 2026-10-16.
+Kontrollerad mot källkoden för FluxFTP 2.1.12, 2026-10-16.
 Dokumentet beskriver först det API som finns idag. Avsnittet om ett framtida
 headless-protokoll är ett förslag och går inte att anropa i nuvarande version.
 
@@ -335,6 +335,12 @@ Target `@DONE` registrerar en extern complete-signal. Svaret är
 `OK DONE RECORDED ...`; **målfilernas verifiering krävs fortfarande**.
 Detta är en inkommande signal till Flux, inte ett utgående done-event.
 Pipeprotokollet saknar progressström, externt watch-ID och abortkommando.
+
+Från 2.1.12 finns **Jobs & history → Visionary concurrent scheduling**
+(1–2048, standard 32). Gränsen styr samtidiga inventerings-/schemaläggningssteg,
+inte totalt antal watches eller FTP-anslutningar. Väntande watches släpper sin
+plats. Sajternas slots och den separata backloggränsen gäller fortfarande.
+Spara mellan race: ändringen startar om bryggan och stoppar aktiva watches.
 
 Det finns också UDP på API-porten när HTTPS-API:t startas:
 

@@ -27,8 +27,9 @@ internal static class HardResetChecks
         recovery.Remove(id);
         if (!recovery.Expired(id, policy)) throw new Exception("Removed job retained retry state");
         var defaults = JsonSerializer.Deserialize<GlobalSettings>("{}")!;
+        if (defaults.VisionaryConcurrentScheduling != 32) throw new Exception("Existing installs must retain 32 scheduling slots");
         if (defaults.AutoHardReset || defaults.HardResetCooldownSeconds != 30 || defaults.HardResetRetries != 2 || defaults.HardResetLookbackMinutes != 10) throw new Exception("Existing installs must default to manual-only recovery");
-        var settings = defaults with { AutoHardReset = true, HardResetCooldownSeconds = 45, HardResetRetries = 3, HardResetLookbackMinutes = 15 };
+        var settings = defaults with { VisionaryConcurrentScheduling = 64, AutoHardReset = true, HardResetCooldownSeconds = 45, HardResetRetries = 3, HardResetLookbackMinutes = 15 };
         if (JsonSerializer.Deserialize<GlobalSettings>(JsonSerializer.Serialize(settings)) != settings) throw new Exception("Recovery preferences not persisted");
         Console.WriteLine("PASS: hard reset cooldown, bounded retries, duplicate claims, lookback, permanent rejection exclusions and preference migration.");
     }

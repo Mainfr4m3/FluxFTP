@@ -2,6 +2,11 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.12 — 2026-10-16
+
+- Jobs & history adds Visionary concurrent scheduling (1–2048, default 32), controlling simultaneous inventory/scheduling steps. Watches waiting for updates release their slots; per-site FTP slot limits and the watch backlog remain unchanged.
+- The bridge startup log reports the configured scheduling limit. Saving global settings restarts the bridge; change the limit between races.
+
 ## 2.1.11 — 2026-10-16
 
 - Jobs & history adds Maximum active spread jobs (1–2048, default 32) for HTTPS `/spreadjobs`. Per-site transfer slots still apply; Visionary chains use their separate watch queue.

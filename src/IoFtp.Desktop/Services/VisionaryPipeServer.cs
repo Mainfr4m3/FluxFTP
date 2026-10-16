@@ -23,13 +23,14 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
             if (pair.Key.StartsWith(section + "\t" + release + "\t", StringComparison.OrdinalIgnoreCase) && pair.Value.CurrentCount == 0)
                 try { pair.Value.Release(); } catch (SemaphoreFullException) { }
     }
-    private readonly RaceWatchSlots _watchSlots = new(32);
+    private readonly RaceWatchSlots _watchSlots;
 
     public VisionaryPipeServer(Func<ApiTransferRequest, Task<object>> startTransfer, Action<string>? log = null,
         Func<ApiTransferRequest, VisionaryRaceState, CancellationToken, Task<bool>>? raceStep = null,
-        Func<ApiTransferRequest, Task>? liveSlots = null)
+        Func<ApiTransferRequest, Task>? liveSlots = null, int concurrentScheduling = 32)
     {
         _startTransfer = startTransfer; _log = log; _raceStep = raceStep; _liveSlots = liveSlots;
+        _watchSlots = new RaceWatchSlots(Math.Clamp(concurrentScheduling, 1, 2048));
     }
 
     public void Start() => _listener = ListenAsync(_cancellation.Token);

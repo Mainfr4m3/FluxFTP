@@ -30,12 +30,12 @@ internal static class ChainBatchChecks
             token.ThrowIfCancellationRequested();
             if (Interlocked.Increment(ref started) == 40) allStarted.TrySetResult();
             return Task.FromResult(false);
-        });
+        }, concurrentScheduling: 1);
         var acknowledgement = await watches.SubmitChainsAsync("TV", "Many.Destinations-GROUP",
             string.Join(',', Enumerable.Range(0, 40).Select(index => "SOURCE;DEST" + index)));
         if (!acknowledgement.StartsWith("OK RECEIVED 40")) throw new Exception("Large race batch rejected");
         await allStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Console.WriteLine("PASS: all 40 destinations start while earlier watches wait for updates.");
+        Console.WriteLine("PASS: all 40 destinations start with one scheduling slot while earlier watches wait for updates.");
         var snapshots = System.Threading.Channels.Channel.CreateUnbounded<ApiTransferRequest>();
         var updates = new System.Collections.Concurrent.ConcurrentQueue<ApiTransferRequest>();
         VisionaryRaceState? liveState = null;
