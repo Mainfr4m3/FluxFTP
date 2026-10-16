@@ -281,8 +281,12 @@ internal sealed class ApiServer : IAsyncDisposable
                 {
                     if (_spreadJobs.TryGetValue(request.Name, out var active) && active.Coordinator.Status == "RUNNING")
                         return Results.Conflict(new { error = "Release already has an active spread job" });
-                    if (_spreadJobs.Values.Count(job => job.Coordinator.Status == "RUNNING") >= 32)
-                        return Results.StatusCode(429);
+                    var spreadLimit = Math.Clamp(settings.MaxActiveSpreadJobs, 1, 2048);
+                    if (_spreadJobs.Values.Count(job => job.Coordinator.Status == "RUNNING") >= spreadLimit)
+                    {
+                        diagnosticLog?.Invoke($"Spread job rejected: maximum active spread jobs ({spreadLimit}) reached; {request.Name}");
+                        return Results.Json(new { error = "Maximum active spread jobs reached", limit = spreadLimit }, statusCode: 429);
+                    }
                     var state = new SpreadJobState(Interlocked.Increment(ref _nextSpreadJobId), request.Name, request.Section, sites, coordinator, DateTimeOffset.UtcNow);
                     _spreadJobs[request.Name] = state;
                     _spreadTasks.RemoveAll(task => task.IsCompleted);

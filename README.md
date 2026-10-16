@@ -3,6 +3,8 @@
 
 See [CHANGELOG.md](CHANGELOG.md) for release history.
 
+API documentation (Swedish): [job requests, acknowledgements, progress, abort, completion and headless integration](docs/api-protocol-sv.md).
+
 FluxFTP is a modern dual-pane FTP/FXP client prototype. The first milestone focuses
 on the desktop workflow, a persistent transfer queue boundary, and a theme system
 with ioGUI3 as the default visual identity.

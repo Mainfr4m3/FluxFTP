@@ -2,6 +2,12 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.11 — 2026-10-16
+
+- Jobs & history adds Maximum active spread jobs (1–2048, default 32) for HTTPS `/spreadjobs`. Per-site transfer slots still apply; Visionary chains use their separate watch queue.
+- Rejected spread requests now return HTTP 429 with an explanatory error and the configured limit, and write a diagnostic log entry.
+- Adds Swedish API documentation covering requests, acknowledgements, progress, abort, completion, the Visionary bridge and current headless limitations.
+
 ## 2.1.10 — 2026-10-16
 
 - Channel sharing now includes transferred bytes, maximum measured speed and completed files; session sharing also includes uptime. Session speed records reset on restart; all-time records persist with total statistics. Records start with this version and exclude display-only FXP speed estimates; measured direct FXP completion averages are included.
