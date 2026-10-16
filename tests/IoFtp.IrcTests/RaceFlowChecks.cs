@@ -91,6 +91,34 @@ internal static class RaceFlowChecks
         try { blockedRace.NeedsTransfer("/release/next.rar", 100, null, _ => null); }
         catch (IOException ex) { stopped = ex.Message.Contains("550 MKD Denied"); }
         Check(stopped, "directory denial prevents scheduling subsequent race files");
+        var deniedRace = new VisionaryRaceState(new());
+        var directoryAttempts = 0;
+        var firstProbe = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseProbe = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task AttemptDeniedDirectory()
+        {
+            try
+            {
+                await deniedRace.EnsureDestinationDirectoryAsync(async () =>
+                {
+                    Interlocked.Increment(ref directoryAttempts);
+                    firstProbe.TrySetResult();
+                    await releaseProbe.Task;
+                    throw new IOException("550 MKD Denied by dirscript.");
+                }, default);
+            }
+            catch (IOException) { }
+        }
+        var firstAttempt = AttemptDeniedDirectory();
+        await firstProbe.Task;
+        var remainingAttempts = Enumerable.Range(0, 8).Select(_ => AttemptDeniedDirectory()).ToArray();
+        releaseProbe.SetResult();
+        await Task.WhenAll(remainingAttempts.Append(firstAttempt));
+        Check(directoryAttempts == 1 && deniedRace.DirectoryDenied, "parallel files only attempt denied directory once");
+        var otherDestination = new VisionaryRaceState(new());
+        var otherContinued = false;
+        await otherDestination.EnsureDestinationDirectoryAsync(() => { otherContinued = true; return Task.CompletedTask; }, default);
+        Check(otherContinued && !otherDestination.DirectoryDenied, "directory denial does not block other destinations or a new race");
         var commands = new List<string>();
         try
         {

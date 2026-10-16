@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Globalization;
 using IoFtp.Core.Abstractions;
+using IoFtp.Core.Transport;
 
 namespace IoFtp.Desktop.Services;
 
@@ -88,6 +89,25 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
     public bool DestinationAlreadyComplete { get; private set; }
     public void ConfirmDestinationComplete() { DestinationAlreadyComplete = true; DestinationVerified = true; }
     private string? _stopReason;
+    private readonly SemaphoreSlim _destinationDirectoryGate = new(1, 1);
+    public bool DirectoryDenied { get; private set; }
+    public bool DirectoryDenialReported { get; set; }
+    public async Task EnsureDestinationDirectoryAsync(Func<Task> ensure, CancellationToken token)
+    {
+        await _destinationDirectoryGate.WaitAsync(token);
+        try
+        {
+            ThrowIfStopped();
+            try { await ensure(); }
+            catch (Exception exception) when (TransferRejection.Category(exception.Message) == "DIRECTORY-DENIED")
+            {
+                DirectoryDenied = true;
+                Stop(exception.Message);
+                throw;
+            }
+        }
+        finally { _destinationDirectoryGate.Release(); }
+    }
     public void Stop(string reason) => _stopReason ??= reason;
     public void ThrowIfStopped()
     {

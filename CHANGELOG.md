@@ -2,6 +2,10 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.13 — 2026-10-16
+
+- A server directory-rule rejection now cancels remaining file jobs for that destination race with one clear message. Parallel files serialize directory checks so they cannot repeatedly retry the same denied MKD. Other destinations continue; a new race can try again. Existing directories remain usable when CWD succeeds after a rejected MKD.
+
 ## 2.1.12 — 2026-10-16
 
 - Jobs & history adds Visionary concurrent scheduling (1–2048, default 32), controlling simultaneous inventory/scheduling steps. Watches waiting for updates release their slots; per-site FTP slot limits and the watch backlog remain unchanged.

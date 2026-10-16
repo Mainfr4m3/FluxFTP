@@ -2029,7 +2029,10 @@ public partial class MainWindow : Window
                     entry.Direction == TransferDirection.RelayLeftToRight ? leftProfile! : rightProfile!;
                 var destinationProfile = entry.Direction == TransferDirection.ApiFxp ? apiFxpDestination! :
                     entry.Direction == TransferDirection.RelayLeftToRight ? rightProfile! : leftProfile!;
-                await EnsureRemoteDirectoryAsync(destinationSession, RemoteParent(entry.Destination), cancellationToken);
+                if (_raceJobOwners.TryGetValue(entry.Id, out var directoryRace))
+                    await directoryRace.EnsureDestinationDirectoryAsync(
+                        () => EnsureRemoteDirectoryAsync(destinationSession, RemoteParent(entry.Destination), cancellationToken), cancellationToken);
+                else await EnsureRemoteDirectoryAsync(destinationSession, RemoteParent(entry.Destination), cancellationToken);
                 long fxpOffset = 0;
                 if (sourceProfile.Protocol != TransferProtocol.Sftp && destinationProfile.Protocol != TransferProtocol.Sftp)
                 {
@@ -2240,8 +2243,21 @@ public partial class MainWindow : Window
         {
             entry.State = "Failed";
             var rejection = TransferRejection.Category(exception.Message);
-            if (rejection == "DIRECTORY-DENIED" && _raceJobOwners.TryGetValue(entry.Id, out var raceOwner))
-                raceOwner.Stop(FriendlyMessage(exception));
+            if (_raceJobOwners.TryGetValue(entry.Id, out var raceOwner) && raceOwner.DirectoryDenied)
+            {
+                if (!raceOwner.DirectoryDenialReported)
+                {
+                    raceOwner.DirectoryDenialReported = true;
+                    var siblings = _raceJobOwners.Where(pair => ReferenceEquals(pair.Value, raceOwner) && pair.Key != entry.Id)
+                        .Select(pair => pair.Key).ToArray();
+                    var message = $"RACE destination blocked [DIRECTORY-DENIED]: {entry.RuleRelease ?? entry.Name}; target={entry.DestinationProfileId}; path={RemoteParent(entry.Destination)}. Server denied directory creation; remaining jobs for this destination are cancelled. Other destinations continue. {FriendlyMessage(exception)}";
+                    _raceLog.Write("DIRECTORY-DENIED", message);
+                    AppendConnectionLog(Environment.NewLine + message);
+                    foreach (var id in siblings) RemoveTransferJob(id);
+                    raceOwner.NotifyTransferCompleted();
+                }
+                throw;
+            }
             _raceLog.Write(rejection ?? "ERROR", $"{entry.Id} {entry.Name}: {exception.GetType().Name}: {exception.Message}");
             if (exception is TransferVerificationException)
             {
