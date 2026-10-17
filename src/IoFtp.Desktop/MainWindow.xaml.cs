@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.Net.Http;
 using System.Diagnostics;
 using System.Collections.Concurrent;
@@ -3805,7 +3805,7 @@ public partial class MainWindow : Window
                 .Where(profile => profile.Name.Equals(request.SrcSite, StringComparison.OrdinalIgnoreCase) ||
                     profile.Name.Equals(request.DstSite, StringComparison.OrdinalIgnoreCase)).Select(ApplyGlobalProxy).ToArray());
             foreach (var profile in profiles)
-            foreach (var command in new[] { "STATS", "WKUP" })
+            foreach (var command in new[] { "STATS", "USER" })
             {
                 string message;
                 MetricServerStats? stats = null;
@@ -3813,13 +3813,13 @@ public partial class MainWindow : Window
                 {
                     using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
                     timeout.CancelAfter(TimeSpan.FromSeconds(5));
-                    var reply = await _raceListings.TryReadStatsAsync(profile, timeout.Token, weekly: command == "WKUP");
+                    var reply = await _raceListings.TryReadStatsAsync(profile, timeout.Token, userDetails: command == "USER");
                     if (reply is { StatusCode: >= 200 and < 300 } && ServerTransferReport.Clean(reply.Message) is { Length: > 0 } report)
                     {
                         stats = new(profile.Name, profile.Username, DateTimeOffset.UtcNow, report, command);
-                        message = $"SERVER STATS [{profile.Name}] {request.Name} · SITE {command} {profile.Username}{Environment.NewLine}{report}";
+                        message = $"SERVER STATS [{profile.Name}] {request.Name} · SITE { (command == "USER" ? profile.Username : "STATS " + profile.Username) }{Environment.NewLine}{report}";
                     }
-                    else message = $"SERVER DETAILS [{profile.Name}] SITE {command} {profile.Username}: " +
+                    else message = $"SERVER DETAILS [{profile.Name}] SITE { (command == "USER" ? profile.Username : "STATS " + profile.Username) }: " +
                         (reply is null ? "Skipped: no idle shared control session available." : $"{reply.StatusCode} {reply.Message}");
                 }
                 catch (Exception exception) { message = $"SERVER DETAILS [{profile.Name}] {request.Name}: SITE {command} unavailable ({FriendlyMessage(exception)}). Race result unchanged."; }

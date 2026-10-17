@@ -107,7 +107,7 @@ internal sealed class RaceListingService : IAsyncDisposable
         finally { source.LastUsed = Stopwatch.GetTimestamp(); source.Gate.Release(); }
     }
 
-    public async Task<RemoteCommandResult?> TryReadStatsAsync(ConnectionProfile profile, CancellationToken token, bool weekly = false)
+    public async Task<RemoteCommandResult?> TryReadStatsAsync(ConnectionProfile profile, CancellationToken token, bool userDetails = false)
     {
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token, _shutdown.Token);
         token = lifetime.Token;
@@ -118,7 +118,7 @@ internal sealed class RaceListingService : IAsyncDisposable
             if (source.Profile != profile || source.Session?.IsConnected != true) return null;
             var username = source.Profile.Username;
             if (string.IsNullOrWhiteSpace(username) || username.Any(char.IsControl)) return null;
-            try { return await source.Session.ExecuteCommandAsync((weekly ? "SITE WKUP " : "SITE STATS ") + username, token).ConfigureAwait(false); }
+            try { return await source.Session.ExecuteCommandAsync((userDetails ? "SITE " : "SITE STATS ") + username, token).ConfigureAwait(false); }
             catch { await CloseAsync(source).ConfigureAwait(false); throw; }
         }
         finally { source.LastUsed = Stopwatch.GetTimestamp(); source.Gate.Release(); }

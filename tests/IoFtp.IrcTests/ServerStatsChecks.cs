@@ -1,4 +1,4 @@
-﻿using IoFtp.Core.Abstractions;
+using IoFtp.Core.Abstractions;
 using IoFtp.Core.Models;
 using IoFtp.Desktop.Services;
 
@@ -22,7 +22,7 @@ internal static class ServerStatsChecks
         await listings.ListAsync(profile, "/release", default);
         if (await listings.TryReadTransferSizeAsync(profile, "/release/file.rar", default) != 500 || session.Lists != 1) throw new Exception("Progress sampling did not share cached directory listing");
         if ((await listings.TryReadStatsAsync(profile, default))?.StatusCode != 200 || session.Commands != 1 || logins != 1) throw new Exception("SITE STATS did not reuse existing control session");
-        if ((await listings.TryReadStatsAsync(profile, default, weekly: true))?.StatusCode != 200 || session.Commands != 2 || session.LastCommand != "SITE WKUP user" || logins != 1)
+        if ((await listings.TryReadStatsAsync(profile, default, userDetails: true))?.StatusCode != 200 || session.Commands != 2 || session.LastCommand != "SITE user" || logins != 1)
             throw new Exception("Weekly statistics must reuse the logged-in session and explicitly request that user");
         session.Block = true;
         var busy = listings.ListAsync(profile, "/other", default);
@@ -53,7 +53,7 @@ internal static class ServerStatsChecks
         }
         public Task<RemoteCommandResult> ExecuteCommandAsync(string command, CancellationToken token)
         {
-            if (command is not ("SITE STATS user" or "SITE WKUP user")) throw new Exception("Statistics must explicitly query the session's logged-in user");
+            if (command is not ("SITE STATS user" or "SITE user")) throw new Exception("Statistics must explicitly query the session's logged-in user");
             LastCommand = command;
             Commands++; return Task.FromResult(new RemoteCommandResult(Unsupported ? 502 : 200, "UserTop: TestUser"));
         }

@@ -2,6 +2,10 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.14 — 2026-10-17
+
+- Completed races now query `SITE <logged-in username>` (for example `SITE khaz` or `SITE PAiD`) instead of `SITE WKUP`. Successful replies remain visible without Debug and appear as User info in Metrics. The separate `SITE STATS` query is retained.
+
 ## 2.1.13 — 2026-10-16
 
 - A server directory-rule rejection now cancels remaining file jobs for that destination race with one clear message. Parallel files serialize directory checks so they cannot repeatedly retry the same denied MKD. Other destinations continue; a new race can try again. Existing directories remain usable when CWD succeeds after a rejected MKD.

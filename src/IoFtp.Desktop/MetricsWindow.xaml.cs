@@ -35,5 +35,5 @@ internal sealed record MetricsDashboard(string Transferred, long Files, string U
     IReadOnlyList<MetricServerStats>? ServerStats = null);
 internal sealed record MetricServerStats(string Site, string User, DateTimeOffset Updated, string Report, string Command = "STATS")
 {
-    public string Header => $"{Site} · {User} · {(Command == "WKUP" ? "Weekly upload" : "Stats")} · {Updated.ToLocalTime():HH:mm:ss}";
+    public string Header => $"{Site} · {User} · {(Command == "USER" ? "User info" : "Stats")} · {Updated.ToLocalTime():HH:mm:ss}";
 }
