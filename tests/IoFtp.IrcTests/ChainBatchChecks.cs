@@ -36,6 +36,17 @@ internal static class ChainBatchChecks
         if (!acknowledgement.StartsWith("OK RECEIVED 40")) throw new Exception("Large race batch rejected");
         await allStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Console.WriteLine("PASS: all 40 destinations start with one scheduling slot while earlier watches wait for updates.");
+        var periodic = System.Threading.Channels.Channel.CreateUnbounded<bool>();
+        await using var unattended = new VisionaryPipeServer(_ => Task.FromResult<object>(new { ok = true }), raceStep: (_, _, token) =>
+        {
+            token.ThrowIfCancellationRequested();
+            periodic.Writer.TryWrite(true);
+            return Task.FromResult(false);
+        });
+        await unattended.SubmitChainsAsync("TV", "Periodic.Check-GROUP", "A;B");
+        await periodic.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        await periodic.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(65));
+        Console.WriteLine("PASS: watch rechecks without a second incoming Visi announcement.");
         var snapshots = System.Threading.Channels.Channel.CreateUnbounded<ApiTransferRequest>();
         var updates = new System.Collections.Concurrent.ConcurrentQueue<ApiTransferRequest>();
         VisionaryRaceState? liveState = null;

@@ -8,6 +8,7 @@ internal static class TransferFilePriority
 {
     public const string DefaultOrder = "SFV\nMain files\nSample\nProof\nNFO";
     private const int CategoryStride = 1_000_000;
+    public static int RaceRank(string name) => name.EndsWith(".sfv", StringComparison.OrdinalIgnoreCase) ? -1 : 0;
 
     public static string[] Categories(string? order)
     {

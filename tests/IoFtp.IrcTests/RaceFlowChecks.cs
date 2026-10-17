@@ -8,6 +8,18 @@ internal static class RaceFlowChecks
     {
         var checks = 0;
         void Check(bool value, string name) { if (!value) throw new Exception(name); checks++; }
+        var poolGates = new SitePoolSynchronization();
+        var slowSite = Guid.NewGuid();
+        var fastSite = Guid.NewGuid();
+        await poolGates.For(slowSite).WaitAsync();
+        var sameSiteWaiter = poolGates.For(slowSite).WaitAsync();
+        await poolGates.For(fastSite).WaitAsync().WaitAsync(TimeSpan.FromSeconds(1));
+        Check(!sameSiteWaiter.IsCompleted, "same-site worker ownership remains serialized");
+        Check(poolGates.For(fastSite).CurrentCount == 0, "unrelated site can rent while slow site's maintenance owns its gate");
+        poolGates.For(fastSite).Release();
+        poolGates.For(slowSite).Release();
+        await sameSiteWaiter.WaitAsync(TimeSpan.FromSeconds(1));
+        poolGates.For(slowSite).Release();
         var smartRace = new VisionaryRaceState(new());
         Check(smartRace.DeferSmallerSource("/r/f", 50, 100, true, 2), "smart initial wait");
         Check(smartRace.DeferSmallerSource("/r/f", 80, 100, true, 2), "smart first update wait");
@@ -16,8 +28,8 @@ internal static class RaceFlowChecks
         Check(!smartRace.DeferSmallerSource("/r/g", 50, 100, false, 3), "disabled smart mode preserves skip");
         var prequeueRace = new VisionaryRaceState(new());
         prequeueRace.SkipExistingTarget("/release/file.rar");
-        Check(!prequeueRace.NeedsTransfer("/release/file.rar", 100, null, _ => null), "existing target excluded before creating job");
-        Check(!prequeueRace.NeedsTransfer("/release/file.rar", 200, DateTimeOffset.UtcNow, _ => null), "existing target remains skipped as source grows");
+        Check(prequeueRace.NeedsTransfer("/release/file.rar", 100, null, _ => null), "existing target must be checked again before creating a job");
+        Check(prequeueRace.NeedsTransfer("/release/file.rar", 200, DateTimeOffset.UtcNow, _ => null), "growing source must not be permanently skipped");
         Check(prequeueRace.NeedsTransfer("/release/missing.rar", 100, null, _ => null), "missing target still eligible");
         var profileFolder = Path.Combine(Path.GetTempPath(), "Flux-profile-import-" + Guid.NewGuid());
         Directory.CreateDirectory(profileFolder);
@@ -183,6 +195,23 @@ internal static class RaceFlowChecks
         race.InspectListing([F("b.sfv"), M("COMPLETE")], false, "/release/CD2"); race.EndListing();
         Check(race.SourceComplete, "all disks complete");
         var growing = new VisionaryRaceState(new());
+        var retryNow = DateTimeOffset.UtcNow;
+        var lockedRace = new VisionaryRaceState(new(), utcNow: () => retryNow);
+        lockedRace.Track("/release/locked.rar", 100, null, Guid.NewGuid());
+        Check(lockedRace.RecordFailure("/release/locked.rar", "553 File is being uploaded by another user"), "busy target is temporary");
+        Check(!lockedRace.NeedsTransfer("/release/locked.rar", 100, null, _ => "Failed"), "busy retry waits for cooldown");
+        retryNow += TimeSpan.FromSeconds(3);
+        Check(lockedRace.NeedsTransfer("/release/locked.rar", 100, null, _ => "Failed"), "busy retry works without source size change");
+        Check(!lockedRace.NeedsTransfer("/release/locked.rar", 100, null, _ => "Queued"), "busy retry cannot duplicate queued work");
+        Check(!lockedRace.RecordFailure("/release/other.rar", "550 MKD Denied by dirscript."), "directory rules never treated as temporary locks");
+        Check(TransferFilePriority.RaceRank("release.sfv") < TransferFilePriority.RaceRank("release.rar"), "race SFV precedes payload");
+        var defaults = new IoFtp.Desktop.Models.GlobalSettings();
+        Check(FxpExistingFilePolicy.Resolve(defaults, 100, 40, true, true) == IoFtp.Core.Models.ExistingTargetAction.Resume, "final binary source can resume partial race target");
+        Check(FxpExistingFilePolicy.Resolve(defaults, 100, 40, true, false) == IoFtp.Core.Models.ExistingTargetAction.Skip, "unfinished source cannot enable automatic resume");
+        Check(FxpExistingFilePolicy.Resolve(defaults with { FxpSmallerAction = IoFtp.Core.Models.ExistingTargetAction.Skip }, 100, 40, true, true) == IoFtp.Core.Models.ExistingTargetAction.Skip, "explicit skip is preserved");
+        lockedRace.SourceComplete = true;
+        lockedRace.DeferExistingTarget("/release/partial.rar");
+        Check(!lockedRace.Finished(_ => "Skipped"), "deferred target prevents false race completion");
         var growingJob = Guid.NewGuid();
         growing.Track("/release/growing.rar", 100, null, growingJob);
         Check(!growing.NeedsTransfer("/release/growing.rar", 100, null, _ => "Failed"), "partial upload waits without exhausting retry budget");

@@ -18,6 +18,7 @@
     <Compile Include="../../src/IoFtp.Desktop/Services/RaceCompletionSignals.cs" Link="RaceCompletionSignals.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/BackupService.cs" Link="BackupService.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/RaceWatchSlots.cs" Link="RaceWatchSlots.cs" />
+    <Compile Include="../../src/IoFtp.Desktop/Services/SitePoolSynchronization.cs" Link="SitePoolSynchronization.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/SkipListPackage.cs" Link="SkipListPackage.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/RaceSlotBudget.cs" Link="RaceSlotBudget.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/FxpExistingFilePolicy.cs" Link="FxpExistingFilePolicy.cs" />

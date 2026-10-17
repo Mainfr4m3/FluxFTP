@@ -2,6 +2,19 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.20 — 2026-10-17
+
+- Transfer worker rentals synchronize per site instead of waiting behind a global pool-maintenance lock. A slow site's login/NOOP no longer blocks worker acquisition on unrelated sites.
+- Pool maintenance skips busy site gates and sites with queued/running work. Pool disposal shares the site gate, and rental health-check NOOP calls are bounded to five seconds.
+
+## 2.1.19 — 2026-10-17
+
+- Visionary watches now wake on incoming updates and periodically recheck using their refresh interval (default 3 seconds), bounded by the existing race lifetime. Missing bot updates no longer leave a watch sleeping until timeout.
+- Upload-in-progress/file-lock and transient connection failures are retained as race retries with a cooldown. One exhausted non-transient file no longer terminates all other files at the destination. Directory-rule blocks remain excluded.
+- Previously skipped targets are checked again. Incomplete or changing targets cannot prove completion. A final binary source can resume a smaller target with default race policies; an explicitly configured Skip is preserved. TLS and site slots remain in effect.
+- Race queues prioritize SFV first, then descending known file size. Other transfer queues retain their configured priorities.
+- Race logs distinguish temporary retry, pending source/target checks and matching targets; repeated identical queue summaries are suppressed.
+
 ## 2.1.18 — 2026-10-17
 
 - Rebuild of the current layout and user-statistics changes. Backup regression tests now cover 80 sections and 160 site mappings restored to an empty installation; no backup data-loss fix is claimed. Site-name corrections remain saved configuration, not executable defaults.

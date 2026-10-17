@@ -117,7 +117,7 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
     private bool _lastComplete;
     private readonly HashSet<string> _pendingPayloads = new(StringComparer.Ordinal);
     public bool HasPendingPayload => _pendingPayloads.Count > 0;
-    public void BeginListing() { _pendingPayloads.Clear(); SourceComplete = false; SourceAvailable = false; DestinationVerified = false; _directoryCompletion.Clear(); }
+    public void BeginListing() { _pendingPayloads.Clear(); _pendingTargets.Clear(); _existingTargets.Clear(); SourceComplete = false; SourceAvailable = false; DestinationVerified = false; _directoryCompletion.Clear(); }
     public void EndListing()
     {
         if (_directoryCompletion.Count > 0) SourceComplete = _directoryCompletion.Values.All(value => value);
@@ -183,20 +183,20 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
     public bool NeedsTransfer(string path, long? size, DateTimeOffset? modified, Func<Guid, string?> status)
     {
         ThrowIfStopped();
-        if (_existingTargets.Contains(path)) return false;
         if (DestinationAlreadyComplete || size is null or <= 0) return false;
         if (!_files.TryGetValue(path, out var prior)) return true;
         var state = status(prior.Job);
         if (state is null or "Cancelled") throw new OperationCanceledException("A race job was removed or cancelled.");
-        if (state == "Skipped") return false;
+        if (state == "Skipped") return true; // Recheck the current destination; skip is not completion.
         if (state == "Failed")
         {
+            if (_temporaryFailures.TryGetValue(path, out var retryAt)) return (utcNow ?? (() => DateTimeOffset.UtcNow))() >= retryAt;
             // An unfinished source can be preallocated and unchanged in size.
             // Wait for a new snapshot/final marker rather than exhausting retries on partial data.
             if (!IsFinal(path) && prior.Size == size && prior.Modified == modified) return false;
             var attempts = _profiles.ForDirectory(Parent(path))?.Attempts ?? 3;
             if (prior.Final == IsFinal(path) && prior.Size == size && prior.Modified == modified && prior.Attempts >= attempts)
-                throw new IOException($"Race file failed after {attempts} attempts: {path}");
+                return false; // A failed file must not terminate other files at this destination.
             return true;
         }
         if (state != "Completed") return false;
@@ -212,6 +212,25 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
     }
 
     private readonly HashSet<string> _existingTargets = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _pendingTargets = new(StringComparer.OrdinalIgnoreCase);
+    public void DeferExistingTarget(string path) { _existingTargets.Remove(path); _pendingTargets.Add(path); }
+    private readonly Dictionary<string, DateTimeOffset> _temporaryFailures = new(StringComparer.Ordinal);
+    public bool RecordFailure(string path, string? error)
+    {
+        var text = error ?? "";
+        var category = TransferRejection.Category(text);
+        var temporary = category is "UPLOAD-IN-PROGRESS" or "FILE-LOCKED" || category is null &&
+            Regex.IsMatch(text, @"timeout|timed out|OpenSSL|connection|socket|\b(?:421|425|426)\b", RegexOptions.IgnoreCase);
+        if (!temporary) { _temporaryFailures.Remove(path); return false; }
+        _temporaryFailures[path] = (utcNow ?? (() => DateTimeOffset.UtcNow))().AddSeconds(Math.Max(3, options.RefreshSeconds));
+        return true;
+    }
+    public string? LastWaitSummary { get; set; }
+    public string? LastPrequeueSummary { get; set; }
+    public string WaitSummary(Func<Guid, string?> status) =>
+        $"active/queued={_files.Count(pair => status(pair.Value.Job) is "Queued" or "Transferring")}; " +
+        $"temporary failures={_files.Count(pair => status(pair.Value.Job) == "Failed" && _temporaryFailures.ContainsKey(pair.Key))}; " +
+        $"target rechecks={_pendingTargets.Count}; source pending={_pendingPayloads.Count}; source complete={SourceComplete}";
     private readonly Dictionary<string, int> _deferredTargets = new(StringComparer.OrdinalIgnoreCase);
     public bool DeferSmallerSource(string path, long? source, long? target, bool enabled, int attempts)
     {
@@ -224,6 +243,6 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
     }
     public void SkipExistingTarget(string path) => _existingTargets.Add(path);
     public bool IsSkipped(string path, Func<Guid, string?> status) => _existingTargets.Contains(path) || _files.TryGetValue(path, out var file) && status(file.Job) == "Skipped";
-    public bool Finished(Func<Guid, string?> status) => DestinationAlreadyComplete || _deferredTargets.Count == 0 && !HasPendingPayload && SourceComplete && (_files.Count + _existingTargets.Count) > 0 &&
-        _files.All(pair => status(pair.Value.Job) == "Skipped" || IsFinal(pair.Key) && pair.Value.Final && status(pair.Value.Job) == "Completed");
+    public bool Finished(Func<Guid, string?> status) => DestinationAlreadyComplete || _pendingTargets.Count == 0 && _deferredTargets.Count == 0 && !HasPendingPayload && SourceComplete && (_files.Count + _existingTargets.Count) > 0 &&
+        _files.All(pair => _existingTargets.Contains(pair.Key) || status(pair.Value.Job) == "Skipped" || IsFinal(pair.Key) && pair.Value.Final && status(pair.Value.Job) == "Completed");
 }

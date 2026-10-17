@@ -46,6 +46,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<Guid, ConnectionProfile> _raceReadySites = [];
     private readonly Dictionary<Guid, DateTimeOffset> _raceSlotRetryAt = [];
     private readonly SemaphoreSlim _racePoolGate = new(1, 1);
+    private readonly SitePoolSynchronization _sitePoolGates = new();
     private readonly CancellationTokenSource _racePoolStop = new();
     private readonly System.Windows.Threading.DispatcherTimer _racePoolTimer = new() { Interval = TimeSpan.FromSeconds(15) };
     private readonly GlobalTransferEngine _engine;
@@ -1851,7 +1852,7 @@ public partial class MainWindow : Window
             entry.QueuedAt ??= DateTimeOffset.Now;
             work.Add(new TransferWorkItem(entry.Id, entry.Id, entry.Name, sourceSite, destinationSite,
                 entry.Source, entry.Destination, entry.TotalBytes,
-                QueuedAt: entry.QueuedAt.Value.ToUniversalTime(), FilePriorityRank: TransferFilePriority.Rank(entry.Name, entry.Source, _settings,
+                QueuedAt: entry.QueuedAt.Value.ToUniversalTime(), FilePriorityRank: entry.VisionaryRace ? TransferFilePriority.RaceRank(entry.Name) : TransferFilePriority.Rank(entry.Name, entry.Source, _settings,
                     [sourceSite is { } s ? profiles.GetValueOrDefault(s) : null, destinationSite is { } d ? profiles.GetValueOrDefault(d) : null])));
         }
         if (work.Count > 0) _engine.Enqueue(work);
@@ -2039,8 +2040,12 @@ public partial class MainWindow : Window
                     var targetSize = await destinationSession.GetSizeAsync(entry.Destination, cancellationToken);
                     if (targetSize is not null)
                     {
-                        var sourceSize = entry.TotalBytes > 0 ? entry.TotalBytes : await sourceSession.GetSizeAsync(entry.Source, cancellationToken);
-                        var action = FxpExistingFilePolicy.Resolve(_settings, sourceSize, targetSize, entry.VisionaryRace);
+                        var sourceSize = entry.VisionaryRace ? await sourceSession.GetSizeAsync(entry.Source, cancellationToken) :
+                            entry.TotalBytes > 0 ? entry.TotalBytes : await sourceSession.GetSizeAsync(entry.Source, cancellationToken);
+                        if (entry.VisionaryRace && sourceSize is > 0) entry.TotalBytes = sourceSize.Value;
+                        var finalRaceSource = _raceJobOwners.TryGetValue(entry.Id, out var targetRace) && targetRace.IsFinal(entry.Source) &&
+                            FtpTransferMode.CanResume(entry.Source, sourceProfile.EffectiveOptions) && FtpTransferMode.CanResume(entry.Destination, destinationProfile.EffectiveOptions);
+                        var action = FxpExistingFilePolicy.Resolve(_settings, sourceSize, targetSize, entry.VisionaryRace, finalRaceSource);
                         if (action == ExistingTargetAction.Skip)
                         {
                             var reason = $"Existing target skipped: {entry.Name}; source={sourceSize} bytes, target={targetSize} bytes; policy=Skip.";
@@ -2444,11 +2449,15 @@ public partial class MainWindow : Window
             var currentProfiles = new ProfileStore().Load().ToDictionary(profile => profile.Id);
             foreach (var previous in _raceReadySites.Values.ToArray())
             {
+                var siteGate = _sitePoolGates.For(previous.Id);
+                if (!await siteGate.WaitAsync(0, token)) continue; // Transfers take precedence over pool maintenance.
+                try
+                {
                 if (_workerPoolShuttingDown) return;
                 if (!currentProfiles.TryGetValue(previous.Id, out var current))
                 {
                     _raceReadySites.Remove(previous.Id);
-                    await DisposePooledWorkersAsync(previous.Id);
+                    await DisposePooledWorkersAsync(previous.Id, siteLockHeld: true);
                     continue;
                 }
                 var profile = ApplyGlobalProxy(current);
@@ -2460,6 +2469,10 @@ public partial class MainWindow : Window
                 _engine.RegisterOrUpdateSite(new SitePolicy(profile.Id, profile.Name, limit,
                     options.AllowDownload ? Math.Min(limit, options.MaxDownloadSlots) : 0,
                     options.AllowUpload ? Math.Min(limit, options.MaxUploadSlots) : 0, options.Priority));
+                // Do not reserve every idle session for NOOP/prefill while this
+                // site's executor is waiting for a worker or has queued work.
+                if (_engine.Snapshot().Any(work => work.State is TransferWorkState.Queued or TransferWorkState.Running &&
+                    (work.Item.SourceSiteId == profile.Id || work.Item.DestinationSiteId == profile.Id))) continue;
                 var pool = _workerPool.GetOrAdd(profile, _ => new ConcurrentBag<PooledWorker>());
                 while (_sessionWorkers.Count(pair => pair.Value.Id == profile.Id) > limit && pool.TryTake(out var excess))
                     await DisposeTransferWorkerAsync(excess.Session);
@@ -2508,6 +2521,8 @@ public partial class MainWindow : Window
                         break;
                     }
                 }
+                }
+                finally { siteGate.Release(); }
             }
         }
         finally { _racePoolGate.Release(); }
@@ -2677,15 +2692,16 @@ public partial class MainWindow : Window
 
     private async Task<FtpRemoteSession> RentWorkerAsync(ConnectionProfile profile, CancellationToken cancellationToken, bool forceFresh = false)
     {
+        var siteGate = _sitePoolGates.For(profile.Id);
         // Maintenance temporarily owns idle sessions. Wait for their return
         // rather than opening extra connections while the bag is drained.
         while (true)
         {
-            await _racePoolGate.WaitAsync(cancellationToken);
+            await siteGate.WaitAsync(cancellationToken);
             var retry = _raceSlotRetryAt.GetValueOrDefault(profile.Id);
             var hasIdle = _workerPool.TryGetValue(profile, out var available) && !available.IsEmpty;
             if (hasIdle && !forceFresh || retry <= DateTimeOffset.UtcNow) break;
-            _racePoolGate.Release();
+            siteGate.Release();
             await Task.Delay(retry - DateTimeOffset.UtcNow > TimeSpan.Zero ? retry - DateTimeOffset.UtcNow : TimeSpan.Zero, cancellationToken);
         }
         try
@@ -2700,7 +2716,9 @@ public partial class MainWindow : Window
             if (DateTimeOffset.UtcNow - pooled.ReturnedAt < WorkerHealthCheckInterval) { _sessionStatistics.PoolHit(); return session; }
             try
             {
-                var response = await session.ExecuteCommandAsync("NOOP", cancellationToken);
+                using var healthTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                healthTimeout.CancelAfter(TimeSpan.FromSeconds(5));
+                var response = await session.ExecuteCommandAsync("NOOP", healthTimeout.Token);
                 if (response.StatusCode is >= 200 and < 300) { _sessionStatistics.PoolHit(); return session; }
             }
             catch (Exception) when (!cancellationToken.IsCancellationRequested) { }
@@ -2718,7 +2736,7 @@ public partial class MainWindow : Window
             throw;
         }
         }
-        finally { _racePoolGate.Release(); }
+        finally { siteGate.Release(); }
     }
 
     private async Task WarmWorkersForDirectionAsync(TransferDirection direction, int fileCount, CancellationToken cancellationToken)
@@ -2780,13 +2798,22 @@ public partial class MainWindow : Window
             .Add(new PooledWorker(session, DateTimeOffset.UtcNow));
     }
 
-    private async Task DisposePooledWorkersAsync(Guid? profileId = null)
+    private async Task DisposePooledWorkersAsync(Guid? profileId = null, bool siteLockHeld = false)
     {
         var pools = _workerPool.Where(pair => profileId is null || pair.Key.Id == profileId).ToList();
-        foreach (var pair in pools)
+        foreach (var site in pools.GroupBy(pair => pair.Key.Id))
         {
-            if (!_workerPool.TryRemove(pair.Key, out var pool)) continue;
-            while (pool.TryTake(out var pooled)) await DisposeTransferWorkerAsync(pooled.Session);
+            var gate = _sitePoolGates.For(site.Key);
+            if (!siteLockHeld) await gate.WaitAsync();
+            try
+            {
+                foreach (var pair in site)
+                {
+                    if (!_workerPool.TryRemove(pair.Key, out var pool)) continue;
+                    while (pool.TryTake(out var pooled)) await DisposeTransferWorkerAsync(pooled.Session);
+                }
+            }
+            finally { if (!siteLockHeld) gate.Release(); }
         }
     }
 
@@ -2907,12 +2934,14 @@ public partial class MainWindow : Window
                     {
                         entry.SourceProfileId ??= status.Item.SourceSiteId;
                         entry.DestinationProfileId ??= status.Item.DestinationSiteId;
-                        var recoverable = _hardResetRecovery.Capture(entry.Id, status.Error);
+                        var retryRace = _raceJobOwners.TryGetValue(entry.Id, out var failedRace) && failedRace.RecordFailure(entry.Source, status.Error);
+                        var recoverable = !entry.VisionaryRace && _hardResetRecovery.Capture(entry.Id, status.Error);
                         if (recoverable) _hardResetEntries[entry.Id] = entry;
-                        LogText.AppendText(Environment.NewLine + $"Failed job {(recoverable ? "saved for hard reset" : "skipped and removed")}: {entry.Name} ({status.Error}).");
-                        _raceLog.Write(recoverable ? "HARD-RESET" : "SKIP", $"Failed job {(recoverable ? "retained" : "removed")}: {entry.Id} {entry.Name}; {status.Error}");
+                        LogText.AppendText(Environment.NewLine + $"Failed job {(retryRace ? "waiting for RACE retry" : recoverable ? "saved for hard reset" : "skipped and removed")}: {entry.Name} ({status.Error}).");
+                        _raceLog.Write(retryRace ? "RACE-RETRY" : recoverable ? "HARD-RESET" : "SKIP", $"Failed job {(retryRace ? "waiting for race retry" : recoverable ? "retained" : "removed")}: {entry.Id} {entry.Name}; {status.Error}");
                     }
                     if (entry.VisionaryRace) _hiddenRaceJobStates[entry.Id] = status.State == TransferWorkState.Failed ? "Failed" : "Skipped";
+                    if (_raceJobOwners.TryGetValue(entry.Id, out var wakeRace)) wakeRace.NotifyTransferCompleted();
                     _queue.Remove(entry);
                     _skippedTransferJobs.Remove(entry.Id);
                     _engine.Remove(entry.Id);
@@ -3571,7 +3600,7 @@ public partial class MainWindow : Window
             _loggedSkipMatches.Clear();
             ConfigureSkippedItemColors();
             var priorityProfiles = new ProfileStore().Load().ToDictionary(profile => profile.Id);
-            var ranks = _engine.Snapshot().ToDictionary(status => status.Item.Id, status => TransferFilePriority.Rank(
+            var ranks = _engine.Snapshot().ToDictionary(status => status.Item.Id, status => _raceJobOwners.ContainsKey(status.Item.Id) ? TransferFilePriority.RaceRank(status.Item.Name) : TransferFilePriority.Rank(
                 status.Item.Name, status.Item.SourcePath, _settings,
                 [status.Item.SourceSiteId is { } source ? priorityProfiles.GetValueOrDefault(source) : null,
                  status.Item.DestinationSiteId is { } destination ? priorityProfiles.GetValueOrDefault(destination) : null]));
@@ -4077,6 +4106,7 @@ public partial class MainWindow : Window
         if (race is not null && selectedFiles.Count > 0)
         {
             var skippedBeforeQueue = 0;
+            var deferredBeforeQueue = 0;
             foreach (var directory in selectedFiles.GroupBy(file => RemoteParent(file.Destination)).ToArray())
             {
                 IReadOnlyList<RemoteEntry> listing;
@@ -4087,26 +4117,32 @@ public partial class MainWindow : Window
                 foreach (var file in directory)
                 {
                     if (!targets.TryGetValue(file.Entry.Name, out var target) || target.Size is null ||
-                        FxpExistingFilePolicy.Resolve(_settings, file.Entry.Size, target.Size, true) != ExistingTargetAction.Skip)
+                        FxpExistingFilePolicy.Resolve(_settings, file.Entry.Size, target.Size, true,
+                            race.IsFinal(file.Entry.FullPath) && FtpTransferMode.CanResume(file.Entry.FullPath, sourceProfile.EffectiveOptions) && FtpTransferMode.CanResume(file.Destination, destinationProfile.EffectiveOptions)) != ExistingTargetAction.Skip)
                     { race.DeferSmallerSource(file.Entry.FullPath, null, null, false, 1); continue; }
                     if (race.DeferSmallerSource(file.Entry.FullPath, file.Entry.Size, target.Size, _settings.SmartResume, _settings.SmartResumeAttempts))
                     {
+                        deferredBeforeQueue++;
                         selectedFiles.Remove(file);
                         var wait = $"Smart resume waiting: {file.Entry.Name}; source={file.Entry.Size}; target={target.Size}; next incoming update; additional checks={_settings.SmartResumeAttempts}";
                         AppendConnectionLog(Environment.NewLine + wait); _raceLog.Write("SMART-RESUME", wait);
                         continue;
                     }
-                    race.SkipExistingTarget(file.Entry.FullPath);
-                    selectedFiles.Remove(file); skippedBeforeQueue++;
+                    if (!race.IsFinal(file.Entry.FullPath) || file.Entry.Size != target.Size)
+                    { race.DeferExistingTarget(file.Entry.FullPath); deferredBeforeQueue++; }
+                    else { race.SkipExistingTarget(file.Entry.FullPath); skippedBeforeQueue++; }
+                    selectedFiles.Remove(file);
                 }
             }
-            if (skippedBeforeQueue > 0)
+            if (skippedBeforeQueue > 0 || deferredBeforeQueue > 0)
             {
-                var message = $"VISIONARY prequeue: {request.SrcSite} -> {request.DstSite}; existing targets skipped={skippedBeforeQueue}; remaining={selectedFiles.Count}; no transfer slots used for skipped files";
-                AppendConnectionLog(Environment.NewLine + message); _raceLog.Write("PREQUEUE", message);
+                var message = $"RACE prequeue: {request.SrcSite} -> {request.DstSite}; {request.Name}; matching targets={skippedBeforeQueue}; waiting for target/source recheck={deferredBeforeQueue}; queued candidates={selectedFiles.Count}";
+                if (message != race.LastPrequeueSummary)
+                { race.LastPrequeueSummary = message; AppendConnectionLog(Environment.NewLine + message); _raceLog.Write("PREQUEUE", message); }
             }
         }
-        var queuedEntries = selectedFiles.OrderBy(file => PriorityRank(file.Entry.Name, file.Entry.FullPath))
+        var queuedEntries = selectedFiles.OrderBy(file => race is not null ? TransferFilePriority.RaceRank(file.Entry.Name) : PriorityRank(file.Entry.Name, file.Entry.FullPath))
+            .ThenByDescending(file => race is not null ? file.Entry.Size ?? 0 : 0)
             .ThenBy(file => file.Entry.Name, NaturalNameComparer.Instance)
             .Select(file => AddQueue(file.Entry.Name, file.Entry.FullPath, file.Destination, TransferDirection.ApiFxp,
                 file.Entry.Size ?? 0, sourceProfile.Id, destinationProfile.Id, persist: false, visionaryRace: race is not null)).ToList();
@@ -4142,6 +4178,16 @@ public partial class MainWindow : Window
         }
         if (race is null || queued > 0)
         { AppendConnectionLog($"{Environment.NewLine}{(race is null ? "API" : "VISIONARY")} queued FXP {request.Name}: {request.SrcSite} → {request.DstSite} ({queued} files)"); LogText.ScrollToEnd(); }
+        if (race is not null)
+        {
+            var summary = race.WaitSummary(RaceJobState);
+            if (summary != race.LastWaitSummary)
+            {
+                race.LastWaitSummary = summary;
+                var message = $"RACE watch [{request.SrcSite} -> {request.DstSite}] {request.Name}: {summary}; incoming Visi updates or periodic recheck";
+                AppendConnectionLog(Environment.NewLine + message); _raceLog.Write("RACE-WAIT", message);
+            }
+        }
         return new ApiTransferStartResult(request.Name, "QUEUED", queued, request.SrcSite, request.DstSite, jobIds);
     });
 

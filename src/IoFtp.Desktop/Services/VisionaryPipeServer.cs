@@ -194,7 +194,9 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
                     if (_requests.TryGetValue(key, out var latest)) request = latest;
                     if (await _raceStep!(request, state, lifetime.Token)) break;
                 }
-                await notification.WaitAsync(lifetime.Token);
+                // Incoming Visi updates wake immediately; periodic checks also recover
+                // locks and growing sources when the bots send no further announcement.
+                await notification.WaitAsync(TimeSpan.FromSeconds(Math.Clamp(options.RefreshSeconds, 1, 60)), lifetime.Token);
             }
             _log?.Invoke(label + " COMPLETE: final transfers finished");
         }
