@@ -8,6 +8,13 @@ public partial class SiteOptionsWindow : Window
     public SiteOptions? Options { get; private set; }
     public ProxyConfiguration? SiteProxy { get; private set; }
 
+    private void ConnectionAdvanced_Click(object sender, RoutedEventArgs e)
+    {
+        var show = ConnectionAdvancedPanel.Visibility != Visibility.Visible;
+        ConnectionAdvancedPanel.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        ConnectionAdvancedButton.Content = show ? "Hide advanced" : "Advanced…";
+    }
+
     public SiteOptionsWindow(ConnectionProfile profile)
     {
         InitializeComponent();

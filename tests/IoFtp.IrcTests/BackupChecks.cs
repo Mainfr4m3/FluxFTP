@@ -19,6 +19,11 @@ internal static class BackupChecks
             var protectedSecret = "dpapi:" + Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(secret), null, DataProtectionScope.CurrentUser));
             var linked = Path.Combine(root, "rushopt.ini"); File.WriteAllText(linked, "[normal]\ncompleteflag=COMPLETE");
             File.WriteAllText(Path.Combine(app, "FluxFTP-sites.ini"), "[site:test]\nPassword=" + protectedSecret);
+            var sections = Enumerable.Range(0, 80).Select(index => new SectionDefinition("SECTION-" + index,
+                new Dictionary<string, string> { ["SOURCE"] = "/incoming/section-" + index, ["TARGET"] = "/archive/section-" + index },
+                index % 10, "*.rar", "*.bad", SectionValidationMode.Warning)).ToList();
+            var sectionBytes = JsonSerializer.SerializeToUtf8Bytes(sections);
+            File.WriteAllBytes(Path.Combine(app, "FluxFTP-sections.json"), sectionBytes);
             File.WriteAllText(Path.Combine(app, "FluxFTP-visionary-race.json"), JsonSerializer.Serialize(new { RushOptionsPath = linked }));
             File.WriteAllText(Path.Combine(user, "settings.json"), JsonSerializer.Serialize(new
             {
@@ -40,11 +45,19 @@ internal static class BackupChecks
             var tampered = false; try { target.Read(archive, "backup-password"); } catch (CryptographicException) { tampered = true; }
             Check(tampered, "modified encrypted backup was accepted"); File.WriteAllText(archive, original);
             var package = target.Read(archive, "backup-password");
+            var backedUpSections = JsonSerializer.Deserialize<List<SectionDefinition>>(
+                package.Files.Single(file => file.Path == "app/FluxFTP-sections.json").Data)!;
+            Check(backedUpSections.Count == 80 && backedUpSections.Sum(section => section.SitePaths.Count) == 160,
+                "backup omitted sections or site mappings");
             File.WriteAllText(Path.Combine(newUser, "settings.json"), "{\"old\":true}");
             File.WriteAllText(Path.Combine(newApp, "FluxFTP-bookmarks.json"), "[]");
             target.StageImport(package);
             Check(File.ReadAllText(Path.Combine(newUser, "settings.json")).Contains("old"), "staging changed live configuration");
             Check(target.ApplyPending(), "staged backup did not apply");
+            var restoredSections = JsonSerializer.Deserialize<List<SectionDefinition>>(
+                File.ReadAllBytes(Path.Combine(newApp, "FluxFTP-sections.json")))!;
+            Check(JsonSerializer.Serialize(restoredSections) == JsonSerializer.Serialize(sections),
+                "new installation lost section names, site paths or validation settings");
             var ini = File.ReadAllText(Path.Combine(newApp, "FluxFTP-sites.ini"));
             var savedSecret = ini.Split("Password=")[1].Trim();
             Check(Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(savedSecret[6..]), null, DataProtectionScope.CurrentUser)) == secret, "site password did not restore");

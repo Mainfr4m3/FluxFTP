@@ -33,7 +33,7 @@
     <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" Padding="12" CornerRadius="3" Margin="0,10,0,10">
      <WrapPanel><TextBlock x:Name="SitesText" Margin="0,0,25,0"/><TextBlock x:Name="PoolDetailText" Margin="0,0,25,0"/><TextBlock x:Name="ProcessText"/></WrapPanel>
     </Border>
-    <Expander Header="Top lists · server stats" IsExpanded="False" Margin="0,0,0,8" Foreground="{DynamicResource TextBrush}" ToolTip="Latest SITE STATS and SITE WKUP responses for the logged-in user on each site. Empty until the first successful request; rankings are shown as returned by the server.">
+    <Expander Header="Top stats · user info" IsExpanded="False" Margin="0,0,0,8" Foreground="{DynamicResource TextBrush}" ToolTip="Latest SITE &lt;logged-in username&gt; response on each site, for example SITE khaz or SITE PAiD. Empty until a completed race successfully retrieves user information; shown as returned by the server.">
      <ScrollViewer x:Name="ServerStatsScroll" MaxHeight="220" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
       <ItemsControl x:Name="ServerStatsList"><ItemsControl.ItemTemplate><DataTemplate>
        <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="3" Padding="10" Margin="0,4,0,4"><StackPanel>

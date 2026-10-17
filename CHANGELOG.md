@@ -2,6 +2,24 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.18 — 2026-10-17
+
+- Rebuild of the current layout and user-statistics changes. Backup regression tests now cover 80 sections and 160 site mappings restored to an empty installation; no backup data-loss fix is claimed. Site-name corrections remain saved configuration, not executable defaults.
+
+## 2.1.17 — 2026-10-17
+
+- Metrics Top stats now displays only the latest `SITE <logged-in username>` reply per site. Its tooltip no longer refers to WKUP; separate SITE STATS replies remain in the connection log.
+
+## 2.1.16 — 2026-10-17
+
+- Site Options shows checked checkboxes in bold and unchecked checkboxes in normal weight. Connection behavior groups special protocol, FXP-role, TLS-backend and encoding options behind Advanced, preserving their saved values.
+- Jobs & history groups timing, hard reset and concurrency settings behind Advanced; history controls remain directly visible. Opening or closing Advanced does not change any values.
+
+## 2.1.15 — 2026-10-17
+
+- Workspace panels now follow the order in which they are shown. Hiding and reopening a panel moves it to the end; the panel order, visibility and sizes are restored on restart.
+- Metrics-only windows can shrink to 240 pixels high with the existing Metrics scroll area. Splitters follow the actual adjacent panels, including Manager in a custom position.
+
 ## 2.1.14 — 2026-10-17
 
 - Completed races now query `SITE <logged-in username>` (for example `SITE khaz` or `SITE PAiD`) instead of `SITE WKUP`. Successful replies remain visible without Debug and appear as User info in Metrics. The separate `SITE STATS` query is retained.

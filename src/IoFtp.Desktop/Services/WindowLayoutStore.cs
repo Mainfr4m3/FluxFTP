@@ -5,7 +5,8 @@ namespace IoFtp.Desktop.Services;
 
 internal sealed record WindowLayout(double Left, double Top, double Width, double Height, bool Maximized,
     double LeftPaneWidth, bool QueueVisible, double QueueHeight, bool LogVisible, double LogHeight,
-    bool ManagerVisible = true, bool MetricsVisible = false, double MetricsHeight = 300, bool StatusVisible = false, double StatusHeight = 300);
+    bool ManagerVisible = true, bool MetricsVisible = false, double MetricsHeight = 300, bool StatusVisible = false, double StatusHeight = 300,
+    string[]? PanelOrder = null, double ManagerHeight = 300);
 
 internal sealed class WindowLayoutStore
 {

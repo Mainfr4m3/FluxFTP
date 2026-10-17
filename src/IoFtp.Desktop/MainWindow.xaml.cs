@@ -3067,6 +3067,13 @@ public partial class MainWindow : Window
         _statusHeight = new GridLength(Math.Max(150, FiniteLayoutValue(layout.StatusHeight, 300)));
         if (layout.StatusVisible) SiteStatus_Click(this, new RoutedEventArgs());
         if (!layout.ManagerVisible) ToggleManager_Click(this, new RoutedEventArgs());
+        _panelOrder = (layout.PanelOrder ?? []).Where(id => DefaultPanelOrder.Contains(id)).Distinct().ToList();
+        foreach (var id in DefaultPanelOrder) if (!_panelOrder.Contains(id)) _panelOrder.Add(id);
+        NormalizePanelSpace();
+        foreach (var (row, height) in new[] { (ManagerRow, layout.ManagerHeight), (QueueRow, layout.QueueHeight),
+                     (LogRow, layout.LogHeight), (MetricsRow, layout.MetricsHeight), (StatusRow, layout.StatusHeight) })
+            if (row.Height.Value > 0) row.Height = new GridLength(Math.Max(row.MinHeight, FiniteLayoutValue(height, 200)), GridUnitType.Star);
+        Height = Math.Max(MinHeight, FiniteLayoutValue(layout.Height, Height));
         if (layout.Maximized) WindowState = WindowState.Maximized;
     }
 
@@ -3083,7 +3090,8 @@ public partial class MainWindow : Window
             LogRow.Height.Value > 0, LogRow.Height.Value > 0 ? LogRow.ActualHeight : _visibleLogHeight.Value,
             _managerVisible, MetricsHost.Visibility == Visibility.Visible,
             MetricsHost.Visibility == Visibility.Visible ? MetricsRow.ActualHeight : _metricsHeight.Value,
-            StatusHost.Visibility == Visibility.Visible, StatusHost.Visibility == Visibility.Visible ? StatusRow.ActualHeight : _statusHeight.Value));
+            StatusHost.Visibility == Visibility.Visible, StatusHost.Visibility == Visibility.Visible ? StatusRow.ActualHeight : _statusHeight.Value,
+            _panelOrder.ToArray(), ManagerRow.ActualHeight));
     }
 
     private static double FiniteLayoutValue(double value, double fallback) =>
@@ -3092,8 +3100,7 @@ public partial class MainWindow : Window
     private void QueueSplitter_DragDelta(object sender, System.Windows.Controls.Primitives.DragDeltaEventArgs e)
     {
         if (QueuePanel.Visibility != Visibility.Visible) return;
-        var height = Math.Clamp(QueueRow.ActualHeight - e.VerticalChange, 80, Math.Max(80, ActualHeight * 0.7));
-        QueueRow.Height = new GridLength(height);
+        ResizeVisiblePanels(QueueRow, e.VerticalChange);
         _visibleQueueHeight = QueueRow.Height;
         e.Handled = true;
     }
@@ -3108,14 +3115,14 @@ public partial class MainWindow : Window
 
     private void PanelSplitter_DragDelta(object sender, System.Windows.Controls.Primitives.DragDeltaEventArgs e)
     {
-        var lower = ReferenceEquals(sender, StatusSplitter) ? StatusRow : MetricsRow;
+        var lower = ReferenceEquals(sender, _managerSplitter) ? ManagerRow : ReferenceEquals(sender, StatusSplitter) ? StatusRow : MetricsRow;
         ResizeVisiblePanels(lower, e.VerticalChange);
         e.Handled = true;
     }
 
     private void ResizeVisiblePanels(RowDefinition lower, double change)
     {
-        var rows = new[] { ManagerRow, QueueRow, MetricsRow, StatusRow, LogRow };
+        var rows = OrderedPanelRows();
         var index = Array.IndexOf(rows, lower);
         var upper = rows.Take(index).LastOrDefault(row => row.Height.Value > 0 && row.ActualHeight > 0);
         if (upper is null) return;
@@ -3137,10 +3144,12 @@ public partial class MainWindow : Window
 
     private void NormalizePanelSpace()
     {
+        ApplyPanelOrder();
         foreach (var row in new[] { ManagerRow, QueueRow, MetricsRow, StatusRow, LogRow })
             if (row.Height.Value == 0) row.MinHeight = 0;
-        var visible = new[] { ManagerRow, QueueRow, MetricsRow, StatusRow, LogRow }
+        var visible = OrderedPanelRows()
             .Where(row => row.Height.Value > 0).ToArray();
+        MinHeight = visible.Length == 1 && ReferenceEquals(visible[0], MetricsRow) ? 240 : 600;
         var available = Math.Max(200, WorkspaceGrid.ActualHeight - 32);
         var logVisible = visible.Contains(LogRow);
         var minimum = Math.Min(70, available / Math.Max(1, visible.Length) / 2);
@@ -3162,6 +3171,49 @@ public partial class MainWindow : Window
         Divider(MetricsRow, MetricsSplitterRow, MetricsSplitter, 6);
         Divider(StatusRow, StatusSplitterRow, StatusSplitter, 6);
         Divider(LogRow, LogSplitterRow, LogSplitter, 8);
+        Divider(QueueRow, QueueSplitterRow, QueueSplitter, 8);
+        Divider(ManagerRow, _managerSplitterRow, _managerSplitter!, 6);
+    }
+
+    private static readonly string[] DefaultPanelOrder = ["Manager", "Queue", "Metrics", "Status", "Log"];
+    private List<string> _panelOrder = [.. DefaultPanelOrder];
+    private UIElement[]? _managerElements;
+    private readonly RowDefinition _managerSplitterRow = new() { Height = new GridLength(0) };
+    private System.Windows.Controls.Primitives.Thumb? _managerSplitter;
+    private RowDefinition PanelRow(string id) => id switch
+    { "Manager" => ManagerRow, "Queue" => QueueRow, "Metrics" => MetricsRow, "Status" => StatusRow, _ => LogRow };
+    private RowDefinition[] OrderedPanelRows() => _panelOrder.Select(PanelRow).ToArray();
+    private void PanelShown(string id) { _panelOrder.Remove(id); _panelOrder.Add(id); }
+    private void ApplyPanelOrder()
+    {
+        if (_managerElements is null)
+        {
+            _managerElements = WorkspaceGrid.Children.Cast<UIElement>().Where(child => Grid.GetRow(child) == 0).ToArray();
+            _managerSplitter = new System.Windows.Controls.Primitives.Thumb
+            { Height = 6, Cursor = Cursors.SizeNS, Template = MetricsSplitter.Template, Visibility = Visibility.Collapsed };
+            Grid.SetColumnSpan(_managerSplitter, 3);
+            _managerSplitter.DragDelta += PanelSplitter_DragDelta;
+            WorkspaceGrid.Children.Add(_managerSplitter);
+        }
+        WorkspaceGrid.RowDefinitions.Clear();
+        foreach (var id in _panelOrder)
+        {
+            var row = PanelRow(id);
+            var (dividerRow, divider, panel) = id switch
+            {
+                "Queue" => (QueueSplitterRow, (UIElement)QueueSplitter, (UIElement?)QueuePanel),
+                "Metrics" => (MetricsSplitterRow, (UIElement)MetricsSplitter, (UIElement?)MetricsHost),
+                "Status" => (StatusSplitterRow, (UIElement)StatusSplitter, (UIElement?)StatusHost),
+                "Log" => (LogSplitterRow, (UIElement)LogSplitter, (UIElement?)LogPanel),
+                _ => (_managerSplitterRow, (UIElement)_managerSplitter!, (UIElement?)null)
+            };
+            Grid.SetRow(divider, WorkspaceGrid.RowDefinitions.Count);
+            WorkspaceGrid.RowDefinitions.Add(dividerRow);
+            var index = WorkspaceGrid.RowDefinitions.Count;
+            WorkspaceGrid.RowDefinitions.Add(row);
+            if (panel is not null) Grid.SetRow(panel, index);
+            else foreach (var child in _managerElements) Grid.SetRow(child, index);
+        }
     }
 
     private void ToggleLog_Click(object sender, RoutedEventArgs e)
@@ -3178,6 +3230,7 @@ public partial class MainWindow : Window
         }
         else
         {
+            PanelShown("Log");
             LogPanel.Visibility = Visibility.Visible;
             LogSplitter.Visibility = Visibility.Visible;
             LogSplitterRow.Height = new GridLength(8);
@@ -3192,7 +3245,7 @@ public partial class MainWindow : Window
     {
         if (QueueRow.Height.Value > 0)
         {
-            _visibleQueueHeight = QueueRow.Height;
+            _visibleQueueHeight = new GridLength(Math.Max(80, QueueRow.ActualHeight));
             QueueRow.MinHeight = 0;
             QueueRow.Height = new GridLength(0);
             QueueSplitterRow.Height = new GridLength(0);
@@ -3202,6 +3255,7 @@ public partial class MainWindow : Window
         }
         else
         {
+            PanelShown("Queue");
             QueuePanel.Visibility = Visibility.Visible;
             QueueSplitter.Visibility = Visibility.Visible;
             QueueSplitterRow.Height = new GridLength(8);
@@ -3209,6 +3263,7 @@ public partial class MainWindow : Window
             QueueRow.Height = _visibleQueueHeight.Value > 0 ? _visibleQueueHeight : new GridLength(190);
             ToggleQueueButton.Content = "Hide Queue";
         }
+        NormalizePanelSpace();
     }
 
     private void TransferJobs_Click(object sender, RoutedEventArgs e)
@@ -3260,6 +3315,7 @@ public partial class MainWindow : Window
             text.AppendLine("\nLocal FluxFTP status; job counts are not server-reported slot usage.");
             return text.ToString();
         });
+        PanelShown("Status");
         StatusHost.Visibility = StatusSplitter.Visibility = Visibility.Visible;
         StatusSplitterRow.Height = new GridLength(6);
         StatusRow.MinHeight = 150; StatusRow.Height = _statusHeight;
@@ -3270,11 +3326,12 @@ public partial class MainWindow : Window
     private GridLength _metricsHeight = new(300);
     private void ToggleManager_Click(object sender, RoutedEventArgs e)
     {
+        ApplyPanelOrder();
         if (_managerVisible && LogPanel.Visibility == Visibility.Visible)
             _visibleLogHeight = new GridLength(Math.Max(70, LogRow.ActualHeight));
         _managerVisible = !_managerVisible;
-        foreach (UIElement child in WorkspaceGrid.Children)
-            if (Grid.GetRow(child) == 0) child.Visibility = _managerVisible ? Visibility.Visible : Visibility.Collapsed;
+        if (_managerVisible) PanelShown("Manager");
+        foreach (var child in _managerElements!) child.Visibility = _managerVisible ? Visibility.Visible : Visibility.Collapsed;
         ManagerRow.Height = _managerVisible ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
         if (LogPanel.Visibility == Visibility.Visible) LogRow.Height = _managerVisible ? _visibleLogHeight : new GridLength(1, GridUnitType.Star);
         ManagerButton.Content = _managerVisible ? "Hide Manager" : "Show Manager";
@@ -3283,13 +3340,14 @@ public partial class MainWindow : Window
     private void Metrics_Click(object sender, RoutedEventArgs e)
     {
         var show = MetricsHost.Visibility != Visibility.Visible;
+        if (show) PanelShown("Metrics");
         if (show && MetricsHost.Content is null)
             MetricsHost.Content = new MetricsPanel(GetMetricsSnapshot,
                 () => TransferJobs_Click(this, new RoutedEventArgs()),
                 () => RaceLog_Click(this, new RoutedEventArgs()),
                 () => SpreadJobs_Click(this, new RoutedEventArgs()),
                 () => Metrics_Click(this, new RoutedEventArgs()), enabled => _visionaryDebugEnabled = enabled);
-        if (!show) _metricsHeight = MetricsRow.Height;
+        if (!show) _metricsHeight = new GridLength(Math.Max(70, MetricsRow.ActualHeight));
         MetricsHost.Visibility = MetricsSplitter.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
         MetricsSplitterRow.Height = new GridLength(show ? 6 : 0);
         MetricsRow.MinHeight = show ? 200 : 0;
@@ -3340,7 +3398,8 @@ public partial class MainWindow : Window
             new MetricsDashboard(FormatSize(_sessionStatistics.Uploaded + _sessionStatistics.Downloaded + _sessionStatistics.Fxp + _sessionStatistics.Local),
                 _sessionStatistics.Completed, FormatTransferTime(_sessionStatistics.Uptime), _workerPool.Values.Sum(pool => pool.Count),
                 _sessionStatistics.Hits, $"{_sessionStatistics.FxpRecentRate / 1_000_000d:0.00} MB/s", _sessionStatistics.TrafficMinutes, _latestFxpTimings,
-                _serverStats.Values.OrderBy(value => value.Site, StringComparer.OrdinalIgnoreCase).ThenBy(value => value.Command).ToArray()));
+                _serverStats.Values.Where(value => value.Command == "USER")
+                    .OrderBy(value => value.Site, StringComparer.OrdinalIgnoreCase).ToArray()));
     }
 
     private readonly System.Windows.Threading.DispatcherTimer _statusScrollTimer = new() { Interval = TimeSpan.FromMilliseconds(30) };

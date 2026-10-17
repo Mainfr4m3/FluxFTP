@@ -12,6 +12,12 @@ namespace IoFtp.Desktop;
 
 public partial class GlobalSettingsWindow : Window
 {
+    private void JobsAdvanced_Click(object sender, RoutedEventArgs e)
+    {
+        var show = JobsAdvancedPanel.Visibility != Visibility.Visible;
+        JobsAdvancedPanel.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        JobsAdvancedButton.Content = show ? "Hide advanced" : "Advanced…";
+    }
     private void LegendMode_Changed(object sender, System.Windows.Controls.SelectionChangedEventArgs e) => UpdateScrollSpeedVisibility();
     private void UpdateScrollSpeedVisibility()
     {
