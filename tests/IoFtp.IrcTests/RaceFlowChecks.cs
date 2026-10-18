@@ -9,6 +9,11 @@ internal static class RaceFlowChecks
         var checks = 0;
         void Check(bool value, string name) { if (!value) throw new Exception(name); checks++; }
         var reservations = new HashSet<string>(StringComparer.Ordinal);
+        Check(RaceFileWindow.Capacity(10, 10, 5, 0, 0, 0, false) == 2, "first pass offers a fair share to each source");
+        Check(RaceFileWindow.Capacity(10, 10, 5, 2, 2, 2, true) == 8, "eligible source borrows all unused target slots after other sources were offered work");
+        Check(RaceFileWindow.Capacity(3, 10, 5, 2, 2, 2, true) == 1, "borrow respects remaining source downloads");
+        Check(RaceFileWindow.Capacity(10, 10, 5, 0, 0, 9, true) == 1, "other races using the same target reduce available uploads");
+        Check(RaceFileWindow.Capacity(10, 10, 5, 0, 0, 10, true) == 0, "full target cannot be overfilled");
         var firstSource = RaceFileWindow.Select(new[] { "a.sfv", "b.rar", "c.rar" }, file => file, reservations, 2);
         var secondSource = RaceFileWindow.Select(new[] { "a.sfv", "b.rar", "c.rar", "d.rar" }, file => file, reservations, 2);
         Check(firstSource.SequenceEqual(new[] { "a.sfv", "b.rar" }), "first source uses a bounded priority window");

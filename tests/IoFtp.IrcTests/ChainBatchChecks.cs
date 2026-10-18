@@ -59,29 +59,30 @@ internal static class ChainBatchChecks
             return Task.FromResult(false);
         }, liveSlots: request => { updates.Enqueue(request); return Task.CompletedTask; });
         async Task<ApiTransferRequest> Next() => await snapshots.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
-        async Task<ApiTransferRequest> NextSource(string source)
+        async Task<ApiTransferRequest> NextSource(string source, int? downloads = null, int? uploads = null)
         {
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             while (true)
             {
                 var item = await snapshots.Reader.ReadAsync(deadline.Token);
-                if (item.SrcSite == source) return item;
+                if (item.SrcSite == source && (downloads is null || item.SourceDownloadSlots == downloads) &&
+                    (uploads is null || item.DestinationUploadSlots == uploads)) return item;
             }
         }
         await live.SubmitChainsAsync("TV", "Live-GROUP", "A;B;8;3");
         var first = await Next();
         if (first.SourceDownloadSlots != 8 || first.DestinationUploadSlots != 3) throw new Exception("Live slots lost");
         await live.SubmitChainsAsync("TV", "Live-GROUP", "A;B;4;0");
-        var updated = await NextSource("A");
+        var updated = await NextSource("A", 4, 0);
         if (updated.SourceDownloadSlots != 4 || updated.DestinationUploadSlots != 0) throw new Exception("Active watch did not receive changed/zero slots");
         var firstOwner = liveState!.DestinationOwner;
         liveState.HasActiveTransfers = true;
         await live.SubmitChainsAsync("TV", "Live-GROUP", "C;B;9;2");
-        updated = await NextSource("C");
+        updated = await NextSource("C", 9, 2);
         if (updated.SrcSite != "C" || updated.SourceDownloadSlots != 9 || !ReferenceEquals(firstOwner, liveState!.DestinationOwner))
             throw new Exception("Alternate source must be admitted while the first has active work, with its own slots and shared destination ownership");
         await live.SubmitChainsAsync("TV", "Live-GROUP", "A;B");
-        updated = await NextSource("A");
+        updated = await NextSource("A", 4, 2);
         if (updated.SourceDownloadSlots != 4 || updated.DestinationUploadSlots != 2) throw new Exception("Legacy update erased live limits");
         liveState!.NotifyTransferCompleted();
         await Next();

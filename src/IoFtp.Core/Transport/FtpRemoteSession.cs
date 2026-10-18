@@ -1108,7 +1108,7 @@ public sealed class FtpRemoteSession : IRemoteSession
         if (command.StartsWith("RETR ", StringComparison.OrdinalIgnoreCase) ||
             command.StartsWith("STOR ", StringComparison.OrdinalIgnoreCase))
             EnsureSuccess(await FxpCommandAsync((ascii ?? FtpTransferMode.IsAscii(command[5..], _profile?.EffectiveOptions ?? new())) ? "TYPE A" : "TYPE I", cancellationToken), 200);
-        if (_profile?.EffectiveOptions.NeedsPret != true) return;
+        if (_profile?.EffectiveOptions.NeedsPret != true && !Capabilities.Contains("PRET")) return;
         var response = await FxpCommandAsync($"PRET {command}", cancellationToken);
         EnsureSuccess(response, 200);
     }

@@ -7,6 +7,7 @@ internal static class SecureReverseFxpChecks
 {
     public static async Task Run()
     {
+        foreach (var advertisedPret in new[] { false, true })
         foreach (var sscnFallback in new[] { false, true })
         foreach (var resume in new[] { false, true })
         foreach (var rejection in new[] { 0, 1, 2, 3 })
@@ -34,12 +35,13 @@ internal static class SecureReverseFxpChecks
                 var flags = BindingFlags.Instance | BindingFlags.NonPublic;
                 typeof(FtpRemoteSession).GetField("_profile", flags)!.SetValue(session,
                     new ConnectionProfile(Guid.NewGuid(), site, "master.example", 21, "test", TransferProtocol.FtpsExplicit,
-                        Options: new SiteOptions(NeedsPret: source)));
+                        Options: new SiteOptions(NeedsPret: source && !advertisedPret)));
                 typeof(FtpRemoteSession).GetField("_reader", flags)!.SetValue(session, reader);
                 typeof(FtpRemoteSession).GetField("_writer", flags)!.SetValue(session, writer);
                 typeof(FtpRemoteSession).GetProperty("IsConnected")!.SetValue(session, true);
-                typeof(FtpRemoteSession).GetProperty("Capabilities")!.SetValue(session,
-                    new HashSet<string>(sscnFallback ? ["SSCN"] : source ? ["CPSV"] : ["SSCN"]));
+                var features = new HashSet<string>(sscnFallback ? ["SSCN"] : source ? ["CPSV"] : ["SSCN"]);
+                if (advertisedPret && source) features.Add("PRET");
+                typeof(FtpRemoteSession).GetProperty("Capabilities")!.SetValue(session, features);
                 return session;
             }
             var from = Session("drFTPD", sourceReader, sourceWriter, true);

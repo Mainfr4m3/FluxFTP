@@ -2,6 +2,12 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.27 — 2026-10-18
+
+- Multi-source scheduling uses a fair first pass followed by a refill pass that lets sources with eligible files borrow unused destination capacity. The source count no longer permanently reserves slots for sources without work.
+- Queue capacity accounts for existing queued/running work on both the source and destination across races, within configured upload/download budgets. Destination file reservations remain in force.
+- FTP sessions send PRET when advertised in FEAT, as well as when explicitly enabled in Site Options. Servers that require PRET without advertising it still require the site option.
+
 ## 2.1.26 — 2026-10-18
 
 - All Visionary-announced sources for a destination release receive scheduling passes while other sources have active transfers. Downloads can run concurrently; the engine still enforces shared site upload/download limits.

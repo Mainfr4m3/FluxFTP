@@ -4182,11 +4182,13 @@ public partial class MainWindow : Window
             var srcSlots = RaceSlotOptions(sourceProfile);
             var dstSlots = RaceSlotOptions(destinationProfile);
             var uploads = dstSlots.AllowUpload ? Math.Min(dstSlots.MaxUploadSlots, TransferSlotLimit(destinationProfile)) : 0;
-            var share = (uploads + Math.Max(1, race.SourceCount) - 1) / Math.Max(1, race.SourceCount);
             var downloads = srcSlots.AllowDownload ? Math.Min(srcSlots.MaxDownloadSlots, TransferSlotLimit(sourceProfile)) : 0;
             var owned = busy.Count(entry => entry.SourceProfileId == sourceProfile.Id &&
                 _raceJobOwners.TryGetValue(entry.Id, out var other) && ReferenceEquals(other.DestinationOwner, race.DestinationOwner));
-            var window = RaceFileWindow.Select(orderedFiles, file => file.Destination, reserved, Math.Max(0, Math.Min(downloads, share) - owned));
+            var capacity = RaceFileWindow.Capacity(downloads, uploads, race.SourceCount, owned,
+                busy.Count(entry => entry.SourceProfileId == sourceProfile.Id),
+                busy.Count(entry => entry.DestinationProfileId == destinationProfile.Id), race.BorrowIdleSlots);
+            var window = RaceFileWindow.Select(orderedFiles, file => file.Destination, reserved, capacity);
             foreach (var deferred in orderedFiles.Except(window)) race.DeferExistingTarget(deferred.Entry.FullPath);
             orderedFiles = window.ToList();
         }

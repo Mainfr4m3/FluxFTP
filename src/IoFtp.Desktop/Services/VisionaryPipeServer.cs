@@ -201,6 +201,7 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
                     : new[] { request };
                 // Rotate admission order so one source cannot reserve every file
                 // before another source has had its next scheduling pass.
+                for (var pass = 0; pass < 2 && !completed; pass++)
                 for (var i = 0; i < available.Length; i++)
                 {
                     var next = available[(sourceOffset + i) % available.Length];
@@ -214,6 +215,7 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
                     }
                     state = nextState;
                     state.SourceCount = available.Length;
+                    state.BorrowIdleSlots = pass == 1;
                     request = next;
                     if (_requests.TryGetValue(key, out var latest)) request = request with { DestinationUploadSlots = latest.DestinationUploadSlots };
                     state.StartTrace?.Mark("watch-slot-wait");

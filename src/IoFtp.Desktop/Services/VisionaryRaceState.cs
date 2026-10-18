@@ -67,6 +67,7 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
     public object DestinationOwner { get; set; } = new();
     public bool HasActiveTransfers { get; set; }
     public int SourceCount { get; set; } = 1;
+    public bool BorrowIdleSlots { get; set; }
     public int RecheckSeconds => options.EffectiveRecheckSeconds;
     public Dictionary<string, string> ServerReports { get; } = new(StringComparer.OrdinalIgnoreCase);
     public Action? TransferCompleted { get; set; }
