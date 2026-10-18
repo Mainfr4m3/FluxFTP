@@ -196,6 +196,13 @@ internal static class RaceFlowChecks
         Check(race.SourceComplete, "all disks complete");
         var growing = new VisionaryRaceState(new());
         var retryNow = DateTimeOffset.UtcNow;
+        var oneSecondOptions = new VisionaryRaceOptions(RefreshSeconds: 3, RecheckSeconds: 1);
+        Check(oneSecondOptions.EffectiveRecheckSeconds == 1 && oneSecondOptions.RefreshSeconds == 3, "faster rechecks do not shorten source stability interval");
+        var oneSecondRace = new VisionaryRaceState(oneSecondOptions, utcNow: () => retryNow);
+        oneSecondRace.Track("/release/one.rar", 100, null, Guid.NewGuid());
+        oneSecondRace.RecordFailure("/release/one.rar", "553 File is being uploaded");
+        retryNow += TimeSpan.FromSeconds(1);
+        Check(oneSecondRace.NeedsTransfer("/release/one.rar", 100, null, _ => "Failed"), "one-second recheck also applies to temporary retry cooldown");
         var lockedRace = new VisionaryRaceState(new(), utcNow: () => retryNow);
         lockedRace.Track("/release/locked.rar", 100, null, Guid.NewGuid());
         Check(lockedRace.RecordFailure("/release/locked.rar", "553 File is being uploaded by another user"), "busy target is temporary");

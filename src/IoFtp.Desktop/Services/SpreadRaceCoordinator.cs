@@ -45,7 +45,7 @@ internal sealed class SpreadRaceCoordinator
                     }
                 }
                 if (_source is not null && Incomplete.Length == 0) { lock (_gate) _status = "DONE"; return; }
-                await Task.Delay(TimeSpan.FromSeconds(options.RefreshSeconds), lifetime.Token);
+                await Task.Delay(TimeSpan.FromSeconds(options.EffectiveRecheckSeconds), lifetime.Token);
             }
         }
         catch (OperationCanceledException) { lock (_gate) { _status = cancellationToken.IsCancellationRequested ? "ABORTED" : "FAILED"; Error = "Race cancelled or timed out before destination verification."; } }

@@ -1,4 +1,4 @@
-﻿using System.Windows;
+using System.Windows;
 using System.ComponentModel;
 using System.IO;
 using System.Text.Json;
@@ -95,6 +95,7 @@ public partial class GlobalSettingsWindow : Window
         AutoHardResetBox.IsChecked = s.AutoHardReset;
         MaxSpreadJobsBox.Text = s.MaxActiveSpreadJobs.ToString();
         VisionarySchedulingBox.Text = s.VisionaryConcurrentScheduling.ToString();
+        VisionaryRecheckBox.Text = (s.VisionaryRecheckSeconds ?? VisionaryRaceOptions.Load().EffectiveRecheckSeconds).ToString();
         HardResetCooldownBox.Text = s.HardResetCooldownSeconds.ToString(); HardResetRetriesBox.Text = s.HardResetRetries.ToString(); HardResetLookbackBox.Text = s.HardResetLookbackMinutes.ToString();
         UsernameBox.Text=s.DefaultUsername; ProtocolBox.SelectedItem=((ProtocolChoice[])ProtocolBox.ItemsSource).First(choice => choice.Protocol == s.DefaultProtocol); SlotsBox.Text=$"{s.DefaultSlots}"; UploadsBox.Text=$"{s.DefaultUploadSlots}"; DownloadsBox.Text=$"{s.DefaultDownloadSlots}"; DefaultIdleBox.Text=$"{s.DefaultIdleSeconds}";
         LocalPathBox.Text=s.LocalDownloadPath; LocalDownloadsBox.Text=$"{s.MaxLocalDownloadSlots}"; LocalUploadsBox.Text=$"{s.MaxLocalUploadSlots}";
@@ -170,7 +171,9 @@ public partial class GlobalSettingsWindow : Window
         { ErrorText.Text = "Maximum active spread jobs must be between 1 and 2048."; return; }
         if (!int.TryParse(VisionarySchedulingBox.Text, out var visionaryScheduling) || visionaryScheduling is < 1 or > 2048)
         { ErrorText.Text = "Visionary concurrent scheduling must be between 1 and 2048."; return; }
-        Settings = Settings with { VisionaryConcurrentScheduling = visionaryScheduling, MaxActiveSpreadJobs = maxSpreadJobs, AutoHardReset = AutoHardResetBox.IsChecked == true, HardResetCooldownSeconds = N(HardResetCooldownBox), HardResetRetries = N(HardResetRetriesBox), HardResetLookbackMinutes = N(HardResetLookbackBox), EnableVisionaryBridge = _visionaryBridge, SerializeLocalTransfers = SerializeLocalBox.IsChecked == true,
+        if (!int.TryParse(VisionaryRecheckBox.Text, out var recheckSeconds) || recheckSeconds is < 1 or > 60)
+        { ErrorText.Text = "Race recheck interval must be between 1 and 60 seconds."; return; }
+        Settings = Settings with { VisionaryRecheckSeconds = recheckSeconds, VisionaryConcurrentScheduling = visionaryScheduling, MaxActiveSpreadJobs = maxSpreadJobs, AutoHardReset = AutoHardResetBox.IsChecked == true, HardResetCooldownSeconds = N(HardResetCooldownBox), HardResetRetries = N(HardResetRetriesBox), HardResetLookbackMinutes = N(HardResetLookbackBox), EnableVisionaryBridge = _visionaryBridge, SerializeLocalTransfers = SerializeLocalBox.IsChecked == true,
             SmartResume = SmartResumeBox.IsChecked == true, SmartResumeAttempts = (int)(SmartResumeAttemptsBox.SelectedItem ?? 2),
             StatusBarFontSize = (int)(StatusFontBox.SelectedItem ?? 12), StatusBarScrollSpeed = (int)(ScrollSpeedBox.SelectedItem ?? 60),
             TransferCategoryOrder = string.Join("\n", PriorityCategoriesList.Items.Cast<string>()),

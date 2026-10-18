@@ -37,12 +37,13 @@ internal static class ChainBatchChecks
         await allStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Console.WriteLine("PASS: all 40 destinations start with one scheduling slot while earlier watches wait for updates.");
         var periodic = System.Threading.Channels.Channel.CreateUnbounded<bool>();
-        await using var unattended = new VisionaryPipeServer(_ => Task.FromResult<object>(new { ok = true }), raceStep: (_, _, token) =>
+        await using var unattended = new VisionaryPipeServer(_ => Task.FromResult<object>(new { ok = true }), raceStep: (_, state, token) =>
         {
             token.ThrowIfCancellationRequested();
+            if (state.RecheckSeconds != 1) throw new Exception("Configured recheck interval did not reach watch");
             periodic.Writer.TryWrite(true);
             return Task.FromResult(false);
-        });
+        }, recheckSeconds: 1);
         await unattended.SubmitChainsAsync("TV", "Periodic.Check-GROUP", "A;B");
         await periodic.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         await periodic.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(65));

@@ -39,7 +39,7 @@ internal sealed class ApiServer : IAsyncDisposable
         if (settings.EnableVisionaryBridge || settings.EnableHttpsApi)
         {
             _visionaryPipe = new VisionaryPipeServer(startTransfer, diagnosticLog, visionaryStep, visionarySlots,
-                settings.VisionaryConcurrentScheduling);
+                settings.VisionaryConcurrentScheduling, settings.VisionaryRecheckSeconds);
             if (settings.EnableVisionaryBridge)
             {
             _visionaryPipe.Start();
@@ -277,6 +277,7 @@ internal sealed class ApiServer : IAsyncDisposable
                 var sites = request.Sites.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
                 var coordinator = new SpreadRaceCoordinator(sites, request.SitesDlonly ?? []);
                 var options = VisionaryRaceOptions.Load();
+                if (settings.VisionaryRecheckSeconds is { } seconds) options = options with { RecheckSeconds = Math.Clamp(seconds, 1, 60) };
                 options.Validate();
                 lock (_spreadJobsLock)
                 {

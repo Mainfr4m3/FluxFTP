@@ -10,12 +10,13 @@ namespace IoFtp.Desktop.Services;
 internal sealed record VisionaryRaceOptions(
     string CompleteFlag = VisionaryRaceOptions.DefaultCompleteFlag,
     int RefreshSeconds = 3, int TimeoutMinutes = 5, string RushOptionsPath = "",
-    VisionaryTransferProfiles.SavedEntry[]? ImportedProfiles = null)
+    VisionaryTransferProfiles.SavedEntry[]? ImportedProfiles = null, int? RecheckSeconds = null)
 {
     public const string LegacyCompleteFlag = @"(?:^|[\s\[\]()._-])(?:COMPLETE|FINISHED)(?:$|[\s\[\]()._-])|100%";
     public const string DefaultCompleteFlag = @"(?:^|[\s\[\]()._-])(?:COMPLETED?|FINISHED)(?:$|[\s\[\]()._-])|(?<![\d.,])100(?:[.,]0+)?\s*%";
     // The configured lifetime includes admission wait as well as the active watch.
     public TimeSpan EffectiveTimeout => TimeSpan.FromMinutes(Math.Clamp(TimeoutMinutes, 1, 1440));
+    public int EffectiveRecheckSeconds => Math.Clamp(RecheckSeconds ?? RefreshSeconds, 1, 60);
     private static string FilePath => Path.Combine(AppContext.BaseDirectory, "FluxFTP-visionary-race.json");
     public static VisionaryRaceOptions Load()
     {
@@ -30,7 +31,7 @@ internal sealed record VisionaryRaceOptions(
     }
     public Regex Validate()
     {
-        if (RefreshSeconds is < 1 or > 60 || TimeoutMinutes is < 1 or > 1440)
+        if (RefreshSeconds is < 1 or > 60 || RecheckSeconds is < 1 or > 60 || TimeoutMinutes is < 1 or > 1440)
             throw new ArgumentException("Refresh must be 1–60 seconds; timeout must be 1–1440 minutes.");
         if (string.IsNullOrWhiteSpace(CompleteFlag)) throw new ArgumentException("A completeflag pattern is required.");
         var regex = new Regex(CompleteFlag == LegacyCompleteFlag ? DefaultCompleteFlag : CompleteFlag,
@@ -63,6 +64,7 @@ internal sealed record VisionaryRaceOptions(
 internal sealed class VisionaryRaceState(VisionaryRaceOptions options, VisionaryTransferProfiles? profiles = null, Func<DateTimeOffset>? utcNow = null)
 {
     public RaceStartTrace? StartTrace { get; set; }
+    public int RecheckSeconds => options.EffectiveRecheckSeconds;
     public Dictionary<string, string> ServerReports { get; } = new(StringComparer.OrdinalIgnoreCase);
     public Action? TransferCompleted { get; set; }
     public void NotifyTransferCompleted() => TransferCompleted?.Invoke();
@@ -222,7 +224,7 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
         var temporary = category is "UPLOAD-IN-PROGRESS" or "FILE-LOCKED" || category is null &&
             Regex.IsMatch(text, @"timeout|timed out|OpenSSL|connection|socket|\b(?:421|425|426)\b", RegexOptions.IgnoreCase);
         if (!temporary) { _temporaryFailures.Remove(path); return false; }
-        _temporaryFailures[path] = (utcNow ?? (() => DateTimeOffset.UtcNow))().AddSeconds(Math.Max(3, options.RefreshSeconds));
+        _temporaryFailures[path] = (utcNow ?? (() => DateTimeOffset.UtcNow))().AddSeconds(RecheckSeconds);
         return true;
     }
     public string? LastWaitSummary { get; set; }

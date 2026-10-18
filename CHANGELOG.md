@@ -2,6 +2,12 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.21 — 2026-10-18
+
+- Jobs & history > Advanced adds Race recheck interval (1–60 seconds). It applies to Visionary watches, spread polling and temporary-file retry cooldowns; incoming notifications still wake immediately. Existing installations retain their saved race interval until this setting is saved.
+- One-second rechecks do not shorten source-file stability checks or the independent maximum race lifetime. The watch-start log reports the effective recheck interval and lifetime.
+- Exceptions wrapping cancellation at the watch lifetime boundary are reported as lifetime expiry instead of misleading LIST/transfer failure messages.
+
 ## 2.1.20 — 2026-10-17
 
 - Transfer worker rentals synchronize per site instead of waiting behind a global pool-maintenance lock. A slow site's login/NOOP no longer blocks worker acquisition on unrelated sites.
