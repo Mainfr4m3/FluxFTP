@@ -79,6 +79,33 @@ internal sealed class RaceListingService : IAsyncDisposable
         finally { source.LastUsed = Stopwatch.GetTimestamp(); source.Gate.Release(); }
     }
 
+    public async Task<long?> ReadSizeAsync(ConnectionProfile profile, string path, CancellationToken token)
+    {
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token, _shutdown.Token);
+        token = lifetime.Token;
+        var source = _sources.GetOrAdd(profile.Id, _ => new Source());
+        await source.Gate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            if (source.Profile != profile)
+            {
+                await CloseAsync(source).ConfigureAwait(false);
+                source.Profile = profile;
+                source.Listings.Clear();
+            }
+            if (source.Session?.IsConnected != true)
+            {
+                await CloseAsync(source).ConfigureAwait(false);
+                source.Session = await _connect(profile, token).ConfigureAwait(false);
+            }
+            var response = await source.Session.ExecuteCommandAsync("SIZE " + path, token).ConfigureAwait(false);
+            var value = response.Message.Split([' ', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
+            return response.StatusCode == 213 && long.TryParse(value, out var size) && size >= 0 ? size : null;
+        }
+        catch { await CloseAsync(source).ConfigureAwait(false); throw; }
+        finally { source.LastUsed = Stopwatch.GetTimestamp(); source.Gate.Release(); }
+    }
+
     public async Task<long?> TryReadTransferSizeAsync(ConnectionProfile profile, string path, CancellationToken token)
     {
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token, _shutdown.Token);

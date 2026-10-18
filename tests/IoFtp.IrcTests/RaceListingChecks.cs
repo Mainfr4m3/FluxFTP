@@ -17,6 +17,11 @@ internal static class RaceListingChecks
         var results = await Task.WhenAll(Enumerable.Range(0, 12).Select(_ => service.ListAsync(profile, "/release", CancellationToken.None)));
         Check(connections.Count == 1 && connections[0].Lists == 1, "fan-out must share one login and one LIST");
         Check(results.All(result => ReferenceEquals(result, results[0])), "shared immutable snapshot");
+        Check(await service.ReadSizeAsync(profile, "/release/not-in-list.rar", default) == 123,
+            "direct SIZE finds a target omitted from the cached listing");
+        Check(await service.ReadSizeAsync(profile, "/release/missing.rar", default) is null,
+            "a removed target remains eligible for transfer");
+        Check(connections.Count == 1 && connections[0].Lists == 1, "SIZE checks share the listing login without extra LIST or transfer workers");
         await Task.Delay(150);
         await service.ListAsync(profile, "/release", CancellationToken.None);
         Check(connections.Count == 1 && connections[0].Lists == 2, "refresh reuses connection");
@@ -54,7 +59,8 @@ internal static class RaceListingChecks
         }
         public Task DownloadAsync(string path, Stream stream, long offset, IProgress<long>? progress, CancellationToken token) => throw new NotSupportedException();
         public Task UploadAsync(string path, Stream stream, long offset, IProgress<long>? progress, CancellationToken token) => throw new NotSupportedException();
-        public Task<RemoteCommandResult> ExecuteCommandAsync(string command, CancellationToken token) => throw new NotSupportedException();
+        public Task<RemoteCommandResult> ExecuteCommandAsync(string command, CancellationToken token) =>
+            Task.FromResult(command.EndsWith("/missing.rar") ? new RemoteCommandResult(550, "Not found") : new RemoteCommandResult(213, "213 123"));
         public Task DisconnectAsync(CancellationToken token) { Disposed = true; return Task.CompletedTask; }
         public ValueTask DisposeAsync() { Disposed = true; return ValueTask.CompletedTask; }
     }

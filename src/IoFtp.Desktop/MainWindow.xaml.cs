@@ -4126,24 +4126,31 @@ public partial class MainWindow : Window
             {
                 IReadOnlyList<RemoteEntry> listing;
                 try { listing = await _raceListings.ListAsync(ApplyGlobalProxy(destinationProfile), directory.Key, timeout.Token); }
-                catch (FtpCommandException exception) when (exception.StatusCode == 550) { continue; }
+                catch (FtpCommandException exception) when (exception.StatusCode == 550) { listing = []; }
                 var targets = listing.Where(file => !file.IsDirectory).GroupBy(file => file.Name, StringComparer.OrdinalIgnoreCase)
                     .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
                 foreach (var file in directory)
                 {
-                    if (!targets.TryGetValue(file.Entry.Name, out var target) || target.Size is null ||
-                        FxpExistingFilePolicy.Resolve(_settings, file.Entry.Size, target.Size, true,
+                    targets.TryGetValue(file.Entry.Name, out var target);
+                    var targetSize = target?.Size;
+                    // A successful worker SIZE check can contradict an empty or
+                    // incomplete directory listing. Recheck SIZE before renting
+                    // transfer workers for a previously skipped path again.
+                    if (race.IsSkipped(file.Entry.FullPath, RaceJobState))
+                        targetSize = await _raceListings.ReadSizeAsync(ApplyGlobalProxy(destinationProfile), file.Destination, timeout.Token);
+                    if (targetSize is null ||
+                        FxpExistingFilePolicy.Resolve(_settings, file.Entry.Size, targetSize, true,
                             race.IsFinal(file.Entry.FullPath) && FtpTransferMode.CanResume(file.Entry.FullPath, sourceProfile.EffectiveOptions) && FtpTransferMode.CanResume(file.Destination, destinationProfile.EffectiveOptions)) != ExistingTargetAction.Skip)
                     { race.DeferSmallerSource(file.Entry.FullPath, null, null, false, 1); continue; }
-                    if (race.DeferSmallerSource(file.Entry.FullPath, file.Entry.Size, target.Size, _settings.SmartResume, _settings.SmartResumeAttempts))
+                    if (race.DeferSmallerSource(file.Entry.FullPath, file.Entry.Size, targetSize, _settings.SmartResume, _settings.SmartResumeAttempts))
                     {
                         deferredBeforeQueue++;
                         selectedFiles.Remove(file);
-                        var wait = $"Smart resume waiting: {file.Entry.Name}; source={file.Entry.Size}; target={target.Size}; next incoming update; additional checks={_settings.SmartResumeAttempts}";
+                        var wait = $"Smart resume waiting: {file.Entry.Name}; source={file.Entry.Size}; target={targetSize}; next incoming update; additional checks={_settings.SmartResumeAttempts}";
                         AppendConnectionLog(Environment.NewLine + wait); _raceLog.Write("SMART-RESUME", wait);
                         continue;
                     }
-                    if (!race.IsFinal(file.Entry.FullPath) || file.Entry.Size != target.Size)
+                    if (!race.IsFinal(file.Entry.FullPath) || file.Entry.Size != targetSize)
                     { race.DeferExistingTarget(file.Entry.FullPath); deferredBeforeQueue++; }
                     else { race.SkipExistingTarget(file.Entry.FullPath); skippedBeforeQueue++; }
                     selectedFiles.Remove(file);

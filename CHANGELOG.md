@@ -2,6 +2,10 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.24 — 2026-10-18
+
+- Previously skipped race files receive a direct destination SIZE check before requeueing, using the shared listing connection. An incomplete directory listing no longer requires transfer workers merely to rediscover the existing file. Removed or incomplete targets still follow normal retry/resume policy.
+
 ## 2.1.23 — 2026-10-18
 
 - Connection-log race prequeue and watch-wait summaries require Debug. Full RACE logs retain these diagnostics; transfer errors and completions remain visible normally.
