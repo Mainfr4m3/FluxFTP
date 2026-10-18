@@ -8,6 +8,14 @@ internal static class RaceFlowChecks
     {
         var checks = 0;
         void Check(bool value, string name) { if (!value) throw new Exception(name); checks++; }
+        var reservations = new HashSet<string>(StringComparer.Ordinal);
+        var firstSource = RaceFileWindow.Select(new[] { "a.sfv", "b.rar", "c.rar" }, file => file, reservations, 2);
+        var secondSource = RaceFileWindow.Select(new[] { "a.sfv", "b.rar", "c.rar", "d.rar" }, file => file, reservations, 2);
+        Check(firstSource.SequenceEqual(new[] { "a.sfv", "b.rar" }), "first source uses a bounded priority window");
+        Check(secondSource.SequenceEqual(new[] { "c.rar", "d.rar" }), "second source schedules distinct files while the first remains active");
+        Check(RaceFileWindow.Select(new[] { "e.rar" }, file => file, reservations, 0).Count == 0, "zero slots do not reserve a file");
+        reservations.Remove("a.sfv");
+        Check(RaceFileWindow.Select(new[] { "a.sfv" }, file => file, reservations, 1).Count == 1, "released reservation permits a later retry");
         var poolGates = new SitePoolSynchronization();
         var slowSite = Guid.NewGuid();
         var fastSite = Guid.NewGuid();

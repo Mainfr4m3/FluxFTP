@@ -2,6 +2,17 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.26 — 2026-10-18
+
+- All Visionary-announced sources for a destination release receive scheduling passes while other sources have active transfers. Downloads can run concurrently; the engine still enforces shared site upload/download limits.
+- Each source receives a bounded queue window based on live slot budgets and source count, with SFV first and then largest files. Admission order rotates between passes so the first source does not reserve the whole release.
+- Queue publication reserves each destination site/path across sources without yielding between the ownership check and job creation. Deferred files are retried when reservations or slots become available. Completion waits for active jobs across the destination group, and shutdown cleans all source states.
+
+## 2.1.25 — 2026-10-18
+
+- Visionary watches retain alternative sources announced for the same destination release. Once the current source has no queued/running transfers, subsequent passes rotate through those sources rather than remaining pinned to the first one.
+- Source-specific retry/stability state and download slots are preserved. Sources share destination ownership and are scheduled serially; active file jobs are not interrupted to change source. Switching sources does not restart the watch lifetime. Source-switch diagnostics require Debug.
+
 ## 2.1.24 — 2026-10-18
 
 - Previously skipped race files receive a direct destination SIZE check before requeueing, using the shared listing connection. An incomplete directory listing no longer requires transfer workers merely to rediscover the existing file. Removed or incomplete targets still follow normal retry/resume policy.

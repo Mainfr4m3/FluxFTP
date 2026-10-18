@@ -7,7 +7,7 @@ internal static class VisionaryLogVisibility
         var text = message.TrimStart();
         if (text.StartsWith("SERVER STATS", StringComparison.OrdinalIgnoreCase)) return true;
         if (text.StartsWith("SERVER DETAILS", StringComparison.OrdinalIgnoreCase)) return debug;
-        if (new[] { "Skiplist", "Skip list:", "Existing target skipped:", "Smart resume", "FXP diagnostic", "RACE prequeue:", "RACE watch [" }
+        if (new[] { "Skiplist", "Skip list:", "Existing target skipped:", "Smart resume", "FXP diagnostic", "RACE prequeue:", "RACE watch [", "VISIONARY parallel source " }
             .Any(prefix => text.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))) return debug;
         if (debug || !text.StartsWith("VISIONARY", StringComparison.OrdinalIgnoreCase)) return true;
         if (text.StartsWith("VISIONARY TIMING", StringComparison.OrdinalIgnoreCase)) return false;

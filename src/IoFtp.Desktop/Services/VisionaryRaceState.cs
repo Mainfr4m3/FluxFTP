@@ -64,6 +64,9 @@ internal sealed record VisionaryRaceOptions(
 internal sealed class VisionaryRaceState(VisionaryRaceOptions options, VisionaryTransferProfiles? profiles = null, Func<DateTimeOffset>? utcNow = null)
 {
     public RaceStartTrace? StartTrace { get; set; }
+    public object DestinationOwner { get; set; } = new();
+    public bool HasActiveTransfers { get; set; }
+    public int SourceCount { get; set; } = 1;
     public int RecheckSeconds => options.EffectiveRecheckSeconds;
     public Dictionary<string, string> ServerReports { get; } = new(StringComparer.OrdinalIgnoreCase);
     public Action? TransferCompleted { get; set; }

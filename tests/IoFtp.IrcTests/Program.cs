@@ -67,7 +67,7 @@ if (args.FirstOrDefault() == "--fxp-estimate-checks") { FxpEstimateChecks.Run();
 if (args.FirstOrDefault() == "--server-stats-checks") { await ServerStatsChecks.Run(); return; }
 if (args.FirstOrDefault() == "--metrics-debug-checks")
 {
-    foreach (var line in new[] { "RACE prequeue: A -> B; matching targets=4", "RACE watch [A -> B] Failed.Release: active/queued=0; temporary failures=1" })
+    foreach (var line in new[] { "VISIONARY parallel source Failed.Release: A -> B", "RACE prequeue: A -> B; matching targets=4", "RACE watch [A -> B] Failed.Release: active/queued=0; temporary failures=1" })
         if (VisionaryLogVisibility.Show(line, false) || !VisionaryLogVisibility.Show(line, true)) throw new Exception("Race diagnostics require Debug: " + line);
     foreach (var line in new[] { "VISIONARY queued FXP Release: A -> B (2 files)", "VISIONARY Release: A -> B FAILED: unreachable", "VISIONARY pipe failed: busy", "VISIONARY batch A -> B: ERROR missing site", "VISIONARY Release stopped: maximum lifetime", "VISIONARY WARNING live slots unavailable", "Transfer blocked [DUPE]: 553 File exists", "FXP timings: PRET 25ms | STOR 20ms" })
         if (!VisionaryLogVisibility.Show(Environment.NewLine + line, false)) throw new Exception("Essential log hidden: " + line);

@@ -16,6 +16,7 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
     private readonly Func<ApiTransferRequest, VisionaryRaceState, CancellationToken, Task<bool>>? _raceStep;
     private readonly Dictionary<string, Task> _races = new(StringComparer.OrdinalIgnoreCase);
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, ApiTransferRequest> _requests = new(StringComparer.OrdinalIgnoreCase);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, System.Collections.Concurrent.ConcurrentDictionary<string, ApiTransferRequest>> _sources = new(StringComparer.OrdinalIgnoreCase);
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> _notifications = new(StringComparer.OrdinalIgnoreCase);
     private void Notify(string section, string release)
     {
@@ -129,6 +130,10 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
                     fields.Length == 9 && fields[7] != "-" ? int.Parse(fields[7]) : null,
                     fields.Length == 9 && fields[8] != "-" ? int.Parse(fields[8]) : null);
                 if (_liveSlots is not null) await _liveSlots(incoming);
+                var sources = _sources.GetOrAdd(key, _ => new(StringComparer.OrdinalIgnoreCase));
+                sources.AddOrUpdate(incoming.SrcSite!, incoming, (_, previous) => incoming with {
+                    SourceDownloadSlots = incoming.SourceDownloadSlots ?? previous.SourceDownloadSlots,
+                    DestinationUploadSlots = incoming.DestinationUploadSlots ?? previous.DestinationUploadSlots });
                 if (_races.TryGetValue(key, out var active) && !active.IsCompleted)
                 {
                     _requests.AddOrUpdate(key, incoming, (_, previous) => previous with {
@@ -181,27 +186,52 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
         lifetime.CancelAfter(options.EffectiveTimeout);
         var label = $"VISIONARY {request.Name}: {request.SrcSite} -> {request.DstSite}";
         var admitted = false;
+        var sourceStates = new Dictionary<string, VisionaryRaceState>(StringComparer.OrdinalIgnoreCase) { [request.SrcSite!] = state };
+        var owner = state.DestinationOwner;
+        var completed = false;
+        var sourceOffset = 0;
         _log?.Invoke(label + " accepted; waiting for a watch slot");
         try
         {
-            while (true)
+            while (!completed)
             {
-                state.StartTrace?.Mark("watch-slot-wait");
-                // Limit concurrent scheduling work, not watches waiting for incoming updates.
-                using (await _watchSlots.EnterAsync(lifetime.Token))
+                var key = string.Join('\t', request.SrcSection, request.Name, request.DstSite);
+                var available = _sources.TryGetValue(key, out var candidates)
+                    ? candidates.Values.OrderBy(item => item.SrcSite, StringComparer.OrdinalIgnoreCase).ToArray()
+                    : new[] { request };
+                // Rotate admission order so one source cannot reserve every file
+                // before another source has had its next scheduling pass.
+                for (var i = 0; i < available.Length; i++)
                 {
+                    var next = available[(sourceOffset + i) % available.Length];
+                    if (!sourceStates.TryGetValue(next.SrcSite!, out var nextState))
+                    {
+                        nextState = new VisionaryRaceState(options) {
+                            DestinationOwner = owner, TransferCompleted = state.TransferCompleted,
+                            StartTrace = new RaceStartTrace($"{next.SrcSection} {next.Name}: {next.SrcSite} -> {next.DstSite}", RaceStartTrace.Now, 0, 0, _log) };
+                        sourceStates[next.SrcSite!] = nextState;
+                        _log?.Invoke($"VISIONARY parallel source {request.Name}: {next.SrcSite} -> {next.DstSite}; shared destination file reservations");
+                    }
+                    state = nextState;
+                    state.SourceCount = available.Length;
+                    request = next;
+                    if (_requests.TryGetValue(key, out var latest)) request = request with { DestinationUploadSlots = latest.DestinationUploadSlots };
+                    state.StartTrace?.Mark("watch-slot-wait");
+                    using (await _watchSlots.EnterAsync(lifetime.Token))
+                    {
                     state.StartTrace?.Mark("watch-admitted");
                     if (!admitted) _log?.Invoke(label + $" watching source; recheck={options.EffectiveRecheckSeconds}s; maximum lifetime={options.EffectiveTimeout.TotalMinutes:0} min");
                     admitted = true;
-                    var key = string.Join('\t', request.SrcSection, request.Name, request.DstSite);
-                    if (_requests.TryGetValue(key, out var latest)) request = latest;
-                    if (await _raceStep!(request, state, lifetime.Token)) break;
+                    if (await _raceStep!(request, state, lifetime.Token)) { completed = true; break; }
+                    }
                 }
+                sourceOffset = available.Length == 0 ? 0 : (sourceOffset + 1) % available.Length;
+                if (completed) break;
                 // Incoming Visi updates wake immediately; periodic checks also recover
                 // locks and growing sources when the bots send no further announcement.
                 await notification.WaitAsync(TimeSpan.FromSeconds(options.EffectiveRecheckSeconds), lifetime.Token);
             }
-            _log?.Invoke(label + " COMPLETE: final transfers finished");
+            _log?.Invoke($"VISIONARY {request.Name}: {request.SrcSite} -> {request.DstSite} COMPLETE: final transfers finished");
         }
         catch (OperationCanceledException)
         {
@@ -217,14 +247,19 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
         catch (Exception ex) { _log?.Invoke(label + " FAILED: " + ex.Message); }
         finally
         {
-            state.TransferCompleted = null;
-            _requests.TryRemove(string.Join('\t', request.SrcSection, request.Name, request.DstSite), out _);
+            var key = string.Join('\t', request.SrcSection, request.Name, request.DstSite);
+            _requests.TryRemove(key, out _);
+            _sources.TryRemove(key, out _);
             // Let the UI cancel this race's pending jobs even when cancellation occurred during the delay.
             state.StartTrace?.Mark("watch-ended");
             lifetime.Cancel();
+            foreach (var saved in sourceStates.Values) saved.TransferCompleted = null;
             if (admitted)
             {
-                try { await _raceStep!(request, state, lifetime.Token); } catch (Exception) { }
+                foreach (var pair in sourceStates)
+                {
+                    try { await _raceStep!(request with { SrcSite = pair.Key }, pair.Value, lifetime.Token); } catch (Exception) { }
+                }
             }
         }
     }

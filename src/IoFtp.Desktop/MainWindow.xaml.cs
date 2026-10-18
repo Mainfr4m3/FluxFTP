@@ -3864,12 +3864,18 @@ public partial class MainWindow : Window
         try
         {
             token.ThrowIfCancellationRequested();
-            RaceDestinationLease.Acquire(request.DstSite!, request.DstSection ?? request.DstPath ?? "/", request.Name!, race);
+            RaceDestinationLease.Acquire(request.DstSite!, request.DstSection ?? request.DstPath ?? "/", request.Name!, race.DestinationOwner);
             await StartApiTransferCoreAsync(request, race, token);
-            var finished = await Dispatcher.InvokeAsync(() => race.DestinationVerified && race.Finished(RaceJobState));
+            var finished = await Dispatcher.InvokeAsync(() =>
+            {
+                race.HasActiveTransfers = race.Jobs.Any(id => RaceJobState(id) is "Queued" or "Transferring");
+                var groupBusy = _queue.Any(entry => entry.State is "Queued" or "Transferring" &&
+                    _raceJobOwners.TryGetValue(entry.Id, out var other) && ReferenceEquals(other.DestinationOwner, race.DestinationOwner));
+                return race.DestinationVerified && race.Finished(RaceJobState) && !groupBusy;
+            });
             if (finished || !race.SourceAvailable)
             {
-                RaceDestinationLease.Release(race);
+                RaceDestinationLease.Release(race.DestinationOwner);
                 await Dispatcher.InvokeAsync(() =>
                 {
                     if (finished)
@@ -3888,7 +3894,7 @@ public partial class MainWindow : Window
         }
         catch
         {
-            RaceDestinationLease.Release(race);
+            RaceDestinationLease.Release(race.DestinationOwner);
             await Dispatcher.InvokeAsync(() =>
             {
                 foreach (var id in _raceJobOwners.Where(pair => ReferenceEquals(pair.Value, race)).Select(pair => pair.Key).ToArray())
@@ -4163,9 +4169,28 @@ public partial class MainWindow : Window
                 { race.LastPrequeueSummary = message; AppendConnectionLog(Environment.NewLine + message); _raceLog.Write("PREQUEUE", message); }
             }
         }
-        var queuedEntries = selectedFiles.OrderBy(file => race is not null ? TransferFilePriority.RaceRank(file.Entry.Name) : PriorityRank(file.Entry.Name, file.Entry.FullPath))
+        var orderedFiles = selectedFiles.OrderBy(file => race is not null ? TransferFilePriority.RaceRank(file.Entry.Name) : PriorityRank(file.Entry.Name, file.Entry.FullPath))
             .ThenByDescending(file => race is not null ? file.Entry.Size ?? 0 : 0)
-            .ThenBy(file => file.Entry.Name, NaturalNameComparer.Instance)
+            .ThenBy(file => file.Entry.Name, NaturalNameComparer.Instance).ToList();
+        if (race is not null)
+        {
+            // Scheduling runs on the Dispatcher. Reserve paths and publish jobs
+            // without an await between the check and AddQueue, across all sources.
+            var busy = _queue.Where(entry => entry.State is "Queued" or "Transferring" || _skippedTransferJobs.Contains(entry.Id)).ToArray();
+            var reserved = busy.Where(entry => entry.DestinationProfileId == destinationProfile.Id)
+                .Select(entry => entry.Destination).ToHashSet(StringComparer.Ordinal);
+            var srcSlots = RaceSlotOptions(sourceProfile);
+            var dstSlots = RaceSlotOptions(destinationProfile);
+            var uploads = dstSlots.AllowUpload ? Math.Min(dstSlots.MaxUploadSlots, TransferSlotLimit(destinationProfile)) : 0;
+            var share = (uploads + Math.Max(1, race.SourceCount) - 1) / Math.Max(1, race.SourceCount);
+            var downloads = srcSlots.AllowDownload ? Math.Min(srcSlots.MaxDownloadSlots, TransferSlotLimit(sourceProfile)) : 0;
+            var owned = busy.Count(entry => entry.SourceProfileId == sourceProfile.Id &&
+                _raceJobOwners.TryGetValue(entry.Id, out var other) && ReferenceEquals(other.DestinationOwner, race.DestinationOwner));
+            var window = RaceFileWindow.Select(orderedFiles, file => file.Destination, reserved, Math.Max(0, Math.Min(downloads, share) - owned));
+            foreach (var deferred in orderedFiles.Except(window)) race.DeferExistingTarget(deferred.Entry.FullPath);
+            orderedFiles = window.ToList();
+        }
+        var queuedEntries = orderedFiles
             .Select(file => AddQueue(file.Entry.Name, file.Entry.FullPath, file.Destination, TransferDirection.ApiFxp,
                 file.Entry.Size ?? 0, sourceProfile.Id, destinationProfile.Id, persist: false, visionaryRace: race is not null)).ToList();
         jobIds.AddRange(queuedEntries.Select(entry => entry.Id));

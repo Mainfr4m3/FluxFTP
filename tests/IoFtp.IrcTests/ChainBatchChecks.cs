@@ -59,24 +59,36 @@ internal static class ChainBatchChecks
             return Task.FromResult(false);
         }, liveSlots: request => { updates.Enqueue(request); return Task.CompletedTask; });
         async Task<ApiTransferRequest> Next() => await snapshots.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        async Task<ApiTransferRequest> NextSource(string source)
+        {
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            while (true)
+            {
+                var item = await snapshots.Reader.ReadAsync(deadline.Token);
+                if (item.SrcSite == source) return item;
+            }
+        }
         await live.SubmitChainsAsync("TV", "Live-GROUP", "A;B;8;3");
         var first = await Next();
         if (first.SourceDownloadSlots != 8 || first.DestinationUploadSlots != 3) throw new Exception("Live slots lost");
         await live.SubmitChainsAsync("TV", "Live-GROUP", "A;B;4;0");
-        var updated = await Next();
+        var updated = await NextSource("A");
         if (updated.SourceDownloadSlots != 4 || updated.DestinationUploadSlots != 0) throw new Exception("Active watch did not receive changed/zero slots");
+        var firstOwner = liveState!.DestinationOwner;
+        liveState.HasActiveTransfers = true;
         await live.SubmitChainsAsync("TV", "Live-GROUP", "C;B;9;2");
-        updated = await Next();
-        if (updated.SrcSite != "A" || updated.SourceDownloadSlots != 4 || updated.DestinationUploadSlots != 2) throw new Exception("Alternate source changed active writer or its limits");
+        updated = await NextSource("C");
+        if (updated.SrcSite != "C" || updated.SourceDownloadSlots != 9 || !ReferenceEquals(firstOwner, liveState!.DestinationOwner))
+            throw new Exception("Alternate source must be admitted while the first has active work, with its own slots and shared destination ownership");
         await live.SubmitChainsAsync("TV", "Live-GROUP", "A;B");
-        updated = await Next();
+        updated = await NextSource("A");
         if (updated.SourceDownloadSlots != 4 || updated.DestinationUploadSlots != 2) throw new Exception("Legacy update erased live limits");
         liveState!.NotifyTransferCompleted();
         await Next();
         if (updates.Count != 4 || updates.ElementAt(2).SrcSite != "C" || updates.ElementAt(2).SourceDownloadSlots != 9)
             throw new Exception("Slot changes must apply on receipt, including alternate sources, without stale replay on transfer wakeups");
         var invalid = await live.SubmitChainsAsync("TV", "Invalid-GROUP", "A;B;8;3,A;C;-1;4");
-        if (!invalid.StartsWith("ERROR") || snapshots.Reader.TryRead(out _)) throw new Exception("Invalid slot batch partially dispatched");
-        Console.WriteLine("PASS: live slots, active changes, zero, legacy compatibility and atomic invalid batch rejection.");
+        if (!invalid.StartsWith("ERROR") || updates.Count != 4) throw new Exception("Invalid slot batch partially dispatched");
+        Console.WriteLine("PASS: live slots, parallel sources while first source is active, shared destination ownership, legacy compatibility and atomic invalid batch rejection.");
     }
 }
