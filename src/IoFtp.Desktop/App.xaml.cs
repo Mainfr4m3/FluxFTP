@@ -10,6 +10,13 @@ public partial class App : System.Windows.Application
     private const string SingleInstanceMutexName = @"Local\FluxFTP.Desktop.SingleInstance";
     private Mutex? _singleInstanceMutex;
 
+    public App()
+    {
+        DispatcherUnhandledException += (_, args) => Services.CrashReport.Write("Dispatcher", args.Exception);
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+            Services.CrashReport.Write("AppDomain", args.ExceptionObject as Exception);
+    }
+
     protected override void OnStartup(StartupEventArgs e)
     {
         _singleInstanceMutex = new Mutex(true, SingleInstanceMutexName, out var firstInstance);

@@ -2920,10 +2920,15 @@ public partial class MainWindow : Window
 
     private void UpdateQueueStatus() => QueueStatus.Text = $"{_queue.Count(entry => !entry.VisionaryRace && entry.State is "Queued" or "Transferring")} queued";
 
+    private int _engineRefreshPending;
     private void Engine_StateChanged(object? sender, EventArgs e)
     {
+        // Hundreds of parallel state changes need one fresh UI snapshot, not
+        // one Dispatcher closure each (which can starve the UI and pile up).
+        if (Interlocked.Exchange(ref _engineRefreshPending, 1) != 0) return;
         Dispatcher.BeginInvoke(() =>
         {
+            Interlocked.Exchange(ref _engineRefreshPending, 0);
             var queueById = _queue.ToDictionary(item => item.Id);
             foreach (var status in _engine.Snapshot())
             {
@@ -2941,7 +2946,8 @@ public partial class MainWindow : Window
                         _raceLog.Write(retryRace ? "RACE-RETRY" : recoverable ? "HARD-RESET" : "SKIP", $"Failed job {(retryRace ? "waiting for race retry" : recoverable ? "retained" : "removed")}: {entry.Id} {entry.Name}; {status.Error}");
                     }
                     if (entry.VisionaryRace) _hiddenRaceJobStates[entry.Id] = status.State == TransferWorkState.Failed ? "Failed" : "Skipped";
-                    if (_raceJobOwners.TryGetValue(entry.Id, out var wakeRace)) wakeRace.NotifyTransferCompleted();
+                    if (status.State == TransferWorkState.Failed && _raceJobOwners.TryGetValue(entry.Id, out var wakeRace)) wakeRace.NotifyTransferCompleted();
+                    if (entry.VisionaryRace && entry.DestinationProfileId is { } changedTarget) _raceListings.Invalidate(changedTarget);
                     _queue.Remove(entry);
                     _skippedTransferJobs.Remove(entry.Id);
                     _engine.Remove(entry.Id);
@@ -2955,6 +2961,9 @@ public partial class MainWindow : Window
                     _engine.Remove(entry.Id);
                     continue;
                 }
+                // The executor has already decided to skip; its engine task may
+                // still be releasing workers. Do not turn that into Running again.
+                if (_skippedTransferJobs.Contains(entry.Id) && status.State is TransferWorkState.Queued or TransferWorkState.Running) continue;
                 entry.State = status.State switch
                 {
                     TransferWorkState.Queued => "Queued", TransferWorkState.Running => "Transferring",
@@ -3832,7 +3841,13 @@ public partial class MainWindow : Window
 
     private Task<object> StartApiTransferAsync(ApiTransferRequest request) => StartApiTransferCoreAsync(request);
 
-    private string? RaceJobState(Guid id) => _queue.FirstOrDefault(entry => entry.Id == id)?.State ?? _hiddenRaceJobStates.GetValueOrDefault(id);
+    private string? RaceJobState(Guid id)
+    {
+        var entry = _queue.FirstOrDefault(item => item.Id == id);
+        // A skipped executor still owns engine slots until its task returns.
+        // Requeue only after the terminal engine update has retired that job.
+        return entry is not null && _skippedTransferJobs.Contains(id) ? "Transferring" : entry?.State ?? _hiddenRaceJobStates.GetValueOrDefault(id);
+    }
 
     private void ForgetRaceJobs(VisionaryRaceState race)
     {

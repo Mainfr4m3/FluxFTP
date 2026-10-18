@@ -2,6 +2,16 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.23 — 2026-10-18
+
+- Connection-log race prequeue and watch-wait summaries require Debug. Full RACE logs retain these diagnostics; transfer errors and completions remain visible normally.
+
+## 2.1.22 — 2026-10-18
+
+- Skipped race transfers remain busy until their engine tasks release workers. Terminal skips invalidate destination listings and use periodic rechecks instead of immediately waking another pass against stale target data.
+- Engine state notifications coalesce into fresh UI snapshots to avoid accumulating Dispatcher callbacks during heavy transfer activity.
+- Unhandled managed exceptions are recorded, best effort, in %LOCALAPPDATA%\FluxFTP\crash.log with one rotated previous log. Fatal exceptions are not suppressed. The reported 2.1.21 crash cause remains unconfirmed without its exception details.
+
 ## 2.1.21 — 2026-10-18
 
 - Jobs & history > Advanced adds Race recheck interval (1–60 seconds). It applies to Visionary watches, spread polling and temporary-file retry cooldowns; incoming notifications still wake immediately. Existing installations retain their saved race interval until this setting is saved.
