@@ -31,6 +31,9 @@ internal static class ServerStatsChecks
         if (await listings.TryReadStatsAsync(profile, default) is not null || session.Commands != 2) throw new Exception("Statistics interrupted an active listing");
         session.Release.TrySetResult(); await busy;
         session.Unsupported = true;
+        session.Commands = 0;
+        await listings.TryReadStatsAsync(profile, default, userDetails: true);
+        if (session.Commands != 2 || session.LastCommand != "SITE USER user") throw new Exception("Unsupported custom SITE user must try standard user-info syntax");
         if ((await listings.TryReadStatsAsync(profile, default))?.StatusCode != 502 || !session.IsConnected) throw new Exception("Unsupported optional statistics closed a healthy session");
         Console.WriteLine("PASS: server report formatting, bounded output, Debug visibility, existing-login reuse, busy-session skip and unsupported SITE STATS.");
     }
@@ -53,7 +56,7 @@ internal static class ServerStatsChecks
         }
         public Task<RemoteCommandResult> ExecuteCommandAsync(string command, CancellationToken token)
         {
-            if (command is not ("SITE STATS user" or "SITE user")) throw new Exception("Statistics must explicitly query the session's logged-in user");
+            if (command is not ("SITE STATS user" or "SITE user" or "SITE USER user")) throw new Exception("Statistics must explicitly query the session's logged-in user");
             LastCommand = command;
             Commands++; return Task.FromResult(new RemoteCommandResult(Unsupported ? 502 : 200, "UserTop: TestUser"));
         }

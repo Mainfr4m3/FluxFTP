@@ -11,15 +11,17 @@ public partial class MetricsPanel : UserControl
     private readonly Func<MetricsSnapshot> _snapshot;
     private readonly Action _transferJobs, _raceLog, _spreadJobs, _hide;
     private readonly Action<bool> _debugChanged;
+    private readonly Func<Task> _refreshStats;
+    private readonly Action<string> _saveRaceIdentities;
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly DispatcherTimer _saveLayoutTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
     private readonly Dictionary<string, double> _sizes = new();
     private static string LayoutPath => System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FluxFTP", "metrics-layout.json");
-    internal MetricsPanel(Func<MetricsSnapshot> snapshot, Action transferJobs, Action raceLog, Action spreadJobs, Action hide, Action<bool> debugChanged)
+    internal MetricsPanel(Func<MetricsSnapshot> snapshot, Action transferJobs, Action raceLog, Action spreadJobs, Action hide, Action<bool> debugChanged, Func<Task> refreshStats, Func<string> readRaceIdentities, Action<string> saveRaceIdentities)
     {
         _transferJobs = transferJobs; _raceLog = raceLog; _spreadJobs = spreadJobs; _hide = hide;
-        _debugChanged = debugChanged;
-        InitializeComponent(); _snapshot = snapshot; _timer.Tick += (_, _) => RefreshMetrics();
+        _debugChanged = debugChanged; _refreshStats = refreshStats;
+        InitializeComponent(); RaceIdentitiesText.Text = readRaceIdentities(); _saveRaceIdentities = saveRaceIdentities; _snapshot = snapshot; _timer.Tick += (_, _) => RefreshMetrics();
         ConfigureSizes();
         DebugBox.IsChecked = _sizes.GetValueOrDefault("debug") == 1;
         _debugChanged(DebugBox.IsChecked == true);
@@ -89,6 +91,19 @@ public partial class MetricsPanel : UserControl
         }
         catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException) { }
     }
+    private void SaveRaceIdentities_Click(object sender, RoutedEventArgs e)
+    {
+        try { _saveRaceIdentities(RaceIdentitiesText.Text); RaceIdentityStatus.Text = "Saved. Used for future result messages."; }
+        catch (Exception ex) { RaceIdentityStatus.Text = ex.Message; }
+    }
+    private async void RefreshStats_Click(object sender, RoutedEventArgs e)
+    {
+        StatsRefreshButton.IsEnabled = false;
+        StatsStatusText.Text = "Reading available server sessions…";
+        try { await _refreshStats(); RefreshMetrics(); StatsStatusText.Text = "Updated available sessions. Busy sessions can be retried."; }
+        catch (Exception ex) { StatsStatusText.Text = "Statistics unavailable: " + ex.Message; }
+        finally { StatsRefreshButton.IsEnabled = true; }
+    }
     private void Refresh_Click(object sender, RoutedEventArgs e) => RefreshMetrics();
     private void ToggleSizes_Click(object sender, RoutedEventArgs e) => SizeOptions.Visibility =
         SizeOptions.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
@@ -112,7 +127,12 @@ public partial class MetricsPanel : UserControl
             }
             PretText.Text = "PRET " + Timing("PRET"); CpsvText.Text = "CPSV " + Timing("CPSV");
             StorText.Text = "STOR " + Timing("STOR"); DataText.Text = "DATA " + Timing("Data");
+            RaceRoutesList.ItemsSource = dashboard.RaceRoutes ?? [];
+            RaceWinsList.ItemsSource = dashboard.RaceWins ?? [];
+            RaceWinsEmpty.Visibility = dashboard.RaceWins?.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
+            RaceRoutesEmpty.Visibility = dashboard.RaceRoutes?.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
             var stats = dashboard.ServerStats ?? [];
+            ServerStatsEmpty.Visibility = stats.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
             if (!_serverStats.SequenceEqual(stats))
             {
                 _serverStats = stats;

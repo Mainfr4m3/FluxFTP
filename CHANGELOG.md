@@ -2,6 +2,20 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.33 — 2026-10-19
+
+- Permanent CWD/MKD/CWD failures, including MKD File exists followed by a failed final CWD, stop the destination release once across all source states. A shared directory gate and failure state prevent per-file MKD storms; other destination releases continue. Full requested paths and final CWD replies are retained; shortened server reply names are never guessed as transfer targets.
+- FTP exceptions identify the replying site and credential-safe command (USER/PASS arguments excluded), including responses from the other FXP peer. 530 during CWD/MKD/SIZE remains an authentication/permission error rather than being mistaken for a missing path or file.
+- A 530 listing reply on a reused shared connection triggers one fresh login/list attempt with unchanged TLS/proxy settings. Fresh login denial imposes a shared 30-second listing-login cooldown; changing profile credentials clears it. Authentication denials do not trigger automatic MLSD/LIST/STAT protocol fallback. Persistent server denials still require investigating the reported site and command.
+
+## 2.1.32 — 2026-10-19
+
+- Metrics adds session race counts by source/destination from unique Visionary announcements. Repeated section/release/source/destination chains count once; counts are not wins and reset on restart. Duplicate detection retains 100,000 announcements.
+- Confirmed first-place results are shown separately per destination. The bridge forwards a mapped bot's COMPLETE/DONE plus its final STATS [1] username line within 20 seconds; duplicate, unobserved or missing results do not count as wins. Configure /fluxvisi winbot NETWORK #CHANNEL BOT FLUX_SITE and per-site race account names in Metrics if different from FTP logins. A bridge script update/reload is required; the existing DLL is compatible.
+- Server stats now show SITE STATS fallback when custom user-info commands are unsupported. Metrics provides an explicit refresh button and visible unavailable/busy status, reusing existing idle control sessions only. Unsupported SITE username commands also try SITE USER username.
+- One failed source no longer terminates healthy alternative sources for the destination. Failed sources retry after 30 seconds within the original race lifetime; directory-rule blocks and cancellations retain their stop behavior. Destination ownership remains protected across active sources.
+- Listing failures identify the site, path and connect/login versus LIST phase. These diagnostics do not claim to resolve server-side 530 permissions or guarantee equal throughput across FTP daemons.
+
 ## 2.1.31 — 2026-10-19
 
 - Publish the IRC metrics heartbeat independently of tray-menu initialization. The bridge discards saved title prefixes containing previous FluxFTP metrics so fresh values cannot be hidden behind a stale title.

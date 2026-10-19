@@ -164,6 +164,38 @@ internal static class RaceFlowChecks
             return Task.FromResult(new RemoteCommandResult(callsToCreate == 3 ? 250 : 550, "exists"));
         }, default);
         Check(callsToCreate == 3, "concurrent directory creation accepted");
+        var longPath = "/FITV/Unicorn.Academy.Secrets.Revealed.S02E03.FiNNiSH.1080p.WEB.H264-TOOSA";
+        var attemptedPaths = new List<string>();
+        var directoryOwner = new object();
+        var sourceA = new VisionaryRaceState(new()) { DestinationOwner = directoryOwner };
+        var sourceB = new VisionaryRaceState(new()) { DestinationOwner = directoryOwner };
+        var directoryFailures = 0;
+        async Task TryBlocked(VisionaryRaceState owner)
+        {
+            try
+            {
+                await owner.EnsureDestinationDirectoryAsync(() => TransferRejection.EnsureDirectoryAsync(longPath, (command, _) =>
+                {
+                    attemptedPaths.Add(command);
+                    return Task.FromResult(new RemoteCommandResult(command == "CWD /FITV" ? 250 : 550,
+                        command.StartsWith("MKD") ? "550 System Error- /FITV/Unicorn.Academy.Secrets.Revea: File exists." : "550 Access denied"));
+                }, default), default);
+            }
+            catch (IOException) { directoryFailures++; }
+        }
+        await Task.WhenAll(Enumerable.Range(0, 20).Select(index => TryBlocked(index % 2 == 0 ? sourceA : sourceB)));
+        Check(directoryFailures == 20 && attemptedPaths.Count(command => command.StartsWith("MKD")) == 1,
+            "GBIT02 CWD/MKD exists/CWD failure is probed once across all source states");
+        Check(sourceA.DirectoryDenied && sourceB.DirectoryDenied && attemptedPaths.All(command => command.EndsWith("/FITV") || command.EndsWith(longPath)),
+            "permanent directory failure is shared and no truncated directory is guessed");
+        var authCommands = 0;
+        try
+        {
+            await TransferRejection.EnsureDirectoryAsync("/denied", (_, _) =>
+            { authCommands++; return Task.FromResult(new RemoteCommandResult(530, "530 Access denied")); }, default);
+            throw new Exception("530 was ignored");
+        }
+        catch (FtpCommandException ex) { Check(ex.StatusCode == 530 && authCommands == 1 && ex.Command == "CWD /denied", "530 CWD does not trigger MKD"); }
         var cancelled = false;
         try { await TransferRejection.EnsureDirectoryAsync("/release", (_, _) => throw new OperationCanceledException(), default); }
         catch (OperationCanceledException) { cancelled = true; }

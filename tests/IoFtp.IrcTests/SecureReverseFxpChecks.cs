@@ -48,7 +48,11 @@ internal static class SecureReverseFxpChecks
             var to = Session("ioFTPD", targetReader, targetWriter, false);
             var failed = false;
             try { await from.FxpToAsync(to, "/release/file.rar", "/release/file.rar", default, reverseDataConnection: true, offset: resume ? 50 : 0); }
-            catch (FtpCommandException exception) when (exception.StatusCode == 553 && (!resume || rejection == 1)) { failed = true; }
+            catch (FtpCommandException exception) when (exception.StatusCode == 553 && (!resume || rejection == 1))
+            {
+                if (exception.Site != "ioFTPD" || exception.Command != "STOR file.rar") throw new Exception("FXP failure was attributed to the wrong peer or command");
+                failed = true;
+            }
             catch (FtpResumeRejectedException exception) when (resume && rejection >= 2 && exception.CanOverwrite) { failed = true; }
             if (resume && rejection >= 2 && !failed) throw new Exception("Destination append rejection must be eligible for resume recovery");
             if ((!failed && from.LastFxpTransferElapsed <= TimeSpan.Zero) || (failed && from.LastFxpTransferElapsed != TimeSpan.Zero)) throw new Exception("Passive timing must require successful replies from both servers.");
@@ -65,6 +69,32 @@ internal static class SecureReverseFxpChecks
             if (resume && (!sentSource.Contains("REST 50\r\nRETR file.rar") || !sentTarget.Contains("REST 50\r\nSTOR file.rar"))) throw new Exception("FXP resume did not position both servers");
             if (!from.LastFxpNegotiation.Contains("source")) throw new Exception("Missing reverse FXP route diagnostic.");
         }
-        Console.WriteLine("PASS: source CPSV and source PASV/SSCN secure FXP, PRET, slave IP, PORT/STOR direction and 553 rejection.");
+        foreach (var command in new[] { "USER account-name", "PASS secret-password", "CWD /TV/Release" })
+        {
+            using var input = new MemoryStream(Encoding.ASCII.GetBytes("530 Access denied\r\n"));
+            using var reader = new StreamReader(input);
+            using var output = new MemoryStream();
+            using var writer = new StreamWriter(output, leaveOpen: true) { AutoFlush = true };
+            var session = new FtpRemoteSession();
+            var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            typeof(FtpRemoteSession).GetField("_profile", flags)!.SetValue(session, new ConnectionProfile(Guid.NewGuid(), "JBG", "example.invalid", 21, "account-name", TransferProtocol.Ftp));
+            typeof(FtpRemoteSession).GetField("_reader", flags)!.SetValue(session, reader);
+            typeof(FtpRemoteSession).GetField("_writer", flags)!.SetValue(session, writer);
+            var task = (Task)typeof(FtpRemoteSession).GetMethod("CommandAsync", flags)!.Invoke(session, [command, CancellationToken.None])!;
+            await task;
+            var reply = task.GetType().GetProperty("Result")!.GetValue(task);
+            try
+            {
+                typeof(FtpRemoteSession).GetMethod("EnsureSuccess", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [reply, new[] { 200 }]);
+                throw new Exception("Expected FTP denial");
+            }
+            catch (TargetInvocationException ex) when (ex.InnerException is FtpCommandException failure)
+            {
+                var expected = command.StartsWith("CWD") ? command : command.Split(' ')[0];
+                if (failure.Site != "JBG" || failure.Command != expected || failure.Message.Contains("account-name") || failure.Message.Contains("secret-password"))
+                    throw new Exception("530 diagnostics lost site/command or exposed credentials");
+            }
+        }
+        Console.WriteLine("PASS: secure reverse FXP, PRET, correct peer/command attribution and credential-safe 530 diagnostics.");
     }
 }

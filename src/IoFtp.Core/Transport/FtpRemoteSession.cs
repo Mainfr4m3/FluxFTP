@@ -305,7 +305,7 @@ public sealed class FtpRemoteSession : IRemoteSession
                     sourcePassive = await MeasureFxpStageAsync("CPSV", () => FxpCommandAsync("CPSV", cancellationToken));
                     usedCpsv = sourcePassive.Code == 227;
                     if (!usedCpsv && !(Capabilities.Contains("SSCN") && destination.Capabilities.Contains("SSCN")))
-                        throw new FtpCommandException(sourcePassive.Code, sourcePassive.Message);
+                        throw new FtpCommandException(sourcePassive.Code, sourcePassive.Message, sourcePassive.Site, sourcePassive.Command);
                 }
                 if (!usedCpsv)
                 {
@@ -344,7 +344,7 @@ public sealed class FtpRemoteSession : IRemoteSession
                 if (destination.Capabilities.Contains("SSCN"))
                 {
                     var role = await destination.FxpCommandAsync("SSCN OFF", cancellationToken);
-                    if (role.Code != 200 && !IsSscnRoleReply(role)) throw new FtpCommandException(role.Code, role.Message);
+                    if (role.Code != 200 && !IsSscnRoleReply(role)) throw new FtpCommandException(role.Code, role.Message, role.Site, role.Command);
                 }
             }
             else if (secureFxp)
@@ -352,7 +352,7 @@ public sealed class FtpRemoteSession : IRemoteSession
                 var roles = await MeasureFxpStageAsync("SSCN", async () => await Task.WhenAll(
                     FxpCommandAsync("SSCN OFF", cancellationToken), destination.FxpCommandAsync("SSCN ON", cancellationToken)));
                 foreach (var role in roles)
-                    if (role.Code is < 200 or >= 300) throw new FtpCommandException(role.Code, role.Message);
+                    if (role.Code is < 200 or >= 300) throw new FtpCommandException(role.Code, role.Message, role.Site, role.Command);
             }
             FtpPassivePortRange.Ensure(sourceProfile.EffectiveOptions, sourceAdvertised.Port, sourceProfile.Name);
             await MeasureFxpStageAsync("PORT", () =>
@@ -408,7 +408,7 @@ public sealed class FtpRemoteSession : IRemoteSession
             if (Capabilities.Contains("SSCN"))
             {
                 var role = await FxpCommandAsync("SSCN OFF", cancellationToken);
-                if (role.Code != 200 && !IsSscnRoleReply(role)) throw new FtpCommandException(role.Code, role.Message);
+                if (role.Code != 200 && !IsSscnRoleReply(role)) throw new FtpCommandException(role.Code, role.Message, role.Site, role.Command);
             }
             LastFxpNegotiation = "CPSV";
         }
@@ -419,10 +419,10 @@ public sealed class FtpRemoteSession : IRemoteSession
                 destination.FxpCommandAsync("SSCN OFF", cancellationToken)));
             var secureClient = secureReplies[0];
             if (secureClient.Code is < 200 or >= 300)
-                throw new FtpCommandException(secureClient.Code, secureClient.Message);
+                throw new FtpCommandException(secureClient.Code, secureClient.Message, secureClient.Site, secureClient.Command);
             var secureServer = secureReplies[1];
             if (secureServer.Code is < 200 or >= 300)
-                throw new FtpCommandException(secureServer.Code, secureServer.Message);
+                throw new FtpCommandException(secureServer.Code, secureServer.Message, secureServer.Site, secureServer.Command);
             LastFxpNegotiation = "SSCN/PASV";
         }
         else LastFxpNegotiation = "PASV";
@@ -487,7 +487,7 @@ public sealed class FtpRemoteSession : IRemoteSession
         if (resumeOffset > 0 && command.StartsWith("STOR ", StringComparison.OrdinalIgnoreCase) &&
             FtpResumeRejectedException.IsAppendPermissionRejection(response.Code, response.Message))
             throw new FtpResumeRejectedException(response.Message, response.Code);
-        throw new FtpCommandException(response.Code, response.Message);
+        throw new FtpCommandException(response.Code, response.Message, response.Site, response.Command);
     }
 
     private async Task SetClearDataProtectionAsync(CancellationToken cancellationToken)
@@ -582,7 +582,7 @@ public sealed class FtpRemoteSession : IRemoteSession
         if (Capabilities.Contains("MLSD"))
         {
             try { return await ListDataCoreAsync(path, "MLSD", ParseMlsdListing, cancellationToken); }
-            catch (Exception exception) when (exception is not OperationCanceledException)
+            catch (Exception exception) when (exception is not OperationCanceledException && exception is not FtpCommandException { StatusCode: 530 })
             {
                 failures.Add(exception);
                 await ReconnectAfterListResetAsync(cancellationToken);
@@ -590,7 +590,7 @@ public sealed class FtpRemoteSession : IRemoteSession
         }
 
         try { return await ListDataCoreAsync(path, "LIST", ParseListing, cancellationToken); }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (Exception exception) when (exception is not OperationCanceledException && exception is not FtpCommandException { StatusCode: 530 })
         {
             failures.Add(exception);
             await ReconnectAfterListResetAsync(cancellationToken);
@@ -598,7 +598,7 @@ public sealed class FtpRemoteSession : IRemoteSession
 
         var stat = await CommandAsync($"STAT -l {path}", cancellationToken);
         if (stat.Code is >= 200 and < 300) return ParseStatListing(path, stat.Message);
-        failures.Add(new FtpCommandException(stat.Code, stat.Message));
+        failures.Add(new FtpCommandException(stat.Code, stat.Message, stat.Site, stat.Command));
         throw new AggregateException("MLSD, LIST and STAT -l all failed.", failures);
     }
 
@@ -621,7 +621,7 @@ public sealed class FtpRemoteSession : IRemoteSession
                 // must continue to a real LIST data transfer.
             }
             if (_profile.ListingMode == DirectoryListingMode.StatOnly)
-                throw new FtpCommandException(stat.Code, stat.Message);
+                throw new FtpCommandException(stat.Code, stat.Message, stat.Site, stat.Command);
         }
 
         await PrepareDataCommandAsync($"{command} {path}", cancellationToken);
@@ -788,6 +788,8 @@ public sealed class FtpRemoteSession : IRemoteSession
             throw new InvalidOperationException("Credential commands are blocked in the command console.");
         _directoryProbePath = directoryProbe && normalized.StartsWith("CWD ", StringComparison.OrdinalIgnoreCase) ? normalized[4..] : null;
         var response = await CommandAsync(normalized, cancellationToken);
+        if (directoryProbe && response.Code == 530)
+            throw new FtpCommandException(response.Code, response.Message, response.Site, response.Command);
         // ioFTPD CWD event scripts can emit an additional 250 reply after the
         // normal CWD completion. If it arrives just after SITE PRE is sent,
         // it is the first reply we read even though it belongs to CWD. Keep
@@ -812,6 +814,7 @@ public sealed class FtpRemoteSession : IRemoteSession
     {
         EnsureConnected();
         var response = await CommandAsync($"SIZE {remotePath}", cancellationToken);
+        if (response.Code == 530) throw new FtpCommandException(response.Code, response.Message, response.Site, response.Command);
         if (response.Code != 213) return null;
         var value = response.Message.Split([' ', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
         return long.TryParse(value, out var size) ? size : null;
@@ -1374,7 +1377,7 @@ public sealed class FtpRemoteSession : IRemoteSession
             }
             while (!line.StartsWith(terminator, StringComparison.Ordinal));
         }
-        return new FtpResponse(code, string.Join(Environment.NewLine, lines));
+        return new FtpResponse(code, string.Join(Environment.NewLine, lines), _profile?.Name, _lastDiagnosticCommand);
     }
 
     private void EmitReply(string message)
@@ -1386,7 +1389,7 @@ public sealed class FtpRemoteSession : IRemoteSession
 
     private static void EnsureSuccess(FtpResponse response, params int[] allowed)
     {
-        if (!allowed.Contains(response.Code)) throw new FtpCommandException(response.Code, response.Message);
+        if (!allowed.Contains(response.Code)) throw new FtpCommandException(response.Code, response.Message, response.Site, response.Command);
     }
 
     private static (string Host, int Port) ParsePassiveEndpoint(string response)
@@ -1470,10 +1473,13 @@ public sealed class FtpRemoteSession : IRemoteSession
     private static string Combine(string parent, string name) => $"/{string.Join('/', new[] { parent.Trim('/'), name }.Where(value => value.Length > 0))}";
     private static string RedactCommand(string command) =>
         command.StartsWith("PASS ", StringComparison.OrdinalIgnoreCase) ? "PASS ********" : command;
-    private sealed record FtpResponse(int Code, string Message);
+    private sealed record FtpResponse(int Code, string Message, string? Site = null, string? Command = null);
 }
 
-public sealed class FtpCommandException(int statusCode, string message) : IOException(message)
+public sealed class FtpCommandException(int statusCode, string message, string? site = null, string? command = null)
+    : IOException(site is null && command is null ? message : $"{message} | site={site ?? "unknown"}; command={command ?? "unknown"}")
 {
     public int StatusCode { get; } = statusCode;
+    public string? Site { get; } = site;
+    public string? Command { get; } = command;
 }

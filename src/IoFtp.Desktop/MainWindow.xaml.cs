@@ -2253,9 +2253,9 @@ public partial class MainWindow : Window
                 if (!raceOwner.DirectoryDenialReported)
                 {
                     raceOwner.DirectoryDenialReported = true;
-                    var siblings = _raceJobOwners.Where(pair => ReferenceEquals(pair.Value, raceOwner) && pair.Key != entry.Id)
+                    var siblings = _raceJobOwners.Where(pair => ReferenceEquals(pair.Value.DestinationOwner, raceOwner.DestinationOwner) && pair.Key != entry.Id)
                         .Select(pair => pair.Key).ToArray();
-                    var message = $"RACE destination blocked [DIRECTORY-DENIED]: {entry.RuleRelease ?? entry.Name}; target={entry.DestinationProfileId}; path={RemoteParent(entry.Destination)}. Server denied directory creation; remaining jobs for this destination are cancelled. Other destinations continue. {FriendlyMessage(exception)}";
+                    var message = $"RACE destination blocked [DIRECTORY-DENIED]: {entry.RuleRelease ?? entry.Name}; target={entry.DestinationProfileId}; path={RemoteParent(entry.Destination)}. Destination directory unavailable after CWD/MKD/CWD; remaining jobs from all sources for this destination release are cancelled. No truncated/alternate name is used. Other destinations continue. {FriendlyMessage(exception)}";
                     _raceLog.Write("DIRECTORY-DENIED", message);
                     AppendConnectionLog(Environment.NewLine + message);
                     foreach (var id in siblings) RemoveTransferJob(id);
@@ -3384,7 +3384,7 @@ public partial class MainWindow : Window
                 () => TransferJobs_Click(this, new RoutedEventArgs()),
                 () => RaceLog_Click(this, new RoutedEventArgs()),
                 () => SpreadJobs_Click(this, new RoutedEventArgs()),
-                () => Metrics_Click(this, new RoutedEventArgs()), enabled => _visionaryDebugEnabled = enabled);
+                () => Metrics_Click(this, new RoutedEventArgs()), enabled => _visionaryDebugEnabled = enabled, RefreshServerStatsAsync, ReadRaceIdentities, text => new RaceIdentityStore().Save(text));
         if (!show) _metricsHeight = new GridLength(Math.Max(70, MetricsRow.ActualHeight));
         MetricsHost.Visibility = MetricsSplitter.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
         MetricsSplitterRow.Height = new GridLength(show ? 6 : 0);
@@ -3436,8 +3436,8 @@ public partial class MainWindow : Window
             new MetricsDashboard(FormatSize(_sessionStatistics.Uploaded + _sessionStatistics.Downloaded + _sessionStatistics.Fxp + _sessionStatistics.Local),
                 _sessionStatistics.Completed, FormatTransferTime(_sessionStatistics.Uptime), _workerPool.Values.Sum(pool => pool.Count),
                 _sessionStatistics.Hits, $"{_sessionStatistics.FxpRecentRate / 1_000_000d:0.00} MB/s", _sessionStatistics.TrafficMinutes, _latestFxpTimings,
-                _serverStats.Values.Where(value => value.Command == "USER")
-                    .OrderBy(value => value.Site, StringComparer.OrdinalIgnoreCase).ToArray()));
+                _serverStats.Values.GroupBy(value => value.Site, StringComparer.OrdinalIgnoreCase).Select(group => group.OrderBy(value => value.Command == "USER" ? 0 : value.Command == "STATS" ? 1 : 2).First())
+                    .OrderBy(value => value.Site, StringComparer.OrdinalIgnoreCase).ToArray(), _raceRouteStatistics.Snapshot(), _raceRouteStatistics.Wins()));
     }
 
     private readonly System.Windows.Threading.DispatcherTimer _statusScrollTimer = new() { Interval = TimeSpan.FromMilliseconds(30) };
@@ -3829,7 +3829,7 @@ public partial class MainWindow : Window
                     _settings = updated;
                     await RestartIrcAsync();
                 }), visionaryStep: RunVisionaryStepAsync, visionarySlots: UpdateVisionarySlotsAsync,
-                sourcePriority: site => _raceSitePriorities.GetValueOrDefault(site));
+                sourcePriority: site => _raceSitePriorities.GetValueOrDefault(site), raceObserved: request => _raceRouteStatistics.Record(request.SrcSection!, request.Name!, request.SrcSite!, request.DstSite!), raceResult: RecordRaceResult);
             if (_settings.EnableHttpsApi)
                 LogText.AppendText($"{Environment.NewLine}HTTPS/JSON API listening on {(_settings.ApiLocalhostOnly ? "localhost" : "0.0.0.0")}:{_settings.HttpsApiPort}");
         }
@@ -3841,6 +3841,7 @@ public partial class MainWindow : Window
         LogText.ScrollToEnd();
     }
 
+    private readonly RaceRouteStatistics _raceRouteStatistics = new();
     private Task<object> StartApiTransferAsync(ApiTransferRequest request) => StartApiTransferCoreAsync(request);
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _raceSitePriorities = new(StringComparer.OrdinalIgnoreCase);
 
@@ -3878,7 +3879,6 @@ public partial class MainWindow : Window
             });
             if (finished || !race.SourceAvailable)
             {
-                RaceDestinationLease.Release(race.DestinationOwner);
                 await Dispatcher.InvokeAsync(() =>
                 {
                     if (finished)
@@ -3890,6 +3890,7 @@ public partial class MainWindow : Window
                         }
                     race.ServerReports.Clear();
                     ForgetRaceJobs(race);
+                    ReleaseRaceDestinationIfIdle(race);
                 });
                 if (finished) await ReadRaceServerStatsAsync(request, token);
             }
@@ -3897,15 +3898,72 @@ public partial class MainWindow : Window
         }
         catch
         {
-            RaceDestinationLease.Release(race.DestinationOwner);
             await Dispatcher.InvokeAsync(() =>
             {
                 foreach (var id in _raceJobOwners.Where(pair => ReferenceEquals(pair.Value, race)).Select(pair => pair.Key).ToArray())
                     if (_queue.FirstOrDefault(item => item.Id == id) is { State: not "Completed" } entry)
                         RemoveTransferJob(entry.Id);
                 ForgetRaceJobs(race);
+                ReleaseRaceDestinationIfIdle(race);
             });
             throw;
+        }
+    }
+
+    private void ReleaseRaceDestinationIfIdle(VisionaryRaceState race)
+    {
+        if (!_queue.Any(entry => entry.State is "Queued" or "Transferring" &&
+            _raceJobOwners.TryGetValue(entry.Id, out var other) && ReferenceEquals(other.DestinationOwner, race.DestinationOwner)))
+            RaceDestinationLease.Release(race.DestinationOwner);
+    }
+
+    private string ReadRaceIdentities()
+    {
+        var overrides = new RaceIdentityStore().Load();
+        return string.Join(Environment.NewLine, new ProfileStore().Load().OrderBy(profile => profile.Name)
+            .Select(profile => profile.Name + "=" + overrides.GetValueOrDefault(profile.Name, profile.Username.TrimStart('!'))));
+    }
+    private void RecordRaceResult(string site, string release, string winner)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            var profile = new ProfileStore().Load().FirstOrDefault(item => item.Name.Equals(site, StringComparison.OrdinalIgnoreCase));
+            if (profile is null) return;
+            var user = new RaceIdentityStore().Load().GetValueOrDefault(site, profile.Username.TrimStart('!'));
+            if (_raceRouteStatistics.RecordResult(site, release, winner, user))
+                AppendConnectionLog($"{Environment.NewLine}RACE RESULT [{site}] {release}: first place={winner}; our account={user}");
+        });
+    }
+
+    private async Task RefreshServerStatsAsync()
+    {
+        var profiles = new ProfileStore().Load();
+        foreach (var profile in profiles)
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            try
+            {
+                RemoteCommandResult? reply = null;
+                var kind = "USER";
+                reply = await _raceListings.TryReadStatsAsync(ApplyGlobalProxy(profile), timeout.Token, userDetails: true);
+                if (reply is { StatusCode: < 200 or >= 300 })
+                {
+                    kind = "STATS";
+                    reply = await _raceListings.TryReadStatsAsync(ApplyGlobalProxy(profile), timeout.Token);
+                }
+                if (reply is { StatusCode: >= 200 and < 300 })
+                {
+                    if (kind == "STATS") _serverStats.Remove((profile.Id, "USER"));
+                    _serverStats[(profile.Id, kind)] = new(profile.Name, profile.Username, DateTimeOffset.UtcNow, ServerTransferReport.Clean(reply.Message), kind);
+                }
+                else if (!_serverStats.Keys.Any(key => key.Site == profile.Id))
+                    _serverStats[(profile.Id, "STATUS")] = new(profile.Name, profile.Username, DateTimeOffset.UtcNow,
+                        reply is null ? "No idle shared session. Use/connect this site and retry." : $"Server returned {reply.StatusCode}: {ServerTransferReport.Clean(reply.Message)}", "STATUS");
+            }
+            catch (Exception ex)
+            {
+                _serverStats[(profile.Id, "STATUS")] = new(profile.Name, profile.Username, DateTimeOffset.UtcNow, "Statistics unavailable: " + FriendlyMessage(ex), "STATUS");
+            }
         }
     }
 

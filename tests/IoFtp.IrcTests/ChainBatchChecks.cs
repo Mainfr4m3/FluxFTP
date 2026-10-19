@@ -8,12 +8,12 @@ internal static class ChainBatchChecks
     {
         var accepted = new List<string>();
         await using var server = new VisionaryPipeServer(request => { accepted.Add(request.SrcSite + "->" + request.DstSite); return Task.FromResult<object>(new { ok = true }); });
-        async Task<string> Send(string line)
+        async Task<string> Send(string line, VisionaryPipeServer? receiver = null)
         {
             using var stream = new MemoryStream();
             var input = Encoding.UTF8.GetBytes(line + "\n"); stream.Write(input); stream.Position = 0;
             var method = typeof(VisionaryPipeServer).GetMethod("HandleAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
-            await (Task)method.Invoke(server, [stream, CancellationToken.None, 0L])!;
+            await (Task)method.Invoke(receiver ?? server, [stream, CancellationToken.None, 0L])!;
             return Encoding.UTF8.GetString(stream.ToArray(), input.Length, (int)stream.Length - input.Length);
         }
         var response = await Send("CHAINS\tTV\tRelease-GROUP\tA;B,A;C,B;D\t1\t2");
@@ -23,6 +23,11 @@ internal static class ChainBatchChecks
         response = await Send("TRANSFER\tTV\tRelease-GROUP\tA\tE");
         if (!response.StartsWith("OK") || accepted.Last() != "A->E") throw new Exception("Legacy single transfer broken");
         Console.WriteLine("PASS: complete chain batch, invalid batch rejection, acknowledgement and legacy single transfer.");
+        string? resultEvent = null;
+        await using var results = new VisionaryPipeServer(_ => throw new Exception("Result must not start a transfer"),
+            raceResult: (site, release, winner) => resultEvent = site + ":" + release + ":" + winner);
+        var resultAck = await Send("TRANSFER\tTV\tRelease-GROUP\tTIS\t@RESULT:Me\t0\t0", results);
+        if (!resultAck.StartsWith("OK RACE RESULT") || resultEvent != "TIS:Release-GROUP:Me") throw new Exception("Ranking result forwarding failed");
         var started = 0;
         var allStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var watches = new VisionaryPipeServer(_ => Task.FromResult<object>(new { ok = true }), raceStep: (_, _, token) =>
@@ -49,6 +54,17 @@ internal static class ChainBatchChecks
         await periodic.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(65));
         Console.WriteLine("PASS: watch rechecks without a second incoming Visi announcement.");
         var snapshots = System.Threading.Channels.Channel.CreateUnbounded<ApiTransferRequest>();
+        var alternateWorked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var resilient = new VisionaryPipeServer(_ => Task.FromResult<object>(new { ok = true }), raceStep: (request, _, token) =>
+        {
+            token.ThrowIfCancellationRequested();
+            if (request.SrcSite == "A") throw new IOException("530 Access denied");
+            alternateWorked.TrySetResult();
+            return Task.FromResult(true);
+        });
+        await resilient.SubmitChainsAsync("TV", "Source.Failure-GROUP", "A;B,C;B");
+        await alternateWorked.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Console.WriteLine("PASS: denied first source does not terminate a healthy alternative source.");
         var priorityPasses = System.Threading.Channels.Channel.CreateUnbounded<string>();
         var updates = new System.Collections.Concurrent.ConcurrentQueue<ApiTransferRequest>();
         VisionaryRaceState? liveState = null;

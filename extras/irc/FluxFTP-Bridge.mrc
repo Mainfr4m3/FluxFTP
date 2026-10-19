@@ -252,6 +252,12 @@ alias -l fluxdll.menu.download {
 alias -l fluxvisi.dll return $scriptdir $+ $iif($bits == 64,FluxFTPVisionary64.dll,FluxFTPVisionary32.dll)
 
 alias fluxvisi {
+  if ($1 == winbot) {
+    if ($0 != 5) { echo -ag Usage: /fluxvisi winbot NETWORK #CHANNEL BOT FLUX_SITE | return }
+    set $+(%,fluxvisi.win.,$lower($2),.,$lower($3),.,$lower($4)) $5
+    echo -ag FluxFTP race ranking mapping saved for $2 $3 $4 -> $5
+    return
+  }
   if ($1 == update) {
     if ($0 != 4) { echo -ag Usage: /fluxvisi update SECTION RELEASE SITE | return }
     echo -ag $dll($fluxvisi.dll,FluxFTPTransfer,$2-4 @UPDATE)
@@ -289,11 +295,29 @@ alias fluxvisi {
 ; DONE announcements are forwarded only for explicitly mapped network/channel/bot/section combinations.
 on *:TEXT:*:#:{
   var %done.text = $strip($1-)
-  if (!$regex(%done.text,/^(DONE|RACE|FAST|HALF):\s+-([A-Z0-9_-]+)-\s+(\S+)\s+/i)) return
+  var %rank.key = $+($lower($network),.,$lower($chan),.,$lower($nick))
+  if ($regex(%done.text,/^STATS:\s+\[1\]\s+(\S+)\s*\/\s*/i)) {
+    var %rank.user = $regml(1), %rank.pending = $eval($+(%,fluxvisi.rank.,%rank.key),2)
+    if ($numtok(%rank.pending,32) == 4 && $calc($ctime - $gettok(%rank.pending,1,32)) isnum 0-20) {
+      echo @FluxFTP $timestamp $dll($fluxvisi.dll,FluxFTPTransfer,$gettok(%rank.pending,3,32) $gettok(%rank.pending,4,32) $gettok(%rank.pending,2,32) $+(@RESULT:,%rank.user))
+    }
+    unset $+(%,fluxvisi.rank.,%rank.key)
+    return
+  }
+  if (!$regex(%done.text,/^(DONE|COMPLETE|RACE|FAST|HALF):\s+-([A-Z0-9_-]+)-\s+(\S+)\s+/i)) return
   var %event = $regml(1), %done.section = $regml(2), %done.release = $regml(3)
   var %done.binding = $eval($+(%,fluxvisi.done.,$lower($network),.,$lower($chan),.,$lower($nick),.,$lower(%done.section)),2)
+  if (%event == DONE || %event == COMPLETE) {
+    var %rank.old = $eval($+(%,fluxvisi.rank.,%rank.key),2)
+    if (%rank.old != $null) set -eu20 $+(%,fluxvisi.rankblocked.,%rank.key) 1
+    unset $+(%,fluxvisi.rank.,%rank.key)
+    var %rank.site = $eval($+(%,fluxvisi.win.,%rank.key),2)
+    if ($numtok(%done.binding,32) == 2) %rank.site = $gettok(%done.binding,1,32)
+    var %rank.blocked = $eval($+(%,fluxvisi.rankblocked.,%rank.key),2)
+    if (%rank.site != $null && !%rank.blocked) set -eu20 $+(%,fluxvisi.rank.,%rank.key) $ctime %rank.site %done.section %done.release
+  }
   if ($numtok(%done.binding,32) != 2) return
-  if (%event == DONE) fluxvisi complete $gettok(%done.binding,2,32) %done.release $gettok(%done.binding,1,32)
+  if (%event == DONE || %event == COMPLETE) fluxvisi complete $gettok(%done.binding,2,32) %done.release $gettok(%done.binding,1,32)
   else fluxvisi update $gettok(%done.binding,2,32) %done.release $gettok(%done.binding,1,32)
 }
 

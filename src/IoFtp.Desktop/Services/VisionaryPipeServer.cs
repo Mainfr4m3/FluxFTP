@@ -27,16 +27,21 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
     private readonly RaceWatchSlots _watchSlots;
     private readonly int? _recheckSeconds;
     private readonly Func<string, int> _sourcePriority;
+    private readonly Action<ApiTransferRequest>? _raceObserved;
+    private readonly Action<string, string, string>? _raceResult;
 
     public VisionaryPipeServer(Func<ApiTransferRequest, Task<object>> startTransfer, Action<string>? log = null,
         Func<ApiTransferRequest, VisionaryRaceState, CancellationToken, Task<bool>>? raceStep = null,
         Func<ApiTransferRequest, Task>? liveSlots = null, int concurrentScheduling = 32, int? recheckSeconds = null,
-        Func<string, int>? sourcePriority = null)
+        Func<string, int>? sourcePriority = null, Action<ApiTransferRequest>? raceObserved = null,
+        Action<string, string, string>? raceResult = null)
     {
         _startTransfer = startTransfer; _log = log; _raceStep = raceStep; _liveSlots = liveSlots;
         _watchSlots = new RaceWatchSlots(Math.Clamp(concurrentScheduling, 1, 2048));
         _recheckSeconds = recheckSeconds;
         _sourcePriority = sourcePriority ?? (_ => 0);
+        _raceObserved = raceObserved;
+        _raceResult = raceResult;
     }
 
     public void Start() => _listener = ListenAsync(_cancellation.Token);
@@ -111,6 +116,16 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
         { await writer.WriteLineAsync("ERROR Expected TRANSFER<TAB>section<TAB>release<TAB>source<TAB>target"); return; }
         try
         {
+            if (fields[4].StartsWith("@RESULT:", StringComparison.Ordinal))
+            {
+                VisionaryTransferProfiles.ReleasePath(fields[2]);
+                var winner = fields[4][8..];
+                if (winner.Length is < 1 or > 128 || winner.Any(char.IsControl) || fields[3].Contains('/') || fields[3].Contains('\\'))
+                    throw new ArgumentException("Invalid race-result site or winner.");
+                _raceResult?.Invoke(fields[3], fields[2], winner);
+                await writer.WriteLineAsync("OK RACE RESULT " + fields[2]);
+                return;
+            }
             if (fields[4] is "@DONE" or "@UPDATE")
             {
                 VisionaryTransferProfiles.ReleasePath(fields[2]);
@@ -133,6 +148,7 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
                     fields.Length == 9 && fields[7] != "-" ? int.Parse(fields[7]) : null,
                     fields.Length == 9 && fields[8] != "-" ? int.Parse(fields[8]) : null);
                 if (_liveSlots is not null) await _liveSlots(incoming);
+                _raceObserved?.Invoke(incoming);
                 var sources = _sources.GetOrAdd(key, _ => new(StringComparer.OrdinalIgnoreCase));
                 sources.AddOrUpdate(incoming.SrcSite!, incoming, (_, previous) => incoming with {
                     SourceDownloadSlots = incoming.SourceDownloadSlots ?? previous.SourceDownloadSlots,
@@ -193,6 +209,7 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
         var owner = state.DestinationOwner;
         var completed = false;
         var sourceOffset = 0;
+        var retrySources = new Dictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
         _log?.Invoke(label + " accepted; waiting for a watch slot");
         try
         {
@@ -210,6 +227,7 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
                 for (var i = 0; i < available.Length; i++)
                 {
                     var next = available[i];
+                    if (retrySources.TryGetValue(next.SrcSite!, out var retryAt) && DateTimeOffset.UtcNow < retryAt) continue;
                     if (!sourceStates.TryGetValue(next.SrcSite!, out var nextState))
                     {
                         nextState = new VisionaryRaceState(options) {
@@ -229,7 +247,18 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
                     state.StartTrace?.Mark("watch-admitted");
                     if (!admitted) _log?.Invoke(label + $" watching source; recheck={options.EffectiveRecheckSeconds}s; maximum lifetime={options.EffectiveTimeout.TotalMinutes:0} min");
                     admitted = true;
-                    if (await _raceStep!(request, state, lifetime.Token)) { completed = true; break; }
+                    try
+                    {
+                        if (await _raceStep!(request, state, lifetime.Token)) { completed = true; break; }
+                    }
+                    catch (Exception ex) when (!lifetime.IsCancellationRequested && ex is not OperationCanceledException && !state.DirectoryDenied)
+                    {
+                        // RunVisionaryStep cleans this source's jobs before throwing.
+                        // Do not terminate healthy alternatives for one source failure.
+                        retrySources[request.SrcSite!] = DateTimeOffset.UtcNow.AddSeconds(30);
+                        sourceStates.Remove(request.SrcSite!);
+                        _log?.Invoke($"VISIONARY source FAILED {request.Name}: {request.SrcSite} -> {request.DstSite}: {ex.Message}; retry in 30s; other sources continue");
+                    }
                     }
                 }
                 sourceOffset = available.Length == 0 ? 0 : (sourceOffset + 1) % available.Length;
@@ -268,6 +297,7 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
                     try { await _raceStep!(request with { SrcSite = pair.Key }, pair.Value, lifetime.Token); } catch (Exception) { }
                 }
             }
+            RaceDestinationLease.Release(owner);
         }
     }
 

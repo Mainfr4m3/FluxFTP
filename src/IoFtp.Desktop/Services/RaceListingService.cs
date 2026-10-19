@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
+using System.IO;
 using System.Diagnostics;
 using IoFtp.Core.Abstractions;
 using IoFtp.Core.Models;
+using IoFtp.Core.Transport;
 
 namespace IoFtp.Desktop.Services;
 
@@ -21,6 +23,8 @@ internal sealed class RaceListingService : IAsyncDisposable
         public ConnectionProfile? Profile;
         public IRemoteSession? Session;
         public long LastUsed = Stopwatch.GetTimestamp();
+        public DateTimeOffset LoginRetryAfter;
+        public string? LoginFailure;
     }
     private sealed record Snapshot(long At, IReadOnlyList<RemoteEntry> Entries);
 
@@ -50,18 +54,37 @@ internal sealed class RaceListingService : IAsyncDisposable
             {
                 await CloseAsync(source).ConfigureAwait(false);
                 source.Profile = profile;
+                source.LoginRetryAfter = default;
+                source.LoginFailure = null;
             }
             source.LastUsed = Stopwatch.GetTimestamp();
+            if (DateTimeOffset.UtcNow < source.LoginRetryAfter)
+                throw new IOException($"Race listing site={profile.Name}; operation=connect/login cooldown until {source.LoginRetryAfter:O}: {source.LoginFailure}");
             if (source.Listings.TryGetValue(path, out var cached) && Stopwatch.GetElapsedTime(cached.At) < _freshness)
                 return cached.Entries;
+            var phase = "LIST";
+            var reused = source.Session?.IsConnected == true;
             try
             {
                 if (source.Session?.IsConnected != true)
                 {
+                    phase = "connect/login";
                     await CloseAsync(source).ConfigureAwait(false);
                     source.Session = await _connect(profile, token).ConfigureAwait(false);
                 }
-                var entries = await source.Session.ListAsync(path, token).ConfigureAwait(false);
+                phase = "LIST";
+                IReadOnlyList<RemoteEntry> entries;
+                try { entries = await source.Session.ListAsync(path, token).ConfigureAwait(false); }
+                catch (Exception exception) when (reused && !token.IsCancellationRequested && IsAccessDenied(exception))
+                {
+                    // A pooled control session may have been logged out by the
+                    // server. Reauthenticate once with the same TLS/proxy policy.
+                    await CloseAsync(source).ConfigureAwait(false);
+                    phase = "reconnect/login after LIST 530";
+                    source.Session = await _connect(profile, token).ConfigureAwait(false);
+                    phase = "LIST after reconnect";
+                    entries = await source.Session.ListAsync(path, token).ConfigureAwait(false);
+                }
                 // Publish only a fully successful listing. Destination filtering remains per watch.
                 var snapshot = Array.AsReadOnly(entries.ToArray());
                 foreach (var stale in source.Listings.Where(pair => Stopwatch.GetElapsedTime(pair.Value.At) >= _freshness).Select(pair => pair.Key).ToArray())
@@ -70,10 +93,16 @@ internal sealed class RaceListingService : IAsyncDisposable
                 source.Listings[path] = new Snapshot(Stopwatch.GetTimestamp(), snapshot);
                 return snapshot;
             }
-            catch
+            catch (Exception exception)
             {
+                if (phase.Contains("login", StringComparison.Ordinal) && IsAccessDenied(exception))
+                {
+                    source.LoginFailure = exception.Message;
+                    source.LoginRetryAfter = DateTimeOffset.UtcNow.AddSeconds(30);
+                }
                 await CloseAsync(source).ConfigureAwait(false);
-                throw;
+                if (exception is OperationCanceledException) throw;
+                throw new IOException($"Race listing site={profile.Name}; operation={phase}; path={path}: {exception.Message}", exception);
             }
         }
         finally { source.LastUsed = Stopwatch.GetTimestamp(); source.Gate.Release(); }
@@ -99,12 +128,17 @@ internal sealed class RaceListingService : IAsyncDisposable
                 source.Session = await _connect(profile, token).ConfigureAwait(false);
             }
             var response = await source.Session.ExecuteCommandAsync("SIZE " + path, token).ConfigureAwait(false);
+            if (response.StatusCode == 530) throw new FtpCommandException(response.StatusCode, response.Message, profile.Name, "SIZE " + path);
             var value = response.Message.Split([' ', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
             return response.StatusCode == 213 && long.TryParse(value, out var size) && size >= 0 ? size : null;
         }
         catch { await CloseAsync(source).ConfigureAwait(false); throw; }
         finally { source.LastUsed = Stopwatch.GetTimestamp(); source.Gate.Release(); }
     }
+
+    private static bool IsAccessDenied(Exception exception) => exception is FtpCommandException { StatusCode: 530 } ||
+        exception is AggregateException aggregate && aggregate.InnerExceptions.Any(IsAccessDenied) ||
+        exception.InnerException is { } inner && IsAccessDenied(inner);
 
     public async Task<long?> TryReadTransferSizeAsync(ConnectionProfile profile, string path, CancellationToken token)
     {
@@ -145,7 +179,13 @@ internal sealed class RaceListingService : IAsyncDisposable
             if (source.Profile != profile || source.Session?.IsConnected != true) return null;
             var username = source.Profile.Username;
             if (string.IsNullOrWhiteSpace(username) || username.Any(char.IsControl)) return null;
-            try { return await source.Session.ExecuteCommandAsync((userDetails ? "SITE " : "SITE STATS ") + username, token).ConfigureAwait(false); }
+            try
+            {
+                var result = await source.Session.ExecuteCommandAsync((userDetails ? "SITE " : "SITE STATS ") + username, token).ConfigureAwait(false);
+                if (userDetails && result.StatusCode is 500 or 502)
+                    result = await source.Session.ExecuteCommandAsync("SITE USER " + username, token).ConfigureAwait(false);
+                return result;
+            }
             catch { await CloseAsync(source).ConfigureAwait(false); throw; }
         }
         finally { source.LastUsed = Stopwatch.GetTimestamp(); source.Gate.Release(); }

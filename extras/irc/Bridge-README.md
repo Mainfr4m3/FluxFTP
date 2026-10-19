@@ -52,3 +52,20 @@ For full startup timing, use the supplied script and DLLs; RACE-Log records VISI
 Optional API commands: /fluxftp config <password> [port] [IPv4 address]
 Optional DLL API commands: /fluxdll config <password> [port] [IPv4 address]
 Completion mapping: /fluxvisi donebot NETWORK #CHANNEL BOT FLUX_SITE ANNOUNCED_SECTION FLUX_SECTION
+
+
+### Confirmed race wins in Metrics
+
+Race route counts are unique Visionary section/release/source/destination announcements received during this FluxFTP session, not wins. Counts reset when FluxFTP restarts; duplicate protection retains the latest 100,000 announcements.
+
+Wins are counted separately per destination. In Metrics, expand Race account names per site and save SITE=nickname entries if the bot uses a name different from the saved FTP login. The default strips a leading login-control ! from the FTP username.
+
+Map each trusted result bot explicitly in mIRC, using your actual network and channel:
+
+    /fluxvisi winbot NETWORK #CHANNEL BOT FLUX_SITE
+
+Existing section-specific /fluxvisi donebot mappings also work. Only mapped bots are read. The supported format is COMPLETE: -SECTION- RELEASE by ... followed within 20 seconds by STATS: [1] username / group - ... . Overlapping COMPLETE/result sequences from the same bot are discarded for 20 seconds to avoid attributing a ranking to the wrong release. Results must match a destination/release announced to FluxFTP this session; repeats are counted once. Missing, delayed, unsupported or unmapped results remain unknown. Wins cannot be attributed to an individual source route when several sources contribute.
+
+Update and reload FluxFTP-Bridge.mrc (or the standalone Visionary-FluxFTP.mrc). No new Visionary DLL is needed. mIRC titlebar metrics still use /fluxbridge metrics on.
+
+Server stats in Metrics now provide Update server stats, SITE USER fallback for unsupported custom SITE username commands, and SITE STATS fallback display. Manual refresh reuses idle shared sessions and never opens extra FTP logins. Busy/unavailable sessions show a visible status.

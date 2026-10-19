@@ -8,6 +8,24 @@ using IoFtp.Desktop.Models;
 using IoFtp.Desktop.Services;
 
 var assertions = 0;
+if (args.FirstOrDefault() == "--race-route-checks")
+{
+    var routes = new RaceRouteStatistics();
+    Parallel.For(0, 1000, _ => routes.Record("TV", "Release", "LFG", "TIS"));
+    routes.Record("tv", "release", "lfg", "tis");
+    routes.Record("TV", "Release2", "LFG", "TIS");
+    routes.Record("TV", "Release", "CR", "TIS");
+    routes.Record("FILM", "Release", "LFG", "TIS");
+    if (routes.Snapshot().Single(row => row.Source == "LFG").Races != 3 || routes.Snapshot().Sum(row => row.Races) != 4)
+        throw new Exception("Race routes must deduplicate repeats, preserve section identity and distinguish sources");
+    if (!routes.RecordResult("TIS", "Release", "Me", "!Me") || routes.RecordResult("tis", "release", "Me", "Me"))
+        throw new Exception("Win results must normalize the FTP login prefix and ignore repeat results across source routes");
+    routes.RecordResult("TIS", "Release2", "Other", "Me");
+    if (routes.RecordResult("TIS", "Unknown", "Me", "Me") || routes.Wins().Single().Wins != 1 || routes.Wins().Single().Results != 2)
+        throw new Exception("Only observed races with explicit first-place results can affect wins/results");
+    Console.WriteLine("PASS: concurrent duplicate chains counted once; new releases, sections and alternative sources counted separately.");
+    return;
+}
 if (args.FirstOrDefault() == "--site-priority-checks") { await SitePriorityChecks.Run(); return; }
 if (args.FirstOrDefault() == "--peak-speed-checks")
 {

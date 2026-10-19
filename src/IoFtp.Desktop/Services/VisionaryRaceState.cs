@@ -95,28 +95,37 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
     public bool DestinationAlreadyComplete { get; private set; }
     public void ConfirmDestinationComplete() { DestinationAlreadyComplete = true; DestinationVerified = true; }
     private string? _stopReason;
-    private readonly SemaphoreSlim _destinationDirectoryGate = new(1, 1);
-    public bool DirectoryDenied { get; private set; }
-    public bool DirectoryDenialReported { get; set; }
+    private sealed class DirectoryState
+    {
+        public readonly SemaphoreSlim Gate = new(1, 1);
+        public string? Failure;
+        public bool Reported;
+    }
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<object, DirectoryState> DirectoryStates = new();
+    private DirectoryState SharedDirectory => DirectoryStates.GetValue(DestinationOwner, _ => new());
+    public bool DirectoryDenied => SharedDirectory.Failure is not null;
+    public bool DirectoryDenialReported { get => SharedDirectory.Reported; set => SharedDirectory.Reported = value; }
     public async Task EnsureDestinationDirectoryAsync(Func<Task> ensure, CancellationToken token)
     {
-        await _destinationDirectoryGate.WaitAsync(token);
+        var shared = SharedDirectory;
+        await shared.Gate.WaitAsync(token);
         try
         {
             ThrowIfStopped();
             try { await ensure(); }
-            catch (Exception exception) when (TransferRejection.Category(exception.Message) == "DIRECTORY-DENIED")
+            catch (Exception exception) when (exception is DestinationDirectoryException { IsPermanent: true } || TransferRejection.Category(exception.Message) == "DIRECTORY-DENIED")
             {
-                DirectoryDenied = true;
+                shared.Failure = exception.Message;
                 Stop(exception.Message);
                 throw;
             }
         }
-        finally { _destinationDirectoryGate.Release(); }
+        finally { shared.Gate.Release(); }
     }
     public void Stop(string reason) => _stopReason ??= reason;
     public void ThrowIfStopped()
     {
+        if (SharedDirectory.Failure is { } failure) throw new IOException("RACE destination blocked: " + failure);
         if (_stopReason is not null) throw new IOException("RACE destination blocked: " + _stopReason);
     }
     private readonly Dictionary<string, bool> _directoryCompletion = new(StringComparer.Ordinal);
