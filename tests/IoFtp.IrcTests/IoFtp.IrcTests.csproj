@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../../src/IoFtp.Desktop/Services/VisionarySlotCache.cs" Link="VisionarySlotCache.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/RaceRouteStatistics.cs" Link="RaceRouteStatistics.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/RaceFileWindow.cs" Link="RaceFileWindow.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/VisionaryLogVisibility.cs" Link="VisionaryLogVisibility.cs" />

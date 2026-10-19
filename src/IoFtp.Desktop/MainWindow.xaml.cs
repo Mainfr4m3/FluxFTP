@@ -1852,12 +1852,19 @@ public partial class MainWindow : Window
             entry.QueuedAt ??= DateTimeOffset.Now;
             work.Add(new TransferWorkItem(entry.Id, entry.Id, entry.Name, sourceSite, destinationSite,
                 entry.Source, entry.Destination, entry.TotalBytes,
+                SourceLimits: !entry.VisionaryRace && sourceSite is { } ms && profiles.TryGetValue(ms, out var sp) ? ManualSlotPolicy(sp) : null,
+                DestinationLimits: !entry.VisionaryRace && destinationSite is { } mt && profiles.TryGetValue(mt, out var dp) ? ManualSlotPolicy(dp) : null,
                 QueuedAt: entry.QueuedAt.Value.ToUniversalTime(), FilePriorityRank: entry.VisionaryRace ? TransferFilePriority.RaceRank(entry.Name) : TransferFilePriority.Rank(entry.Name, entry.Source, _settings,
                     [sourceSite is { } s ? profiles.GetValueOrDefault(s) : null, destinationSite is { } d ? profiles.GetValueOrDefault(d) : null])));
         }
         if (work.Count > 0) _engine.Enqueue(work);
         SaveQueue(); UpdateQueueStatus();
     }
+
+    private static SitePolicy ManualSlotPolicy(ConnectionProfile profile) => new(profile.Id, profile.Name,
+        profile.EffectiveOptions.MaxSlots,
+        profile.EffectiveOptions.AllowDownload ? profile.EffectiveOptions.MaxDownloadSlots : 0,
+        profile.EffectiveOptions.AllowUpload ? profile.EffectiveOptions.MaxUploadSlots : 0);
 
     private (Guid? Source, Guid? Destination) SitesFor(TransferDirection direction) => direction switch
     {
@@ -1954,6 +1961,12 @@ public partial class MainWindow : Window
                     speedSampleAt = now;
                     hasSpeedSample = true;
                 }
+                else if (bytes < speedSampleBytes)
+                {
+                    speedSampleBytes = bytes;
+                    speedSampleAt = now;
+                    entry.SpeedBytesPerSecond = 0;
+                }
                 else if (now - speedSampleAt >= TimeSpan.FromMilliseconds(250))
                 {
                     var elapsedSeconds = (now - speedSampleAt).TotalSeconds;
@@ -1967,7 +1980,11 @@ public partial class MainWindow : Window
             }
             var progress = new ThrottledTransferProgress(new Progress<long>(bytes =>
             {
+                // Progress already arrives throttled on the UI dispatcher.
+                // Ignore delayed callbacks after completion or cancellation.
+                if (entry.State != "Transferring") return;
                 ReportProgress(bytes);
+                UpdateStatusProgress();
             }));
             if (entry.Direction == TransferDirection.LocalCopy)
             {
@@ -1992,12 +2009,15 @@ public partial class MainWindow : Window
             {
                 var session = entry.Direction == TransferDirection.ApiDownload ? apiWorker! : entry.Direction == TransferDirection.Download ? rightWorker! : leftWorker!;
                 var source = entry.Source;
+                if (entry.TotalBytes <= 0)
+                    entry.TotalBytes = await session.GetSizeAsync(source, cancellationToken) ?? 0;
                 var measureDownload = _settings.EnableDownloadMeasurement;
                 session.EnableDownloadMeasurement = measureDownload;
                 var measurement = await LocalDownload.RunAsync(entry.Destination,
                     (output, offset) => session.DownloadAsync(source, output, offset, progress, cancellationToken),
                     progress, cancellationToken, allowResume: FtpTransferMode.CanResume(source, (entry.Direction == TransferDirection.ApiDownload ? apiProfile! : entry.Direction == TransferDirection.Download ? rightProfile! : leftProfile!).EffectiveOptions), overwriteIfResumeRejected: _settings.OverwriteIfResumeFails, reconnect: () => session.ReconnectForRetryAsync(cancellationToken), log: message => Dispatcher.BeginInvoke(() => { LogText.AppendText(Environment.NewLine + entry.Name + ": " + message); _raceLog.Write("RESUME", entry.Id + " " + message); }));
                 entry.BytesTransferred = measurement.ResumeOffset + measurement.Bytes;
+                if (entry.TotalBytes <= 0) entry.TotalBytes = entry.BytesTransferred;
                 sessionNewBytes = measurement.Bytes;
                 if (measureDownload)
                 {
@@ -2416,16 +2436,12 @@ public partial class MainWindow : Window
         finally { if (_sessionWorkers.TryRemove(worker, out _)) _sessionStatistics.WorkerClosed(); }
     }
 
-    private readonly Dictionary<string, (int? Downloads, int? Uploads)> _visionaryLiveSlots = new(StringComparer.OrdinalIgnoreCase);
-
-    private SiteOptions RaceSlotOptions(ConnectionProfile profile)
-    {
-        var options = profile.EffectiveOptions;
-        if (_settings.EnableVisionaryBridge && _visionaryLiveSlots.TryGetValue(profile.Name, out var live))
-            return options with { MaxDownloadSlots = live.Downloads ?? options.MaxDownloadSlots,
-                MaxUploadSlots = live.Uploads ?? options.MaxUploadSlots };
-        return options;
-    }
+    private readonly VisionarySlotCache _visionarySlots = new VisionarySlotCache().Load();
+    private int RaceAuxiliarySlots(ConnectionProfile profile) => 1
+        + (_leftProfile?.Id == profile.Id && _leftRemoteSession?.IsConnected == true ? 1 : 0)
+        + (_rightProfile?.Id == profile.Id && _remoteSession?.IsConnected == true ? 1 : 0);
+    private SiteOptions RaceSlotOptions(ConnectionProfile profile) => _settings.EnableVisionaryBridge
+        ? _visionarySlots.Apply(profile, RaceAuxiliarySlots(profile)) : profile.EffectiveOptions;
 
     private int TransferSlotLimit(ConnectionProfile profile)
     {
@@ -3432,6 +3448,15 @@ public partial class MainWindow : Window
             new("Transferred this queue", FormatSize(bytes), $"Remaining: {FormatSize(_queue.Sum(item => Math.Max(0, item.TotalBytes - item.BytesTransferred)))}"),
             new("API", _settings.EnableHttpsApi ? "Enabled" : "Disabled", _settings.EnableHttpsApi ? $"HTTPS port {_settings.HttpsApiPort}" : "—")
         };
+        if (_settings.EnableVisionaryBridge)
+            foreach (var profile in profiles)
+            {
+                var live = _visionarySlots.Get(profile.Name);
+                var slots = RaceSlotOptions(profile);
+                rows.Add(new("Race slots · " + profile.Name, $"DN {slots.MaxDownloadSlots} / UP {slots.MaxUploadSlots}",
+                    live is null ? "Flux limits: no Visi values received yet. Install/reload the Visionary helper."
+                    : $"Last known limits: DN {(live.Downloads is null ? "Flux fallback" : "Visi")}; UP {(live.Uploads is null ? "Flux fallback" : "Visi")}. Retained on timeout and restart."));
+            }
         return new(connected, profiles.Count, active, $"{(running.Any(item => item.FxpSpeedEstimated) ? "≈" : "")}{FormatSize(speed)}/s", FormatSize(bytes), rows,
             new MetricsDashboard(FormatSize(_sessionStatistics.Uploaded + _sessionStatistics.Downloaded + _sessionStatistics.Fxp + _sessionStatistics.Local),
                 _sessionStatistics.Completed, FormatTransferTime(_sessionStatistics.Uptime), _workerPool.Values.Sum(pool => pool.Count),
@@ -3511,6 +3536,13 @@ public partial class MainWindow : Window
         QueueTimeText.Visibility = scrolling || veryCompact ? Visibility.Collapsed : Visibility.Visible;
     }
 
+    // Keep the user's live local download visible while background races run.
+    private QueueEntryView? CurrentStatusTransfer() =>
+        _queue.FirstOrDefault(entry => entry.State == "Transferring" &&
+            entry.Direction is TransferDirection.Download or TransferDirection.DownloadFromLeft or TransferDirection.ApiDownload)
+        ?? _queue.FirstOrDefault(entry => entry.State == "Transferring")
+        ?? _queue.FirstOrDefault(entry => entry.State == "Queued");
+
     private void UpdateStatusProgress()
     {
         var active = _queue.Where(item => item.State is "Queued" or "Transferring").ToList();
@@ -3526,7 +3558,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var current = active.FirstOrDefault(item => item.State == "Transferring") ?? active[0];
+        var current = CurrentStatusTransfer() ?? active[0];
         var direction = current.Direction switch
         {
             TransferDirection.Download or TransferDirection.DownloadFromLeft or TransferDirection.ApiDownload => "Receiving",
@@ -3690,8 +3722,7 @@ public partial class MainWindow : Window
         var allTime = FormatSize(total.Uploaded + total.Downloaded + total.Fxp + total.Local);
         var liveSpeed = _queue.Where(entry => entry.State == "Transferring").Sum(entry => entry.SpeedBytesPerSecond);
         var estimated = _queue.Any(entry => entry.State == "Transferring" && entry.FxpSpeedEstimated) ? "~" : "";
-        var current = _queue.FirstOrDefault(entry => entry.State == "Transferring")
-            ?? _queue.FirstOrDefault(entry => entry.State == "Queued");
+        var current = CurrentStatusTransfer();
         var progress = "Idle";
         if (current is not null)
         {
@@ -4008,11 +4039,10 @@ public partial class MainWindow : Window
         void Update(string? site, int? downloads, int? uploads)
         {
             if (site is null || (downloads is null && uploads is null)) return;
-            _visionaryLiveSlots.TryGetValue(site, out var previous);
-            var next = (downloads ?? previous.Downloads, uploads ?? previous.Uploads);
-            if (next == previous) return;
-            _visionaryLiveSlots[site] = next;
-            var message = $"VISIONARY live slots {site}: downloads={next.Item1}, uploads={next.Item2}; total connection cap still applies";
+            if (!_visionarySlots.Update(site, downloads, uploads)) return;
+            var next = _visionarySlots.Get(site)!;
+            var message = $"VISIONARY slots {site}: downloads={next.Downloads?.ToString() ?? "Flux"}, uploads={next.Uploads?.ToString() ?? "Flux"}; Visi controls race capacity; saved values retained if helper is unavailable";
+            if (_visionarySlots.LastError is { } error) message += "; cache save failed: " + error;
             _raceLog.Write("VISIONARY", message);
             AppendConnectionLog(Environment.NewLine + message);
             foreach (var profile in _raceReadySites.Values.Where(profile => profile.Name.Equals(site, StringComparison.OrdinalIgnoreCase)))

@@ -207,8 +207,8 @@ public sealed class GlobalTransferEngine : IAsyncDisposable
         // A local copy reserves both counters, but is still one file. Keep all
         // disk-backed transfers serial while FXP retains its independent slots.
         (!_serializeLocalTransfers || item.SourceSiteId is not null && item.DestinationSiteId is not null || _activeLocalUploads + _activeLocalDownloads == 0) &&
-        (item.SourceSiteId is { } source ? _sites[source].CanDownload : _activeLocalUploads < _maxLocalUploads) &&
-        (item.DestinationSiteId is { } destination ? _sites[destination].CanUpload : _activeLocalDownloads < _maxLocalDownloads);
+        (item.SourceSiteId is { } source ? _sites[source].CanTransfer(item.SourceLimits, true) : _activeLocalUploads < _maxLocalUploads) &&
+        (item.DestinationSiteId is { } destination ? _sites[destination].CanTransfer(item.DestinationLimits, false) : _activeLocalDownloads < _maxLocalDownloads);
 
     private SlotReservation Reserve(TransferWorkItem item)
     {
@@ -243,6 +243,12 @@ public sealed class GlobalTransferEngine : IAsyncDisposable
         public int ActiveDownloads { get; set; }
         public int ActiveUploads { get; set; }
         public bool Enabled { get; set; } = true;
+        public bool CanTransfer(SitePolicy? limits, bool download)
+        {
+            var policy = limits ?? Policy;
+            return Enabled && ActiveSlots < policy.MaxSlots &&
+                (download ? ActiveDownloads < policy.MaxDownloads : ActiveUploads < policy.MaxUploads);
+        }
         public bool CanDownload => Enabled && ActiveSlots < Policy.MaxSlots && ActiveDownloads < Policy.MaxDownloads;
         public bool CanUpload => Enabled && ActiveSlots < Policy.MaxSlots && ActiveUploads < Policy.MaxUploads;
     }

@@ -95,7 +95,7 @@ on *:SIGNAL:FU_FXP_CHAINS:{
     custom fluxftp_chains.pl FLUXFTP_LIVE_CHAINS %section %release %chain.tick %chains
     return
   }
-  echo @FluxFTP $timestamp WARNING live slots unavailable; install custom/fluxftp_chains.pl in Visionary. Using Flux site limits.
+  echo @FluxFTP $timestamp WARNING live slots unavailable; install custom/fluxftp_chains.pl in Visionary. Using last known Visi limits in Flux; Flux fallback only where unknown.
   fluxvisi.sendchains %section %release $replace(%chains,$chr(32),$chr(44)) %chain.tick
 }
 
@@ -108,7 +108,7 @@ alias -l fluxvisi.live.timeout {
   var %request = $hget(FluxVisiPending,$1)
   if (%request == $null) return
   hdel FluxVisiPending $1
-  echo @FluxFTP $timestamp WARNING live-slot helper did not reply within 1s. Forwarding chain using existing Flux site limits. Check the Visionary console and custom/fluxftp_chains.pl.
+  echo @FluxFTP $timestamp WARNING live-slot helper did not reply within 1s. Forwarding chain using last known Visi limits in Flux (Flux fallback only where unknown). Check the Visionary console and custom/fluxftp_chains.pl.
   fluxvisi.sendchains %request
 }
 

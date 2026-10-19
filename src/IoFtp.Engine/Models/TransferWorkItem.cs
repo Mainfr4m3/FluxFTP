@@ -15,7 +15,9 @@ public sealed record TransferWorkItem(
     double TargetProgress = 0,
     double UploadedByUserRatio = 0,
     DateTimeOffset? QueuedAt = null,
-    int FilePriorityRank = int.MaxValue);
+    int FilePriorityRank = int.MaxValue,
+    SitePolicy? SourceLimits = null,
+    SitePolicy? DestinationLimits = null);
 
 public sealed record TransferWorkStatus(
     TransferWorkItem Item,

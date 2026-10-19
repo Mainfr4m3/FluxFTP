@@ -69,3 +69,12 @@ Existing section-specific /fluxvisi donebot mappings also work. Only mapped bots
 Update and reload FluxFTP-Bridge.mrc (or the standalone Visionary-FluxFTP.mrc). No new Visionary DLL is needed. mIRC titlebar metrics still use /fluxbridge metrics on.
 
 Server stats in Metrics now provide Update server stats, SITE USER fallback for unsupported custom SITE username commands, and SITE STATS fallback display. Manual refresh reuses idle shared sessions and never opens extra FTP logins. Busy/unavailable sessions show a visible status.
+
+
+### Race slots from Visionary (2.1.36)
+
+Install custom/fluxftp_chains.pl in Visionary and reload the updated FluxFTP-Bridge.mrc. Valid Visi download/upload limits control race capacity; imported Flux total limits no longer reduce that capacity. Flux reserves extra connection room for its shared listing and open panes. The server still enforces its own connection limits.
+
+Flux saves the last known values per site/direction in %LOCALAPPDATA%/FluxFTP/visionary-slots.json. If the helper times out or Flux restarts, those values remain in use until Visi sends new values. A direction with no Visi value uses Flux settings. Explicit zero disables that direction. A missing helper cannot supply values that have never been received; install/fix the helper for automatic migration.
+
+Metrics > Detailed statistics lists Race slots per site and identifies Visi or Flux fallback for each direction. Manual transfers retain Flux settings. When both kinds of transfer use a site they share occupied connection counters. Section-specific helper values remain the last received per-site values; this does not add independent per-section connection budgets.

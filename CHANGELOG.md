@@ -2,6 +2,18 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.36 — 2026-10-19
+
+- Visi-provided directional slots now determine race transfer capacity, with room for listing and open panes; a low imported total login limit no longer silently throttles those race values. Directions without Visi values retain Flux settings, including fallback until the helper first replies.
+- Last known Visi slots are saved locally and retained across helper timeouts and Flux restarts. Explicit zero values are respected. Metrics detailed statistics identifies Visi and Flux fallback values per site and direction. Cache write errors are reported without dropping a chain.
+- Manual jobs keep their configured Flux slot limits through per-work engine limits and continue sharing actual occupied site counters with races. Saved site settings are not overwritten.
+- Includes 2.1.35 local-download live progress fixes. Update the EXE and bridge script; DLLs remain compatible. Actual Visionary/mIRC callback timing still requires live verification.
+
+## 2.1.35 — 2026-10-19
+
+- Local downloads refresh live bytes, speed and percentage in the status bar and take display precedence over background races. Unknown file sizes are queried before downloading; resumed transfers reset speed sampling if the byte offset restarts. Late progress callbacks cannot overwrite completed or cancelled status.
+- Includes the refreshed 2.1.34 change disabling SITE <username> and SITE USER statistics queries for races and Metrics; SITE STATS remains available.
+
 ## 2.1.34 — 2026-10-19
 
 - The mIRC Visionary bridge now forwards pending chains with existing Flux limits if the custom live-slot helper does not reply within one second. A warning identifies the missing helper callback; a late valid response still updates the same watch's live limits. /fluxvisi status shows pending helper replies and the loaded script path. This requires updating/reloading the bridge script; existing DLLs remain compatible.
