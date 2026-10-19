@@ -252,6 +252,10 @@ alias -l fluxdll.menu.download {
 alias -l fluxvisi.dll return $scriptdir $+ $iif($bits == 64,FluxFTPVisionary64.dll,FluxFTPVisionary32.dll)
 
 alias fluxvisi {
+  if ($1 == status) {
+    echo -ag FluxFTP bridge: pending live-slot replies: $hget(FluxVisiPending,0).item $+ . Script: $script
+    return
+  }
   if ($1 == winbot) {
     if ($0 != 5) { echo -ag Usage: /fluxvisi winbot NETWORK #CHANNEL BOT FLUX_SITE | return }
     set $+(%,fluxvisi.win.,$lower($2),.,$lower($3),.,$lower($4)) $5
@@ -331,6 +335,11 @@ on *:SIGNAL:FU_FXP_CHAINS:{
   echo @FluxFTP $timestamp CHAINS %section %release %chains
   var %root = $deltok($replace(%visi_folder,$chr(92),/),-1,47)
   if ($isfile($+(%root,/custom/fluxftp_chains.pl))) {
+    ; Arm before /custom: a missing callback or an error in Visionary must
+    ; never swallow the chain permanently. Existing Flux/live limits apply.
+    var %request.id = $+(%chain.tick,.,$crc($+(%section,.,%release),0))
+    hadd -m FluxVisiPending %request.id %section %release $replace(%chains,$chr(32),$chr(44)) %chain.tick
+    .timer $+ FluxVisiLive. $+ %request.id -mo 1 1000 fluxvisi.live.timeout %request.id
     custom fluxftp_chains.pl FLUXFTP_LIVE_CHAINS %section %release %chain.tick %chains
     return
   }
@@ -343,8 +352,22 @@ alias -l fluxvisi.sendchains {
   echo @FluxFTP $timestamp %reply
 }
 
+alias -l fluxvisi.live.timeout {
+  var %request = $hget(FluxVisiPending,$1)
+  if (%request == $null) return
+  hdel FluxVisiPending $1
+  echo @FluxFTP $timestamp WARNING live-slot helper did not reply within 1s. Forwarding chain using existing Flux site limits. Check the Visionary console and custom/fluxftp_chains.pl.
+  fluxvisi.sendchains %request
+}
+
 on *:SIGNAL:FLUXFTP_LIVE_CHAINS:{
   if ($1 == ERROR) { echo @FluxFTP $timestamp ERROR reading live Visionary slots: $2- | return }
+  if ($0 < 4 || $3 !isnum) { echo @FluxFTP $timestamp ERROR invalid live-slot callback: $1- | return }
+  var %request.id = $+($3,.,$crc($+($1,.,$2),0))
+  .timer $+ FluxVisiLive. $+ %request.id off
+  if ($hget(FluxVisiPending,%request.id) != $null) hdel FluxVisiPending %request.id
+  ; Late replies still update live limits after a fallback; Flux deduplicates
+  ; the watch and destination files instead of starting a second race.
   fluxvisi.sendchains $1 $2 $4 $3
 }
 

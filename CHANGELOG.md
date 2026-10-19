@@ -2,6 +2,11 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.34 — 2026-10-19
+
+- The mIRC Visionary bridge now forwards pending chains with existing Flux limits if the custom live-slot helper does not reply within one second. A warning identifies the missing helper callback; a late valid response still updates the same watch's live limits. /fluxvisi status shows pending helper replies and the loaded script path. This requires updating/reloading the bridge script; existing DLLs remain compatible.
+- This addresses the silent helper-wait path; the screenshot alone does not establish why Visionary stopped returning callbacks. Actual mIRC timer/callback behavior needs live verification.
+
 ## 2.1.33 — 2026-10-19
 
 - Permanent CWD/MKD/CWD failures, including MKD File exists followed by a failed final CWD, stop the destination release once across all source states. A shared directory gate and failure state prevent per-file MKD storms; other destination releases continue. Full requested paths and final CWD replies are retained; shortened server reply names are never guessed as transfer targets.
