@@ -170,6 +170,8 @@ internal sealed class RaceListingService : IAsyncDisposable
 
     public async Task<RemoteCommandResult?> TryReadStatsAsync(ConnectionProfile profile, CancellationToken token, bool userDetails = false)
     {
+        // SITE <username> and SITE USER queries are disabled; retain STATS only.
+        if (userDetails) return null;
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token, _shutdown.Token);
         token = lifetime.Token;
         // Diagnostics must not open additional logins or queue ahead of active race listings.
@@ -181,10 +183,7 @@ internal sealed class RaceListingService : IAsyncDisposable
             if (string.IsNullOrWhiteSpace(username) || username.Any(char.IsControl)) return null;
             try
             {
-                var result = await source.Session.ExecuteCommandAsync((userDetails ? "SITE " : "SITE STATS ") + username, token).ConfigureAwait(false);
-                if (userDetails && result.StatusCode is 500 or 502)
-                    result = await source.Session.ExecuteCommandAsync("SITE USER " + username, token).ConfigureAwait(false);
-                return result;
+                return await source.Session.ExecuteCommandAsync("SITE STATS " + username, token).ConfigureAwait(false);
             }
             catch { await CloseAsync(source).ConfigureAwait(false); throw; }
         }

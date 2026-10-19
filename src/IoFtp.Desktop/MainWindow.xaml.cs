@@ -3943,14 +3943,8 @@ public partial class MainWindow : Window
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             try
             {
-                RemoteCommandResult? reply = null;
-                var kind = "USER";
-                reply = await _raceListings.TryReadStatsAsync(ApplyGlobalProxy(profile), timeout.Token, userDetails: true);
-                if (reply is { StatusCode: < 200 or >= 300 })
-                {
-                    kind = "STATS";
-                    reply = await _raceListings.TryReadStatsAsync(ApplyGlobalProxy(profile), timeout.Token);
-                }
+                const string kind = "STATS";
+                var reply = await _raceListings.TryReadStatsAsync(ApplyGlobalProxy(profile), timeout.Token);
                 if (reply is { StatusCode: >= 200 and < 300 })
                 {
                     if (kind == "STATS") _serverStats.Remove((profile.Id, "USER"));
@@ -3975,7 +3969,7 @@ public partial class MainWindow : Window
                 .Where(profile => profile.Name.Equals(request.SrcSite, StringComparison.OrdinalIgnoreCase) ||
                     profile.Name.Equals(request.DstSite, StringComparison.OrdinalIgnoreCase)).Select(ApplyGlobalProxy).ToArray());
             foreach (var profile in profiles)
-            foreach (var command in new[] { "STATS", "USER" })
+            foreach (var command in new[] { "STATS" })
             {
                 string message;
                 MetricServerStats? stats = null;
