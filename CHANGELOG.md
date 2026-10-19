@@ -2,6 +2,11 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.31 — 2026-10-19
+
+- Publish the IRC metrics heartbeat independently of tray-menu initialization. The bridge discards saved title prefixes containing previous FluxFTP metrics so fresh values cannot be hidden behind a stale title.
+- Replacing a loaded .mrc file still requires reloading the script in mIRC. /fluxbridge metrics on restarts its metrics timer.
+
 ## 2.1.29 — 2026-10-19
 
 - Source site priority now precedes file category in queue display and transfer selection: higher source priority first, then SFV/file rank, destination priority and queue age. Existing transfers are not interrupted.

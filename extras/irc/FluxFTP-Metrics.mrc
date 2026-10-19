@@ -16,6 +16,7 @@ alias fluxbridge.metrics {
 alias -l fluxbridge.metrics.start {
   if (%fluxbridge.metrics.disabled) return
   if (!$timer(FluxBridgeMetrics)) set -e %fluxbridge.metrics.saved $titlebar
+  if ($pos(%fluxbridge.metrics.saved,FluxFTP - ,1)) unset %fluxbridge.metrics.saved
   .timerFluxBridgeMetrics -o 0 2 fluxbridge.metrics.tick
   fluxbridge.metrics.tick
 }
@@ -27,6 +28,7 @@ alias -l fluxbridge.metrics.stop {
 }
 
 alias -l fluxbridge.metrics.tick {
+  if ($pos(%fluxbridge.metrics.saved,FluxFTP - ,1)) unset %fluxbridge.metrics.saved
   var %text = $fluxbridge.metrics.read
   if (%text == $null) %text = FluxFTP offline
   if (%fluxbridge.metrics.saved != $null) %text = %fluxbridge.metrics.saved $chr(124) %text

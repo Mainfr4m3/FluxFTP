@@ -3679,7 +3679,6 @@ public partial class MainWindow : Window
 
     private void UpdateTrayMetrics()
     {
-        if (_trayMetrics.Count != 6) return;
         RecordMeasuredPeakSpeed();
         var transferred = FormatSize(_sessionStatistics.Uploaded + _sessionStatistics.Downloaded + _sessionStatistics.Fxp + _sessionStatistics.Local);
         var queued = _queue.Count(entry => entry.State == "Queued");
@@ -3706,6 +3705,7 @@ public partial class MainWindow : Window
             else progress = current.State == "Transferring" ? "Progress unknown" : "Queued";
         }
         _ircMetricsFile.Publish($"FluxFTP - {progress} - Traffic {estimated}{FormatSize(liveSpeed)}/s - Session {transferred} - Total {allTime} - FXP(60s) {rate} - Files {_sessionStatistics.Completed} - Jobs {queued}/{active} - Pool {pool} - Uptime {uptime} - Session peak {FormatSize(_sessionStatistics.PeakSpeedBytesPerSecond)}/s - Total peak {FormatSize(total.PeakSpeedBytesPerSecond)}/s - Total files {total.Completed}");
+        if (_trayMetrics.Count != 6) return;
         var rows = new[] { $"Transferred · session: {transferred}", $"Completed files: {_sessionStatistics.Completed:N0}",
             $"FXP rate · last 60 s: {rate}", $"Queued / active: {queued} / {active}", $"Idle pool: {pool}", $"Session running: {uptime}" };
         for (var i = 0; i < rows.Length; i++) _trayMetrics[i].Text = rows[i];
