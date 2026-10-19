@@ -34,12 +34,12 @@ internal sealed class ApiServer : IAsyncDisposable
         Action<Guid> removeJob, Action<Guid> resetJob, Action<string>? diagnosticLog = null,
         Func<IrcConnectRequest, Task>? connectIrc = null,
         Func<ApiTransferRequest, VisionaryRaceState, CancellationToken, Task<bool>>? visionaryStep = null,
-        Func<ApiTransferRequest, Task>? visionarySlots = null)
+        Func<ApiTransferRequest, Task>? visionarySlots = null, Func<string, int>? sourcePriority = null)
     {
         if (settings.EnableVisionaryBridge || settings.EnableHttpsApi)
         {
             _visionaryPipe = new VisionaryPipeServer(startTransfer, diagnosticLog, visionaryStep, visionarySlots,
-                settings.VisionaryConcurrentScheduling, settings.VisionaryRecheckSeconds);
+                settings.VisionaryConcurrentScheduling, settings.VisionaryRecheckSeconds, sourcePriority);
             if (settings.EnableVisionaryBridge)
             {
             _visionaryPipe.Start();

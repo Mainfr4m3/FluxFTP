@@ -8,6 +8,7 @@ using IoFtp.Desktop.Models;
 using IoFtp.Desktop.Services;
 
 var assertions = 0;
+if (args.FirstOrDefault() == "--site-priority-checks") { await SitePriorityChecks.Run(); return; }
 if (args.FirstOrDefault() == "--peak-speed-checks")
 {
     var directory = Path.Combine(AppContext.BaseDirectory, "peak-test-" + Guid.NewGuid().ToString("N"));

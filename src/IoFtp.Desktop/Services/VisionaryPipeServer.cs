@@ -26,14 +26,17 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
     }
     private readonly RaceWatchSlots _watchSlots;
     private readonly int? _recheckSeconds;
+    private readonly Func<string, int> _sourcePriority;
 
     public VisionaryPipeServer(Func<ApiTransferRequest, Task<object>> startTransfer, Action<string>? log = null,
         Func<ApiTransferRequest, VisionaryRaceState, CancellationToken, Task<bool>>? raceStep = null,
-        Func<ApiTransferRequest, Task>? liveSlots = null, int concurrentScheduling = 32, int? recheckSeconds = null)
+        Func<ApiTransferRequest, Task>? liveSlots = null, int concurrentScheduling = 32, int? recheckSeconds = null,
+        Func<string, int>? sourcePriority = null)
     {
         _startTransfer = startTransfer; _log = log; _raceStep = raceStep; _liveSlots = liveSlots;
         _watchSlots = new RaceWatchSlots(Math.Clamp(concurrentScheduling, 1, 2048));
         _recheckSeconds = recheckSeconds;
+        _sourcePriority = sourcePriority ?? (_ => 0);
     }
 
     public void Start() => _listener = ListenAsync(_cancellation.Token);
@@ -199,12 +202,14 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
                 var available = _sources.TryGetValue(key, out var candidates)
                     ? candidates.Values.OrderBy(item => item.SrcSite, StringComparer.OrdinalIgnoreCase).ToArray()
                     : new[] { request };
+                available = available.Skip(sourceOffset).Concat(available.Take(sourceOffset))
+                    .OrderByDescending(item => _sourcePriority(item.SrcSite!)).ToArray();
                 // Rotate admission order so one source cannot reserve every file
                 // before another source has had its next scheduling pass.
                 for (var pass = 0; pass < 2 && !completed; pass++)
                 for (var i = 0; i < available.Length; i++)
                 {
-                    var next = available[(sourceOffset + i) % available.Length];
+                    var next = available[i];
                     if (!sourceStates.TryGetValue(next.SrcSite!, out var nextState))
                     {
                         nextState = new VisionaryRaceState(options) {

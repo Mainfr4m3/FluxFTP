@@ -49,15 +49,17 @@ internal static class ChainBatchChecks
         await periodic.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(65));
         Console.WriteLine("PASS: watch rechecks without a second incoming Visi announcement.");
         var snapshots = System.Threading.Channels.Channel.CreateUnbounded<ApiTransferRequest>();
+        var priorityPasses = System.Threading.Channels.Channel.CreateUnbounded<string>();
         var updates = new System.Collections.Concurrent.ConcurrentQueue<ApiTransferRequest>();
         VisionaryRaceState? liveState = null;
         await using var live = new VisionaryPipeServer(_ => Task.FromResult<object>(new { ok = true }), raceStep: (request, state, token) =>
         {
             token.ThrowIfCancellationRequested();
             liveState = state;
+            if (state.SourceCount == 2 && !state.BorrowIdleSlots) priorityPasses.Writer.TryWrite(request.SrcSite!);
             snapshots.Writer.TryWrite(request);
             return Task.FromResult(false);
-        }, liveSlots: request => { updates.Enqueue(request); return Task.CompletedTask; });
+        }, liveSlots: request => { updates.Enqueue(request); return Task.CompletedTask; }, sourcePriority: site => site == "C" ? 100 : 0);
         async Task<ApiTransferRequest> Next() => await snapshots.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         async Task<ApiTransferRequest> NextSource(string source, int? downloads = null, int? uploads = null)
         {
@@ -79,6 +81,8 @@ internal static class ChainBatchChecks
         liveState.HasActiveTransfers = true;
         await live.SubmitChainsAsync("TV", "Live-GROUP", "C;B;9;2");
         updated = await NextSource("C", 9, 2);
+        if (await priorityPasses.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5)) != "C")
+            throw new Exception("Higher priority source must reserve files before the lower priority source when both are available");
         if (updated.SrcSite != "C" || updated.SourceDownloadSlots != 9 || !ReferenceEquals(firstOwner, liveState!.DestinationOwner))
             throw new Exception("Alternate source must be admitted while the first has active work, with its own slots and shared destination ownership");
         await live.SubmitChainsAsync("TV", "Live-GROUP", "A;B");

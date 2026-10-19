@@ -3814,6 +3814,7 @@ public partial class MainWindow : Window
         try
         {
             _apiServer = new ApiServer();
+            foreach (var profile in new ProfileStore().Load()) _raceSitePriorities[profile.Name] = RaceSlotOptions(profile).Priority;
             await _apiServer.StartAsync(_settings, () => Dispatcher.Invoke(GetTransferJobs), StartApiTransferAsync, StartApiDownloadAsync,
                 id => Dispatcher.Invoke(() => RemoveTransferJob(id)), id => Dispatcher.Invoke(() => ResetTransferJob(id)),
                 message => Dispatcher.BeginInvoke(() =>
@@ -3827,7 +3828,8 @@ public partial class MainWindow : Window
                     _settingsStore.Save(updated);
                     _settings = updated;
                     await RestartIrcAsync();
-                }), visionaryStep: RunVisionaryStepAsync, visionarySlots: UpdateVisionarySlotsAsync);
+                }), visionaryStep: RunVisionaryStepAsync, visionarySlots: UpdateVisionarySlotsAsync,
+                sourcePriority: site => _raceSitePriorities.GetValueOrDefault(site));
             if (_settings.EnableHttpsApi)
                 LogText.AppendText($"{Environment.NewLine}HTTPS/JSON API listening on {(_settings.ApiLocalhostOnly ? "localhost" : "0.0.0.0")}:{_settings.HttpsApiPort}");
         }
@@ -3840,6 +3842,7 @@ public partial class MainWindow : Window
     }
 
     private Task<object> StartApiTransferAsync(ApiTransferRequest request) => StartApiTransferCoreAsync(request);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _raceSitePriorities = new(StringComparer.OrdinalIgnoreCase);
 
     private string? RaceJobState(Guid id)
     {
@@ -4013,6 +4016,7 @@ public partial class MainWindow : Window
         foreach (var profile in new[] { sourceProfile, destinationProfile })
         {
             var options = RaceSlotOptions(profile);
+            _raceSitePriorities[profile.Name] = options.Priority;
             _engine.RegisterOrUpdateSite(new SitePolicy(profile.Id, profile.Name, TransferSlotLimit(profile), options.AllowDownload ? options.MaxDownloadSlots : 0, options.AllowUpload ? options.MaxUploadSlots : 0, options.Priority));
         }
         var sourceBase = NormalizeRemotePath(request.SrcSection is not null ? ResolveApiSection(request.SrcSite, request.SrcSection) : request.SrcPath ?? "/");

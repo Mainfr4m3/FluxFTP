@@ -130,7 +130,9 @@ public sealed class GlobalTransferEngine : IAsyncDisposable
         {
             var now = DateTimeOffset.UtcNow;
             return _work.Values.Select(work => new TransferWorkStatus(work.Item, work.State, Score(work.Item, now), work.Error))
-                .OrderBy(status => status.Item.FilePriorityRank)
+                .OrderByDescending(status => SitePriority(status.Item.SourceSiteId))
+                .ThenBy(status => status.Item.FilePriorityRank)
+                .ThenByDescending(status => SitePriority(status.Item.DestinationSiteId))
                 .ThenBy(status => status.Item.QueuedAt ?? DateTimeOffset.MaxValue)
                 .ThenByDescending(status => status.Score).ToList();
         }
@@ -154,7 +156,9 @@ public sealed class GlobalTransferEngine : IAsyncDisposable
                 _pumpScheduled = false;
                 var now = DateTimeOffset.UtcNow;
                 selected = _work.Values.Where(work => work.State == TransferWorkState.Queued && IsAllowed(work.Item))
-                    .OrderBy(work => work.Item.FilePriorityRank)
+                    .OrderByDescending(work => SitePriority(work.Item.SourceSiteId))
+                    .ThenBy(work => work.Item.FilePriorityRank)
+                    .ThenByDescending(work => SitePriority(work.Item.DestinationSiteId))
                     .ThenBy(work => work.Item.QueuedAt ?? DateTimeOffset.MaxValue)
                     .ThenByDescending(work => Score(work.Item, now))
                     .FirstOrDefault(work => CanReserve(work.Item));
@@ -222,6 +226,8 @@ public sealed class GlobalTransferEngine : IAsyncDisposable
         if (reservation.Destination is { } destination) { _sites[destination].ActiveSlots--; _sites[destination].ActiveUploads--; }
         else _activeLocalDownloads--;
     }
+
+    private int SitePriority(Guid? site) => site is { } id && _sites.TryGetValue(id, out var runtime) ? runtime.Policy.Priority : 0;
 
     private double Score(TransferWorkItem item, DateTimeOffset now) => TransferScore.Calculate(item,
         item.SourceSiteId is { } source && _sites.TryGetValue(source, out var sourceSite) ? sourceSite.Policy : null,

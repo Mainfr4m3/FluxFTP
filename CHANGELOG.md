@@ -2,6 +2,16 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.29 — 2026-10-19
+
+- Source site priority now precedes file category in queue display and transfer selection: higher source priority first, then SFV/file rank, destination priority and queue age. Existing transfers are not interrupted.
+- Visionary sources receive reservation/refill passes in descending source priority. Round-robin ordering applies only between equal-priority sources. Site limits and per-file reservations still apply.
+
+## 2.1.28 — 2026-10-19
+
+- Transfer selection and queue display order now apply descending destination site priority, then descending source site priority, before queue age. File-category priority remains first (SFV first for races), and running transfers are not interrupted. Site slot limits still apply.
+- Regression checks cover a newer high-priority destination beating an older low-priority destination, source priority for equal destinations, and agreement between displayed and executed order.
+
 ## 2.1.27 — 2026-10-18
 
 - Multi-source scheduling uses a fair first pass followed by a refill pass that lets sources with eligible files borrow unused destination capacity. The source count no longer permanently reserves slots for sources without work.
