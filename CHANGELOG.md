@@ -2,6 +2,12 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.43 — 2026-10-20
+
+- Race source inventory excludes paired drFTPD information markers [SUB]-...-[SUB], [AUDIO]-...-[AUDIO] and [VIDEO]-...-[VIDEO] when represented as directories or zero-byte entries. They are not descended into or copied. Nonempty files and real Subs/Sample/CD folders remain eligible.
+- Verification metadata filtering now also applies while the Visionary bridge is enabled. This avoids the observed TIS metadata-directory 550 errors that aborted source inventory and triggered a 30-second source retry delay. Genuine permission/listing errors retain existing handling.
+- Validation: 169 shared race/verification checks and desktop build passed. EXE-only change; no bridge script or DLL update is required. Local test build, not published to GitHub.
+
 ## 2.1.42 — 2026-10-20
 
 - Log tabs now appear in order: FTP-LOG, BRIDGE-INFO, RACE-LOG, SPREAD-JOBS, TRANSFER-JOBS. RACE-Log and Transfer Jobs buttons are removed from Metrics; existing entry points select the corresponding embedded tab.

@@ -231,6 +231,15 @@ internal static class RaceFlowChecks
         Check(!lateComplete.NeedsTransfer("/release/test.rar", 100, null, _ => "Failed"), "verified complete race never requeues earlier failed files");
         Check(VisionaryRaceState.IsVerificationMetadata(F("test.rar.missing", 0)), "missing markers never copied");
         Check(VisionaryRaceState.IsVerificationMetadata(F(".ioFTPD.verified")), "ledger never copied");
+        foreach (var name in new[] { "[SUB]-Polish_Polish-[SUB]", "[AUDIO]-Japanese_AACLC@a_Bit rate_48.0kHz_2ch-[AUDIO]", "[VIDEO]-1920x1080_x264-[VIDEO]" })
+        {
+            Check(VisionaryRaceState.IsVerificationMetadata(M(name)), "server information directory never traversed: " + name);
+            Check(VisionaryRaceState.IsVerificationMetadata(F(name, 0)), "zero-byte information marker never copied: " + name);
+            Check(!VisionaryRaceState.IsVerificationMetadata(F(name, 100)), "nonempty file is not information metadata: " + name);
+        }
+        foreach (var name in new[] { "Subs", "Sample", "CD1", "[SUB]-Actual.Subtitle.Folder", "[AUDIO]-Track-[SUB]" })
+            Check(!VisionaryRaceState.IsVerificationMetadata(M(name)), "real folders and unmatched tags remain eligible: " + name);
+
         race.BeginListing();
         race.InspectListing([M("CD1"), M("CD2")], true, "/release");
         race.InspectListing([F("a.sfv"), M("COMPLETE")], false, "/release/CD1");

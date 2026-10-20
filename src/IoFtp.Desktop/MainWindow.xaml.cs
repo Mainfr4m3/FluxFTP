@@ -4233,7 +4233,7 @@ public partial class MainWindow : Window
             {
                 if (child.Name is "." or ".." || ShouldSkip(child.Name, child.IsDirectory, true,
                     race is null || race.IsFinal(child.FullPath) ? child.Size : null)) continue;
-                if (race is not null && (race.IsCompletionMetadata(child) || !_settings.EnableVisionaryBridge && VisionaryRaceState.IsVerificationMetadata(child))) continue;
+                if (race is not null && (race.IsCompletionMetadata(child) || VisionaryRaceState.IsVerificationMetadata(child))) continue;
                 if (child.IsDirectory && race?.AllowsDirectory(child) == false) { LogSkipMatch(child.FullPath, "VISIONARY folder filter; " + race.FolderFilterDetail(child), true, true, null); continue; }
                 var childDestination = NormalizeRemotePath($"{destinationDirectory}/{child.Name}");
                 if (child.IsDirectory) await QueueDirectory(child.FullPath, childDestination);

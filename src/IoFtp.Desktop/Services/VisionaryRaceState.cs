@@ -140,7 +140,11 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
             foreach (var key in _files.Keys.ToArray()) _files[key] = _files[key] with { Final = false };
         _lastComplete = SourceComplete;
     }
-    public static bool IsVerificationMetadata(RemoteEntry entry) => entry.Name.StartsWith(".ioFTPD", StringComparison.OrdinalIgnoreCase) ||
+    public static bool IsServerInformationMetadata(RemoteEntry entry) => (entry.IsDirectory || entry.Size == 0) &&
+        Regex.IsMatch(entry.Name, @"^\[(?<tag>SUB|AUDIO|VIDEO)\]-.+-\[\k<tag>\]$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
+
+    public static bool IsVerificationMetadata(RemoteEntry entry) => IsServerInformationMetadata(entry) || entry.Name.StartsWith(".ioFTPD", StringComparison.OrdinalIgnoreCase) ||
         entry.Name.EndsWith("-MISSING", StringComparison.OrdinalIgnoreCase) ||
         entry.Name.EndsWith(".missing", StringComparison.OrdinalIgnoreCase) || entry.Name.EndsWith(".bad", StringComparison.OrdinalIgnoreCase) ||
         entry.Name.StartsWith("(iNCOMPLETE)", StringComparison.OrdinalIgnoreCase);
