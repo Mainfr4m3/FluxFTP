@@ -9,6 +9,14 @@ internal static class VisionaryLogVisibility
             .Any(prefix => text.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
     }
 
+    public static string? UploadBusySummary(string message)
+    {
+        var flags = System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant;
+        if (!System.Text.RegularExpressions.Regex.IsMatch(message, @"\b553\b", flags)) return null;
+        var match = System.Text.RegularExpressions.Regex.Match(message, @"\bFile\s+is\s+being\s+uploaded\s+by\s+([^\s;|()]+)", flags);
+        return match.Success ? "UPLOADED by " + match.Groups[1].Value.TrimEnd('.', ',') : null;
+    }
+
     public static (string Site, string Text)? LoginFailureSummary(string message)
     {
         // 530 on USER/PASS/ACCT rejects login; other 530 replies can be path permissions.

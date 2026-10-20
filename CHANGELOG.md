@@ -2,6 +2,13 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.38 — 2026-10-20
+
+- Connection Log shortens 553 upload-busy replies to UPLOADED by <user>, retaining full details in Bridge-Info and leaving other 553 errors unchanged. Repeated summaries for the same uploading user are limited to one per ten seconds.
+- Failed job retirement uses RELEASE FAILED, RETRYING : <release> or RELEASE FAILED : <release>; complete failure details remain in RACE-Log. FXP average displays only filename and measured speed; RACE-Log retains byte count, duration and mode.
+- Bottom status removes UP/DN, the duplicate queue Transferred value and duplicate percentage text. Session transferred total remains; file progress percentage stays in the progress bar. Clear separators group status fields, and idle hides empty timing placeholders.
+- Includes the previous Bridge-Info, layout, download progress and Visi slot improvements. No additional bridge update is required from 2.1.37.
+
 ## 2.1.37 — 2026-10-20
 
 - Metrics keeps its summary cards and action buttons above the scrolling detail area. Site Manager now wraps with the other toolbar buttons at its normal height. The main Quick Connect button is removed; Show/Hide Status moves to Metrics beside Spread Jobs.

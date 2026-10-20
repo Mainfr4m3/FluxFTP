@@ -2171,7 +2171,7 @@ public partial class MainWindow : Window
                             entry.SpeedBytesPerSecond = average;
                             _fxpPairSpeeds.Record(sourceProfile.Id, destinationProfile.Id, sessionNewBytes, sourceSession.LastFxpTransferElapsed);
                             var measurement = FormattableString.Invariant($"FXP average: {entry.Name} | bytes={sessionNewBytes}; transfer={sourceSession.LastFxpTransferElapsed.TotalSeconds:F3}s; average={average / 1000000.0:F2} MB/s; mode=passive");
-                            LogText.AppendText(Environment.NewLine + measurement);
+                            LogText.AppendText(Environment.NewLine + FormattableString.Invariant($"FXP average: {entry.Name} | {average / 1000000.0:F2} MB/s"));
                             _raceLog.Write("FXP-AVERAGE", $"{entry.Id} {sourceProfile.Name} -> {destinationProfile.Name}: {measurement}");
                         }
                         AppendFxpTimings(sourceSession);
@@ -2291,7 +2291,7 @@ public partial class MainWindow : Window
                 LogText.AppendText($"{Environment.NewLine}Transfer integrity FAILED ({entry.Name}): server rejected CRC/size verification; file is not marked complete.");
                 AppendConnectionLog($"{Environment.NewLine}SERVER DETAILS [{entry.Name}]{Environment.NewLine}{exception.Message}");
             }
-            else LogText.AppendText(Environment.NewLine + TransferRejection.FormatFailure(entry.Name, exception is FtpCommandException ? exception.Message : FriendlyMessage(exception)));
+            else AppendConnectionLog(Environment.NewLine + TransferRejection.FormatFailure(entry.Name, exception is FtpCommandException ? exception.Message : FriendlyMessage(exception)));
             await RunScriptsAsync("TransferFailed", TransferScriptVariables(entry, FriendlyMessage(exception)), true);
             throw;
         }
@@ -2381,7 +2381,8 @@ public partial class MainWindow : Window
 
     private void AppendConnectionLog(string message)
     {
-        if (VisionaryLogVisibility.IsBridgeMessage(message)) { AppendBridgeInfo(message); return; }
+        if (VisionaryLogVisibility.IsBridgeMessage(message) || VisionaryLogVisibility.UploadBusySummary(message) is not null)
+        { AppendBridgeInfo(message); return; }
         if (VisionaryLogVisibility.Show(message, _visionaryDebugEnabled)) LogText.AppendText(message);
     }
 
@@ -2961,7 +2962,11 @@ public partial class MainWindow : Window
                         var retryRace = _raceJobOwners.TryGetValue(entry.Id, out var failedRace) && failedRace.RecordFailure(entry.Source, status.Error);
                         var recoverable = !entry.VisionaryRace && _hardResetRecovery.Capture(entry.Id, status.Error);
                         if (recoverable) _hardResetEntries[entry.Id] = entry;
-                        LogText.AppendText(Environment.NewLine + $"Failed job {(retryRace ? "waiting for RACE retry" : recoverable ? "saved for hard reset" : "skipped and removed")}: {entry.Name} ({status.Error}).");
+                        var failureDetails = $"Failed job {(retryRace ? "waiting for RACE retry" : recoverable ? "saved for hard reset" : "skipped and removed")}: {entry.Name} ({status.Error}).";
+                        if (VisionaryLogVisibility.UploadBusySummary(failureDetails) is not null)
+                            AppendConnectionLog(Environment.NewLine + failureDetails);
+                        else
+                            AppendConnectionLog(Environment.NewLine + $"{(retryRace ? "RELEASE FAILED, RETRYING" : "RELEASE FAILED")} : {entry.RuleRelease ?? entry.Name}");
                         _raceLog.Write(retryRace ? "RACE-RETRY" : recoverable ? "HARD-RESET" : "SKIP", $"Failed job {(retryRace ? "waiting for race retry" : recoverable ? "retained" : "removed")}: {entry.Id} {entry.Name}; {status.Error}");
                     }
                     if (entry.VisionaryRace) _hiddenRaceJobStates[entry.Id] = status.State == TransferWorkState.Failed ? "Failed" : "Skipped";
@@ -3048,6 +3053,16 @@ public partial class MainWindow : Window
     private void AppendBridgeInfo(string message)
     {
         _bridgeInfo.Write("BRIDGE", message.Trim());
+        if (VisionaryLogVisibility.UploadBusySummary(message) is { } upload)
+        {
+            var key = "UPLOAD:" + upload;
+            var timestamp = DateTimeOffset.UtcNow;
+            if (_lastBridgeLoginWarning.TryGetValue(key, out var last) && timestamp - last < TimeSpan.FromSeconds(10)) return;
+            _lastBridgeLoginWarning[key] = timestamp;
+            LogText.AppendText(Environment.NewLine + $"{DateTime.Now:HH:mm:ss} {upload}");
+            LogText.ScrollToEnd();
+            return;
+        }
         if (VisionaryLogVisibility.LoginFailureSummary(message) is not { } summary) return;
         var now = DateTimeOffset.UtcNow;
         if (_lastBridgeLoginWarning.TryGetValue(summary.Site, out var previous) && now - previous < TimeSpan.FromSeconds(60)) return;
@@ -3519,13 +3534,15 @@ public partial class MainWindow : Window
         var scrolling = mode.Equals("Scrolling", StringComparison.OrdinalIgnoreCase);
         ApplyLegendLayout(scrolling);
         var snapshot = GetMetricsSnapshot();
-        var compact = $"Sites {snapshot.ConnectedSites}/{snapshot.ConfiguredSites}   Jobs {snapshot.ActiveJobs}/{_queue.Count}   Speed {snapshot.TotalSpeed}   Transferred {snapshot.Transferred}";
-        var session = $"Session running: {FormatTransferTime(_sessionStatistics.Uptime)}   UP: {FormatSize(_sessionStatistics.Uploaded)}   DN: {FormatSize(_sessionStatistics.Downloaded)}   Pool: {_workerPool.Values.Sum(pool => pool.Count)}   Transferred: {FormatSize(_sessionStatistics.Uploaded + _sessionStatistics.Downloaded + _sessionStatistics.Fxp + _sessionStatistics.Local)}";
+        var compact = $"Sites {snapshot.ConnectedSites}/{snapshot.ConfiguredSites} · Jobs {snapshot.ActiveJobs}/{_queue.Count} · Speed {snapshot.TotalSpeed}";
+        var session = $"Session: {FormatTransferTime(_sessionStatistics.Uptime)} · Transferred: {FormatSize(_sessionStatistics.Uploaded + _sessionStatistics.Downloaded + _sessionStatistics.Fxp + _sessionStatistics.Local)} · Pool: {_workerPool.Values.Sum(pool => pool.Count)}";
         SessionStatusText.Text = session;
         SessionStatusText.Visibility = scrolling ? Visibility.Collapsed : Visibility.Visible;
         LegendText.Text = ConnectionStatus.Text;
         UpdateStatusProgress();
-        var fullStatus = compact + "   " + session + "   " + TransferBytesText.Text + "   " + StatusProgressText.Text + "   " + ElapsedText.Text + "   " + RemainingText.Text + "   " + QueueTimeText.Text;
+        var progressText = CurrentStatusTransfer() is null ? "Idle" :
+            TransferBytesText.Text + " · " + ElapsedText.Text + " · " + RemainingText.Text + " · " + QueueTimeText.Text;
+        var fullStatus = compact + "  |  " + session + "  |  " + progressText;
         var fontSize = Math.Clamp(_settings.StatusBarFontSize, 8, 32);
         StaticStatusText.FontSize = ScrollingStatusText.FontSize = fontSize;
         LegendBar.Height = Math.Max(30, fontSize + 20);

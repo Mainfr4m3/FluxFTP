@@ -97,6 +97,11 @@ if (args.FirstOrDefault() == "--metrics-debug-checks")
 }
 if (args.FirstOrDefault() == "--bridge-info-checks")
 {
+    if (VisionaryLogVisibility.UploadBusySummary("Failed job file.rar (553 File is being uploaded by waster).") != "UPLOADED by waster")
+        throw new Exception("Upload-busy summary missing user");
+    foreach (var message in new[] { "553 File exists", "553 Permission denied", "550 File is being uploaded by waster" })
+        if (VisionaryLogVisibility.UploadBusySummary(message) is not null) throw new Exception("Other FTP failure misclassified as upload-busy");
+
     var denial = VisionaryLogVisibility.LoginFailureSummary("VISIONARY source FAILED Very.Long.Release: Race listing site=JBG; operation=connect/login: 530 Access denied | site=JBG; command=USER; retry in 30s");
     if (denial is not { Site: "JBG" } || !denial.Value.Text.Contains("LOGIN FAILED") || !denial.Value.Text.Contains("ACCESS DENIED") || !denial.Value.Text.Contains("BLOCKED") || denial.Value.Text.Contains("Very.Long.Release"))
         throw new Exception("Login failure must produce concise site/command summary");
