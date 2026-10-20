@@ -97,6 +97,21 @@ if (args.FirstOrDefault() == "--metrics-debug-checks")
 }
 if (args.FirstOrDefault() == "--bridge-info-checks")
 {
+    var startup = new StartupMessage();
+    if (string.IsNullOrWhiteSpace(startup.Text) || startup.Display("Queued") != startup.Text || startup.TransferStarted)
+        throw new Exception("Startup message must remain visible before first transfer");
+    startup.StartTransfer();
+    if (startup.Display("Receiving") != "Receiving" || startup.Display("Idle") != "Idle")
+        throw new Exception("Startup message must not reappear after any transfer starts");
+    if (VisionaryLogVisibility.CompactTransferFailure("file.rar", "550 File locking failed") != "FILE LOCK FAILED : file.rar")
+        throw new Exception("Lock failure summary incorrect");
+    if (VisionaryLogVisibility.CompactTransferFailure("file.rar", "550 Permission denied").Contains("LOCK"))
+        throw new Exception("550 permission denial must not be reported as a file lock");
+    if (!VisionaryLogVisibility.Is550("< 550 File locking failed") || !VisionaryLogVisibility.Is550("FTP server replied 550: denied") || VisionaryLogVisibility.Is550("file.550.rar"))
+        throw new Exception("550 detection must identify FTP replies, not filename numbers");
+    if (VisionaryLogVisibility.CompactTransferFailure("file.rar", "very long error").Length > 40)
+        throw new Exception("Generic transfer failure must be concise");
+
     if (VisionaryLogVisibility.UploadBusySummary("Failed job file.rar (553 File is being uploaded by waster).") != "UPLOADED by waster")
         throw new Exception("Upload-busy summary missing user");
     foreach (var message in new[] { "553 File exists", "553 Permission denied", "550 File is being uploaded by waster" })

@@ -98,7 +98,7 @@ public partial class GlobalSettingsWindow : Window
         VisionaryRecheckBox.Text = (s.VisionaryRecheckSeconds ?? VisionaryRaceOptions.Load().EffectiveRecheckSeconds).ToString();
         HardResetCooldownBox.Text = s.HardResetCooldownSeconds.ToString(); HardResetRetriesBox.Text = s.HardResetRetries.ToString(); HardResetLookbackBox.Text = s.HardResetLookbackMinutes.ToString();
         UsernameBox.Text=s.DefaultUsername; ProtocolBox.SelectedItem=((ProtocolChoice[])ProtocolBox.ItemsSource).First(choice => choice.Protocol == s.DefaultProtocol); SlotsBox.Text=$"{s.DefaultSlots}"; UploadsBox.Text=$"{s.DefaultUploadSlots}"; DownloadsBox.Text=$"{s.DefaultDownloadSlots}"; DefaultIdleBox.Text=$"{s.DefaultIdleSeconds}";
-        LocalPathBox.Text=s.LocalDownloadPath; LocalDownloadsBox.Text=$"{s.MaxLocalDownloadSlots}"; LocalUploadsBox.Text=$"{s.MaxLocalUploadSlots}";
+        DownloadTempBox.Text=s.DownloadTempPath; LocalPathBox.Text=s.LocalDownloadPath; LocalDownloadsBox.Text=$"{s.MaxLocalDownloadSlots}"; LocalUploadsBox.Text=$"{s.MaxLocalUploadSlots}";
         SerializeLocalBox.IsChecked = s.SerializeLocalTransfers;
         FxpSpeedMonitoringBox.IsChecked = s.EnableFxpSpeedMonitoring;
         DownloadMeasurementBox.IsChecked = s.EnableDownloadMeasurement;
@@ -162,6 +162,17 @@ public partial class GlobalSettingsWindow : Window
         catch (ArgumentException exception) { ErrorText.Text = exception.Message; return; }
         if (N(HardResetCooldownBox) is < 0 or > 3600 || N(HardResetRetriesBox) is < 1 or > 10 || N(HardResetLookbackBox) is < 1 or > 1440)
         { ErrorText.Text = "Hard reset: cooldown 0–3600 seconds, retries 1–10, lookback 1–1440 minutes."; return; }
+        if (!string.IsNullOrWhiteSpace(DownloadTempBox.Text))
+        {
+            try
+            {
+                var tempPath = Environment.ExpandEnvironmentVariables(DownloadTempBox.Text.Trim());
+                if (!System.IO.Path.IsPathFullyQualified(tempPath)) throw new ArgumentException(@"Use a full path, such as R:\FluxTemp.");
+                _ = System.IO.Path.GetFullPath(tempPath);
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or System.IO.PathTooLongException)
+            { ErrorText.Text = "Download temp folder: " + ex.Message; return; }
+        }
         var theme = ReadTheme();
         var irc = _ircSettings;
         if (irc is null) return;
@@ -173,7 +184,7 @@ public partial class GlobalSettingsWindow : Window
         { ErrorText.Text = "Visionary concurrent scheduling must be between 1 and 2048."; return; }
         if (!int.TryParse(VisionaryRecheckBox.Text, out var recheckSeconds) || recheckSeconds is < 1 or > 60)
         { ErrorText.Text = "Race recheck interval must be between 1 and 60 seconds."; return; }
-        Settings = Settings with { VisionaryRecheckSeconds = recheckSeconds, VisionaryConcurrentScheduling = visionaryScheduling, MaxActiveSpreadJobs = maxSpreadJobs, AutoHardReset = AutoHardResetBox.IsChecked == true, HardResetCooldownSeconds = N(HardResetCooldownBox), HardResetRetries = N(HardResetRetriesBox), HardResetLookbackMinutes = N(HardResetLookbackBox), EnableVisionaryBridge = _visionaryBridge, SerializeLocalTransfers = SerializeLocalBox.IsChecked == true,
+        Settings = Settings with { DownloadTempPath = DownloadTempBox.Text.Trim(), VisionaryRecheckSeconds = recheckSeconds, VisionaryConcurrentScheduling = visionaryScheduling, MaxActiveSpreadJobs = maxSpreadJobs, AutoHardReset = AutoHardResetBox.IsChecked == true, HardResetCooldownSeconds = N(HardResetCooldownBox), HardResetRetries = N(HardResetRetriesBox), HardResetLookbackMinutes = N(HardResetLookbackBox), EnableVisionaryBridge = _visionaryBridge, SerializeLocalTransfers = SerializeLocalBox.IsChecked == true,
             SmartResume = SmartResumeBox.IsChecked == true, SmartResumeAttempts = (int)(SmartResumeAttemptsBox.SelectedItem ?? 2),
             StatusBarFontSize = (int)(StatusFontBox.SelectedItem ?? 12), StatusBarScrollSpeed = (int)(ScrollSpeedBox.SelectedItem ?? 60),
             TransferCategoryOrder = string.Join("\n", PriorityCategoriesList.Items.Cast<string>()),

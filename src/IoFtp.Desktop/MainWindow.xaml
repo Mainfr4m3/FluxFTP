@@ -307,6 +307,8 @@
 
             <Border x:Name="LogPanel" Grid.Row="8" Grid.ColumnSpan="3" Background="{DynamicResource WindowBrush}" Margin="8,3,8,8"
                     BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="3">
+                <TabControl x:Name="LogTabs" SelectionChanged="LogTabs_SelectionChanged" Background="{DynamicResource WindowBrush}" BorderThickness="0">
+                    <TabItem Header="FTP-LOG">
                 <DockPanel>
                     <Grid DockPanel.Dock="Top" Margin="10,4">
                         <TextBlock Text="CONNECTION LOG · FTP COMMANDS AND SERVER REPLIES" Foreground="{DynamicResource MutedTextBrush}"
@@ -321,6 +323,12 @@
                              TextWrapping="NoWrap"
                              FontFamily="{DynamicResource AppMonospaceFontFamily}" />
                 </DockPanel>
+                    </TabItem>
+                    <TabItem x:Name="BridgeInfoTab" Header="BRIDGE-INFO"><ContentControl x:Name="BridgeInfoHost"/></TabItem>
+                    <TabItem x:Name="RaceLogTab" Header="RACE-LOG"><ContentControl x:Name="RaceLogHost"/></TabItem>
+                    <TabItem x:Name="SpreadJobsTab" Header="SPREAD-JOBS"><ContentControl x:Name="SpreadJobsHost"/></TabItem>
+                    <TabItem x:Name="TransferJobsTab" Header="TRANSFER-JOBS"><ContentControl x:Name="TransferJobsHost"/></TabItem>
+                </TabControl>
             </Border>
             <primitives:Thumb x:Name="MetricsSplitter" Grid.Row="3" Grid.ColumnSpan="3" Height="6" HorizontalAlignment="Stretch" Cursor="SizeNS" DragDelta="PanelSplitter_DragDelta" Visibility="Collapsed" Background="Transparent"><primitives:Thumb.Template><ControlTemplate TargetType="{x:Type primitives:Thumb}"><Grid Background="Transparent"><Border Height="2" Margin="80,0" VerticalAlignment="Center" Background="{DynamicResource BorderBrush}" CornerRadius="1"/></Grid></ControlTemplate></primitives:Thumb.Template></primitives:Thumb>
             <ContentControl x:Name="MetricsHost" Grid.Row="4" Grid.ColumnSpan="3" Visibility="Collapsed"/>

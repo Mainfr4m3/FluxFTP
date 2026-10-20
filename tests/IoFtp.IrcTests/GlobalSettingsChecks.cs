@@ -14,11 +14,12 @@ internal static class GlobalSettingsChecks
             var irc = new IrcSettings(Enabled: true, Host: "irc.example.test", Port: 6697, UseTls: true,
                 Nick: "FluxTest", Password: "dpapi:literal-password %20", UseZnc: true, ZncUsername: "user",
                 ZncNetwork: "network", Channel: "#test", NetworkName: "Example", AccountLinks: [new("account", "admin")], AllowInvalidCertificate: false);
-            var settings = new GlobalSettings(UseAdvancedSkipFilters: true, LogSkipListMatches: true, OverwriteIfResumeFails: true, ActivePortFrom: 49000, ActivePortTo: 49100, PassivePortMin: 50000, PassivePortMax: 51000, FxpSmallerAction: IoFtp.Core.Models.ExistingTargetAction.Resume, FxpSameAction: IoFtp.Core.Models.ExistingTargetAction.Overwrite, AsciiRules: "*.TXT\nregex:^README$", NoAsciiResume: false, Irc: irc, TransferCategoryOrder: "NFO\nSFV\nMain files\nProof\nSample");
+            var settings = new GlobalSettings(DownloadTempPath: @"R:\FluxTemp", UseAdvancedSkipFilters: true, LogSkipListMatches: true, OverwriteIfResumeFails: true, ActivePortFrom: 49000, ActivePortTo: 49100, PassivePortMin: 50000, PassivePortMax: 51000, FxpSmallerAction: IoFtp.Core.Models.ExistingTargetAction.Resume, FxpSameAction: IoFtp.Core.Models.ExistingTargetAction.Overwrite, AsciiRules: "*.TXT\nregex:^README$", NoAsciiResume: false, Irc: irc, TransferCategoryOrder: "NFO\nSFV\nMain files\nProof\nSample");
             new GlobalSettingsStore(directory).Save(settings);
             var path = Path.Combine(directory, "settings.json");
             Check(!File.ReadAllText(path).Contains(irc.Password), "secret protected on disk");
             var restored = new GlobalSettingsStore(directory).Load();
+            Check(restored.DownloadTempPath == @"R:\FluxTemp" && new GlobalSettings().DownloadTempPath == "", "optional download temp folder survives restart");
             Check(restored.UseAdvancedSkipFilters == true, "advanced skip mode survives restart");
             Check(restored.LogSkipListMatches, "skip match logging preference survives restart");
             Check(restored.OverwriteIfResumeFails, "resume overwrite preference survives restart");

@@ -35,6 +35,9 @@
                 <TabItem Header="Local"><Grid Margin="16"><Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                     <TextBlock Text="Local download path"/><TextBox x:Name="LocalPathBox" Grid.Column="1" Margin="0,4"/><TextBlock Grid.Row="1" Text="Local download slots"/><TextBox x:Name="LocalDownloadsBox" Grid.Row="1" Grid.Column="1" Width="100" HorizontalAlignment="Left" Margin="0,4"/><TextBlock Grid.Row="2" Text="Local upload slots"/><TextBox x:Name="LocalUploadsBox" Grid.Row="2" Grid.Column="1" Width="100" HorizontalAlignment="Left" Margin="0,4"/>
                     <StackPanel Grid.Row="3" Grid.ColumnSpan="2">
+                        <TextBlock Text="Download temp folder (optional)" Margin="0,14,0,4"/>
+                        <TextBox x:Name="DownloadTempBox" ToolTip="Local SSD or RAM disk. Empty downloads directly to the destination."/>
+                        <TextBlock Text="Download here first, then copy the completed file to its destination. Needs room for the whole file. RAM-disk contents can disappear on restart." TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" Margin="0,4,0,4"/>
                         <CheckBox x:Name="SerializeLocalBox" Content="One local transfer at a time (uploads, downloads and disk copies)" Margin="0,14,0,4"/>
                         <CheckBox x:Name="MinimizeToTrayBox" Content="Minimize and close FluxFTP to the system tray" Margin="0,8,0,4"/>
                     </StackPanel>

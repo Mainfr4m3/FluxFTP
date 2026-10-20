@@ -70,7 +70,7 @@ public sealed record GlobalSettings(
     int StatusBarFontSize = 12, int StatusBarScrollSpeed = 60,
     bool SmartResume = false, int SmartResumeAttempts = 2,
     bool AutoHardReset = false, int HardResetCooldownSeconds = 30, int HardResetRetries = 2, int HardResetLookbackMinutes = 10,
-    int MaxActiveSpreadJobs = 32, int VisionaryConcurrentScheduling = 32, int? VisionaryRecheckSeconds = null);
+    int MaxActiveSpreadJobs = 32, int VisionaryConcurrentScheduling = 32, int? VisionaryRecheckSeconds = null, string DownloadTempPath = "");
 
 public sealed record ViewLayoutSettings(string[]? HiddenColumns = null, string SortBy = "Name",
     bool Descending = false, string FontFamily = "", double FontSize = 0, bool Bold = false);

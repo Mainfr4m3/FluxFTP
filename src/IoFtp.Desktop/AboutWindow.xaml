@@ -6,7 +6,10 @@
             <TextBlock Text="Credits goes to: KaMiKaZe" HorizontalAlignment="Left" VerticalAlignment="Center" Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,0,12,0"/>
         </DockPanel>
         <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" Padding="18" Margin="0,0,0,14">
-            <StackPanel><TextBlock><Run Text="Flux" Foreground="{DynamicResource AccentBrush}"/><Run Text="FTP"/></TextBlock><TextBlock x:Name="VersionText" Foreground="{DynamicResource MutedTextBrush}" Margin="0,4,0,0"/></StackPanel>
+            <DockPanel>
+                <Image Source="/FluxFTP;component/Assets/fluxftp-server-icon.png" Width="96" Height="96" Stretch="Uniform" DockPanel.Dock="Left" Margin="0,0,18,0" VerticalAlignment="Center" RenderOptions.BitmapScalingMode="HighQuality"/>
+                <StackPanel VerticalAlignment="Center"><StackPanel Orientation="Horizontal"><TextBlock Text="Flux" Foreground="{DynamicResource AccentBrush}" FontSize="32" FontWeight="Bold"/><TextBlock Text="FTP" FontSize="32" FontWeight="SemiBold"/></StackPanel><TextBlock x:Name="VersionText" Foreground="{DynamicResource MutedTextBrush}" Margin="0,4,0,0"/><TextBlock Margin="0,10,0,0"><Hyperlink NavigateUri="https://github.com/Mainfr4m3/FluxFTP" RequestNavigate="GitHub_RequestNavigate" Foreground="{DynamicResource AccentBrush}">GitHub · Mainfr4m3/FluxFTP</Hyperlink></TextBlock></StackPanel>
+            </DockPanel>
         </Border>
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" CanContentScroll="True">
             <StackPanel Margin="8,6,18,8">

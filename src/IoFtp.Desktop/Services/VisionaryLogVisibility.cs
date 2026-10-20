@@ -2,6 +2,18 @@ namespace IoFtp.Desktop.Services;
 
 internal static class VisionaryLogVisibility
 {
+    public static bool Is550(string message) => System.Text.RegularExpressions.Regex.IsMatch(message,
+        @"(?:^|[\s:])550(?:[\s:-]|$)", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    public static string CompactTransferFailure(string filename, string message)
+    {
+        var category = IoFtp.Core.Transport.TransferRejection.Category(message);
+        var heading = category == "FILE-LOCKED" ? "FILE LOCK FAILED" : "TRANSFER FAILED";
+        if (category != "FILE-LOCKED" && Is550(message)) heading += " (550)";
+        else if (category is not null && category != "FILE-LOCKED") heading += " [" + category + "]";
+        return heading + " : " + filename;
+    }
+
     public static bool IsBridgeMessage(string message)
     {
         var text = message.TrimStart();

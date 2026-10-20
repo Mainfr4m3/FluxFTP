@@ -62,9 +62,7 @@ public partial class MainWindow : Window
     private readonly RaceLogStore _raceLog = new();
     private readonly RaceListingService _raceListings = new(async (profile, token) => await CreateWorkerAsync(profile, token));
     private readonly ConcurrentDictionary<Guid, string> _raceSiteNames = new();
-    private RaceLogWindow? _raceLogWindow;
     private readonly RaceLogStore _bridgeInfo = new(name: "Bridge-Info");
-    private RaceLogWindow? _bridgeInfoWindow;
     private readonly System.Windows.Threading.DispatcherTimer _raceLogTimer = new() { Interval = TimeSpan.FromMinutes(1) };
     private GlobalSettings _settings;
     private readonly string _queuePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FluxFTP", "queue.json");
@@ -323,6 +321,7 @@ public partial class MainWindow : Window
         session.ProtocolDetailMessage += message => _raceLog.Write("FTP-DETAIL", $"[{siteName}] {message}");
         session.ProtocolMessage += message => Dispatcher.BeginInvoke(() =>
         {
+            if (VisionaryLogVisibility.Is550(message)) { Append550(message, siteName); return; }
             LogText.AppendText($"{Environment.NewLine}{DateTime.Now:HH:mm:ss} [{siteName}] {message}");
             LogText.ScrollToEnd();
         });
@@ -1937,7 +1936,9 @@ public partial class MainWindow : Window
                 var ruleResult = new SiteRuleStore().EvaluateDestination(ruleDestination.Name, entry.Destination, entry.RuleSection, entry.RuleRelease);
                 if (!ruleResult.Accepted) throw new InvalidOperationException($"Site rules blocked transfer: {ruleResult.Message}");
             }
+            _startupMessage.StartTransfer();
             entry.State = "Transferring";
+            entry.SavingToDestination = false;
             long sessionNewBytes = entry.TotalBytes;
             entry.StartedAt ??= DateTimeOffset.Now;
             SaveQueue();
@@ -1984,7 +1985,7 @@ public partial class MainWindow : Window
             {
                 // Progress already arrives throttled on the UI dispatcher.
                 // Ignore delayed callbacks after completion or cancellation.
-                if (entry.State != "Transferring") return;
+                if (entry.State != "Transferring" || entry.SavingToDestination) return;
                 ReportProgress(bytes);
                 UpdateStatusProgress();
             }));
@@ -2015,9 +2016,24 @@ public partial class MainWindow : Window
                     entry.TotalBytes = await session.GetSizeAsync(source, cancellationToken) ?? 0;
                 var measureDownload = _settings.EnableDownloadMeasurement;
                 session.EnableDownloadMeasurement = measureDownload;
+                var savingProgress = new Progress<LocalDownload.SaveProgress>(sample =>
+                {
+                    if (entry.State != "Transferring") return;
+                    if (!entry.SavingToDestination)
+                    {
+                        entry.SavingToDestination = true;
+                        hasSpeedSample = false;
+                        entry.SpeedBytesPerSecond = 0;
+                    }
+                    entry.TotalBytes = sample.Total;
+                    ReportProgress(sample.Bytes);
+                    UpdateStatusProgress();
+                });
                 var measurement = await LocalDownload.RunAsync(entry.Destination,
                     (output, offset) => session.DownloadAsync(source, output, offset, progress, cancellationToken),
-                    progress, cancellationToken, allowResume: FtpTransferMode.CanResume(source, (entry.Direction == TransferDirection.ApiDownload ? apiProfile! : entry.Direction == TransferDirection.Download ? rightProfile! : leftProfile!).EffectiveOptions), overwriteIfResumeRejected: _settings.OverwriteIfResumeFails, reconnect: () => session.ReconnectForRetryAsync(cancellationToken), log: message => Dispatcher.BeginInvoke(() => { LogText.AppendText(Environment.NewLine + entry.Name + ": " + message); _raceLog.Write("RESUME", entry.Id + " " + message); }));
+                    progress, cancellationToken, allowResume: FtpTransferMode.CanResume(source, (entry.Direction == TransferDirection.ApiDownload ? apiProfile! : entry.Direction == TransferDirection.Download ? rightProfile! : leftProfile!).EffectiveOptions), overwriteIfResumeRejected: _settings.OverwriteIfResumeFails, reconnect: () => session.ReconnectForRetryAsync(cancellationToken), log: message => Dispatcher.BeginInvoke(() => { LogText.AppendText(Environment.NewLine + entry.Name + ": " + message); _raceLog.Write("RESUME", entry.Id + " " + message); }),
+                    tempDirectory: _settings.DownloadTempPath,
+                    sourceIdentity: $"{entry.Id}:{(entry.Direction == TransferDirection.ApiDownload ? apiProfile! : entry.Direction == TransferDirection.Download ? rightProfile! : leftProfile!).Id}:{source}", savingProgress: savingProgress);
                 entry.BytesTransferred = measurement.ResumeOffset + measurement.Bytes;
                 if (entry.TotalBytes <= 0) entry.TotalBytes = entry.BytesTransferred;
                 sessionNewBytes = measurement.Bytes;
@@ -2291,7 +2307,12 @@ public partial class MainWindow : Window
                 LogText.AppendText($"{Environment.NewLine}Transfer integrity FAILED ({entry.Name}): server rejected CRC/size verification; file is not marked complete.");
                 AppendConnectionLog($"{Environment.NewLine}SERVER DETAILS [{entry.Name}]{Environment.NewLine}{exception.Message}");
             }
-            else AppendConnectionLog(Environment.NewLine + TransferRejection.FormatFailure(entry.Name, exception is FtpCommandException ? exception.Message : FriendlyMessage(exception)));
+            else if (VisionaryLogVisibility.Is550(exception.Message)) Append550(exception.Message, entry.Name);
+            else if (VisionaryLogVisibility.UploadBusySummary(exception.Message) is not null)
+                AppendBridgeInfo(TransferRejection.FormatFailure(entry.Name, exception.Message));
+            else AppendConnectionLog(Environment.NewLine + (_visionaryDebugEnabled
+                ? TransferRejection.FormatFailure(entry.Name, exception is FtpCommandException ? exception.Message : FriendlyMessage(exception))
+                : VisionaryLogVisibility.CompactTransferFailure(entry.Name, exception.Message)));
             await RunScriptsAsync("TransferFailed", TransferScriptVariables(entry, FriendlyMessage(exception)), true);
             throw;
         }
@@ -2381,6 +2402,7 @@ public partial class MainWindow : Window
 
     private void AppendConnectionLog(string message)
     {
+        if (VisionaryLogVisibility.Is550(message)) { Append550(message); return; }
         if (VisionaryLogVisibility.IsBridgeMessage(message) || VisionaryLogVisibility.UploadBusySummary(message) is not null)
         { AppendBridgeInfo(message); return; }
         if (VisionaryLogVisibility.Show(message, _visionaryDebugEnabled)) LogText.AppendText(message);
@@ -2419,9 +2441,9 @@ public partial class MainWindow : Window
     private void RecordMeasuredPeakSpeed(QueueEntryView? completed = null)
     {
         // Match measured aggregate throughput; display-only FXP estimates cannot set records.
-        var speed = _queue.Where(entry => entry.State == "Transferring" && !entry.FxpSpeedEstimated)
+        var speed = _queue.Where(entry => entry.State == "Transferring" && !entry.SavingToDestination && !entry.FxpSpeedEstimated)
             .Sum(entry => Math.Max(0, entry.SpeedBytesPerSecond));
-        if (completed is { State: "Completed" } && (!completed.FxpSpeedEstimated || completed.FxpAverageMeasured))
+        if (completed is { State: "Completed", SavingToDestination: false } && (!completed.FxpSpeedEstimated || completed.FxpAverageMeasured))
             speed += Math.Max(0, completed.SpeedBytesPerSecond);
         _sessionStatistics.RecordSpeed(speed);
         _totalStatistics.RecordSpeed(speed);
@@ -2911,6 +2933,7 @@ public partial class MainWindow : Window
             var saved = JsonSerializer.Deserialize<List<QueueSnapshot>>(File.ReadAllText(source)) ?? [];
             foreach (var item in saved)
             {
+                if (item.State == "Completed") continue;
                 if (item.State is "Failed" or "Skipped")
                 {
                     _raceLog.Write("SKIP", $"Discarded saved {item.State} job: {item.Id} {item.Name}");
@@ -2963,7 +2986,8 @@ public partial class MainWindow : Window
                         var recoverable = !entry.VisionaryRace && _hardResetRecovery.Capture(entry.Id, status.Error);
                         if (recoverable) _hardResetEntries[entry.Id] = entry;
                         var failureDetails = $"Failed job {(retryRace ? "waiting for RACE retry" : recoverable ? "saved for hard reset" : "skipped and removed")}: {entry.Name} ({status.Error}).";
-                        if (VisionaryLogVisibility.UploadBusySummary(failureDetails) is not null)
+                        if (VisionaryLogVisibility.Is550(failureDetails)) Append550(failureDetails, entry.Name);
+                        else if (VisionaryLogVisibility.UploadBusySummary(failureDetails) is not null)
                             AppendConnectionLog(Environment.NewLine + failureDetails);
                         else
                             AppendConnectionLog(Environment.NewLine + $"{(retryRace ? "RELEASE FAILED, RETRYING" : "RELEASE FAILED")} : {entry.RuleRelease ?? entry.Name}");
@@ -2977,10 +3001,11 @@ public partial class MainWindow : Window
                     _engine.Remove(entry.Id);
                     continue;
                 }
-                if (entry.VisionaryRace && status.State == TransferWorkState.Completed)
+                if (status.State == TransferWorkState.Completed)
                 {
                     _hardResetRecovery.Remove(entry.Id);
-                    _hiddenRaceJobStates[entry.Id] = "Completed";
+                    _hardResetEntries.Remove(entry.Id);
+                    if (entry.VisionaryRace) _hiddenRaceJobStates[entry.Id] = "Completed";
                     _queue.Remove(entry);
                     _engine.Remove(entry.Id);
                     continue;
@@ -3049,9 +3074,23 @@ public partial class MainWindow : Window
         base.OnClosed(e);
     }
 
+    private void Append550(string message, string subject = "FTP")
+    {
+        _raceLog.Write("FTP-550", message);
+        if (_visionaryDebugEnabled) { LogText.AppendText(Environment.NewLine + message.Trim()); return; }
+        var shortText = VisionaryLogVisibility.CompactTransferFailure(subject, message);
+        var key = "550:" + shortText;
+        var now = DateTimeOffset.UtcNow;
+        if (_lastBridgeLoginWarning.TryGetValue(key, out var previous) && now - previous < TimeSpan.FromSeconds(10)) return;
+        _lastBridgeLoginWarning[key] = now;
+        LogText.AppendText(Environment.NewLine + shortText);
+        LogText.ScrollToEnd();
+    }
+
     private readonly Dictionary<string, DateTimeOffset> _lastBridgeLoginWarning = new(StringComparer.OrdinalIgnoreCase);
     private void AppendBridgeInfo(string message)
     {
+        if (VisionaryLogVisibility.Is550(message)) { Append550(message); return; }
         _bridgeInfo.Write("BRIDGE", message.Trim());
         if (VisionaryLogVisibility.UploadBusySummary(message) is { } upload)
         {
@@ -3071,22 +3110,23 @@ public partial class MainWindow : Window
         LogText.ScrollToEnd();
     }
 
-    private void BridgeInfo_Click()
+    private void LogTabs_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
-        if (_bridgeInfoWindow is not null) { _bridgeInfoWindow.Activate(); return; }
-        _bridgeInfo.Maintain();
-        _bridgeInfoWindow = new RaceLogWindow(_bridgeInfo, "Bridge-Info") { Owner = this };
-        _bridgeInfoWindow.Closed += (_, _) => _bridgeInfoWindow = null;
-        _bridgeInfoWindow.Show();
+        if (!ReferenceEquals(e.Source, LogTabs) || BridgeInfoHost is null || SpreadJobsHost is null || RaceLogHost is null || TransferJobsHost is null) return;
+        if (BridgeInfoTab.IsSelected && BridgeInfoHost.Content is null)
+            BridgeInfoHost.Content = new LogViewerControl(_bridgeInfo, "Bridge-Info");
+        if (SpreadJobsTab.IsSelected && SpreadJobsHost.Content is null)
+            SpreadJobsHost.Content = new SpreadJobsPanel();
+        if (RaceLogTab.IsSelected && RaceLogHost.Content is null)
+            RaceLogHost.Content = new LogViewerControl(_raceLog);
+        if (TransferJobsTab.IsSelected && TransferJobsHost.Content is null)
+            TransferJobsHost.Content = new TransferJobsPanel(GetTransferJobs, RemoveTransferJob, ClearTransferJobs, HardResetJobs);
     }
 
     private void RaceLog_Click(object sender, RoutedEventArgs e)
     {
-        if (_raceLogWindow is not null) { _raceLogWindow.Activate(); return; }
-        _raceLog.Maintain();
-        _raceLogWindow = new RaceLogWindow(_raceLog) { Owner = this };
-        _raceLogWindow.Closed += (_, _) => _raceLogWindow = null;
-        _raceLogWindow.Show();
+        if (LogPanel.Visibility != Visibility.Visible) ToggleLog_Click(this, new RoutedEventArgs());
+        LogTabs.SelectedItem = RaceLogTab;
     }
 
     private void TrackRaceEntry(QueueEntryView entry)
@@ -3361,8 +3401,8 @@ public partial class MainWindow : Window
 
     private void TransferJobs_Click(object sender, RoutedEventArgs e)
     {
-        var window = new TransferJobsWindow(GetTransferJobs, RemoveTransferJob, ClearTransferJobs, HardResetJobs) { Owner = this };
-        window.Show();
+        if (LogPanel.Visibility != Visibility.Visible) ToggleLog_Click(this, new RoutedEventArgs());
+        LogTabs.SelectedItem = TransferJobsTab;
     }
 
     private bool _managerVisible = true;
@@ -3434,10 +3474,7 @@ public partial class MainWindow : Window
         if (show) PanelShown("Metrics");
         if (show && MetricsHost.Content is null)
             MetricsHost.Content = new MetricsPanel(GetMetricsSnapshot,
-                () => TransferJobs_Click(this, new RoutedEventArgs()),
-                () => RaceLog_Click(this, new RoutedEventArgs()),
-                () => SpreadJobs_Click(this, new RoutedEventArgs()),
-                () => Metrics_Click(this, new RoutedEventArgs()), enabled => _visionaryDebugEnabled = enabled, RefreshServerStatsAsync, ReadRaceIdentities, text => new RaceIdentityStore().Save(text), BridgeInfo_Click,
+                () => Metrics_Click(this, new RoutedEventArgs()), enabled => _visionaryDebugEnabled = enabled, RefreshServerStatsAsync, ReadRaceIdentities, text => new RaceIdentityStore().Save(text),
                 () => SiteStatus_Click(this, new RoutedEventArgs()), () => StatusHost.Visibility == Visibility.Visible);
         if (!show) _metricsHeight = new GridLength(Math.Max(70, MetricsRow.ActualHeight));
         MetricsHost.Visibility = MetricsSplitter.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
@@ -3526,6 +3563,7 @@ public partial class MainWindow : Window
         LogText.Text = text[(start < 0 ? text.Length - 256 * 1024 : start + 1)..];
         LogText.ScrollToEnd();
     }
+    private readonly StartupMessage _startupMessage = new();
     private void UpdateLegendBar()
     {
         var mode = _settings.LegendBarMode;
@@ -3542,14 +3580,14 @@ public partial class MainWindow : Window
         UpdateStatusProgress();
         var progressText = CurrentStatusTransfer() is null ? "Idle" :
             TransferBytesText.Text + " · " + ElapsedText.Text + " · " + RemainingText.Text + " · " + QueueTimeText.Text;
-        var fullStatus = compact + "  |  " + session + "  |  " + progressText;
+        var fullStatus = _startupMessage.Display(compact + "  |  " + session + "  |  " + progressText);
         var fontSize = Math.Clamp(_settings.StatusBarFontSize, 8, 32);
         StaticStatusText.FontSize = ScrollingStatusText.FontSize = fontSize;
         LegendBar.Height = Math.Max(30, fontSize + 20);
         StaticStatusHost.Visibility = scrolling ? Visibility.Collapsed : Visibility.Visible;
         ScrollingStatusHost.Visibility = scrolling ? Visibility.Visible : Visibility.Collapsed;
         ScrollingStatusText.Text = fullStatus;
-        StaticStatusText.Text = mode == "Static"
+        StaticStatusText.Text = mode == "Static" && _startupMessage.TransferStarted
             ? fullStatus + "   ▲ upload   ▼ download   ● idle   ■ queued   ✓ completed   ✕ failed"
             : fullStatus;
 
@@ -3605,6 +3643,7 @@ public partial class MainWindow : Window
             TransferDirection.Upload or TransferDirection.UploadToLeft => "Sending",
             _ => "Relaying"
         };
+        if (current.SavingToDestination) direction = "Saving to destination";
         LegendText.Text = $"{direction}: {current.Name}";
 
         var percent = current.TotalBytes > 0
@@ -3616,9 +3655,9 @@ public partial class MainWindow : Window
         var speedText = current.SpeedBytesPerSecond > 0 || (current.FxpLiveMeasured && !current.FxpSpeedUnavailable)
             ? $"{(current.FxpSpeedEstimated ? "≈" : "")}{current.SpeedBytesPerSecond / 1048576d:0.00} MB/s"
             : "— MB/s";
-        TransferBytesText.Text = current.TotalBytes > 0
+        TransferBytesText.Text = (current.SavingToDestination ? "Saving · " : "") + (current.TotalBytes > 0
             ? $"{(current.FxpSpeedEstimated ? "≈" : "")}{FormatSize(current.DisplayBytesTransferred)} / {FormatSize(current.TotalBytes)} · {speedText}"
-            : $"{FormatSize(current.DisplayBytesTransferred)} · {speedText}";
+            : $"{FormatSize(current.DisplayBytesTransferred)} · {speedText}");
 
         var elapsed = current.StartedAt is { } started
             ? DateTimeOffset.Now - started.ToLocalTime()
@@ -3668,7 +3707,8 @@ public partial class MainWindow : Window
 
     private void SpreadJobs_Click(object sender, RoutedEventArgs e)
     {
-        new SpreadJobsWindow { Owner = this }.Show();
+        if (LogPanel.Visibility != Visibility.Visible) ToggleLog_Click(this, new RoutedEventArgs());
+        LogTabs.SelectedItem = SpreadJobsTab;
     }
 
     private async void GlobalSettings_Click(object sender, RoutedEventArgs e)
@@ -4554,6 +4594,8 @@ public partial class MainWindow : Window
         private long? _fxpEstimatedBytes;
         public long? FxpEstimatedBytes { get => _fxpEstimatedBytes; set { _fxpEstimatedBytes = value; Changed(nameof(ProgressPercent)); Changed(nameof(ProgressDisplay)); Changed(nameof(ProgressText)); } }
         public long DisplayBytesTransferred => FxpEstimatedBytes ?? BytesTransferred;
+        private bool _savingToDestination;
+        public bool SavingToDestination { get => _savingToDestination; set { _savingToDestination = value; Changed(); Changed(nameof(ProgressDisplay)); } }
         public bool FxpSpeedUnavailable { get; set; }
         public bool FxpLiveMeasured { get; set; }
         public bool FxpAverageMeasured { get; set; }
@@ -4573,7 +4615,7 @@ public partial class MainWindow : Window
         public long BytesTransferred { get => _bytesTransferred; set { _bytesTransferred = value; Changed(); Changed(nameof(ProgressText)); Changed(nameof(ProgressPercent)); Changed(nameof(ProgressDisplay)); } }
         public string ProgressText => (FxpSpeedEstimated ? "≈" : "") + FormatSize(DisplayBytesTransferred);
         public double ProgressPercent => State == "Completed" ? 100 : TotalBytes > 0 ? Math.Clamp(DisplayBytesTransferred * 100d / TotalBytes, 0, FxpSpeedEstimated ? 99 : 100) : 0;
-        public string ProgressDisplay => TotalBytes > 0 ? $"{(FxpSpeedEstimated ? "≈" : "")}{FormatSize(DisplayBytesTransferred)} / {FormatSize(TotalBytes)}  ({ProgressPercent:0}%)" : ProgressText;
+        public string ProgressDisplay => (SavingToDestination ? "Saving · " : "") + (TotalBytes > 0 ? $"{(FxpSpeedEstimated ? "≈" : "")}{FormatSize(DisplayBytesTransferred)} / {FormatSize(TotalBytes)}  ({ProgressPercent:0}%)" : ProgressText);
         public event PropertyChangedEventHandler? PropertyChanged;
         private void Changed([CallerMemberName] string? property = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(property));
     }

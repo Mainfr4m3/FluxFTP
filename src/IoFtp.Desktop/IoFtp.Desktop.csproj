@@ -8,14 +8,15 @@
     <AssemblyName>FluxFTP</AssemblyName>
     <Product>FluxFTP</Product>
     <Title>FluxFTP</Title>
-    <Version>2.1.38</Version>
-    <AssemblyVersion>2.1.38.0</AssemblyVersion>
-    <FileVersion>2.1.38.0</FileVersion>
+    <Version>2.1.42</Version>
+    <AssemblyVersion>2.1.42.0</AssemblyVersion>
+    <FileVersion>2.1.42.0</FileVersion>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <RootNamespace>IoFtp.Desktop</RootNamespace>
     <ApplicationIcon>Assets\fluxftp-server.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
+    <Resource Include="Assets\fluxftp-server-icon.png" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <FrameworkReference Include="Microsoft.WindowsDesktop.App.WindowsForms" />
     <ProjectReference Include="..\IoFtp.Core\IoFtp.Core.csproj" />

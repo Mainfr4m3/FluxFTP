@@ -2,6 +2,33 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.42 — 2026-10-20
+
+- Log tabs now appear in order: FTP-LOG, BRIDGE-INFO, RACE-LOG, SPREAD-JOBS, TRANSFER-JOBS. RACE-Log and Transfer Jobs buttons are removed from Metrics; existing entry points select the corresponding embedded tab.
+- Transfer Jobs retains live refresh, progress, remove/clear and hard reset actions in a reusable panel. Refresh stops when the panel is unloaded. Includes all previous local test changes. Not published to GitHub.
+
+## 2.1.41 — 2026-10-20
+
+- The log area uses themed FTP-LOG, BRIDGE-INFO and SPREAD-JOBS tabs. Existing FTP text remains in FTP-LOG; bridge diagnostics retain live following, copy and TXT export; spread editing and presets move into the embedded jobs tab. Bridge-Info and Spread Jobs buttons are removed from Metrics.
+- Log viewing and spread editing are reusable embedded controls. RACE-Log remains available in its existing window. Switching tabs does not start or stop transfers; live log polling pauses while the view is unloaded.
+- About displays the existing program artwork at 96 x 96 beside the FluxFTP wordmark and hides the small title-bar icon.
+- Includes temp-folder downloads, automatic completed-queue cleanup, concise errors and startup messages from previous local test builds. Local test build, not published to GitHub.
+
+## 2.1.40 — 2026-10-20
+
+- Completed queue items are removed automatically after successful transfer/final destination placement, including staged downloads. Old completed rows are not restored at startup. Session/all-time statistics and diagnostic logs remain available.
+- Connection Log shows concise transfer-failure summaries. Actual file-lock failures use FILE LOCK FAILED; other FTP 550 errors remain general transfer failures. 550 details stay out of Bridge-Info; Debug displays original details in Connection Log. RACE-Log retains diagnostics.
+- About shows the FluxFTP wordmark and a clickable GitHub repository link.
+- A random Flux-themed startup message appears in the bottom status until the first transfer executor starts, then normal status takes over for the rest of the session. Applies to downloads, uploads, FXP, bridge jobs and local copies.
+- Includes optional temp-folder downloads and all previous fixes. Local test build; not published to GitHub yet.
+
+## 2.1.39 — 2026-10-20
+
+- Local settings adds an optional Download temp folder for local SSD/RAM-disk staging. Empty retains direct-to-destination downloads. Local FTP/SFTP downloads first finish a temp file, then copy to a sibling file beside the destination and rename only after the copy completes. Existing final files are preserved on download/copy failure or cancellation.
+- The transfer queue and status bar show a separate Saving phase with copy bytes, percentage, speed and remaining time. Completion is recorded only after final placement. Disk-copy speeds do not set network speed records.
+- Completed temp files survive a failed destination copy for retry of the same queued job without downloading again; partial temp downloads can resume. Temp names isolate queued jobs, source identity and final destination. Temp data is removed after successful placement. RAM-disk contents may be lost on restart; the temp volume needs space for each whole file.
+- The final copy still consumes the local transfer slot and is included in overall runtime. Automatic transfer to the next file while an earlier file is copying is not added.
+
 ## 2.1.38 — 2026-10-20
 
 - Connection Log shortens 553 upload-busy replies to UPLOADED by <user>, retaining full details in Bridge-Info and leaving other 553 errors unchanged. Repeated summaries for the same uploading user are limited to one per ten seconds.

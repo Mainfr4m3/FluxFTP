@@ -9,7 +9,7 @@ namespace IoFtp.Desktop;
 public partial class MetricsPanel : UserControl
 {
     private readonly Func<MetricsSnapshot> _snapshot;
-    private readonly Action _transferJobs, _raceLog, _spreadJobs, _hide, _bridgeInfo, _toggleStatus;
+    private readonly Action _hide, _toggleStatus;
     private readonly Func<bool> _statusVisible;
     private readonly Action<bool> _debugChanged;
     private readonly Func<Task> _refreshStats;
@@ -18,10 +18,10 @@ public partial class MetricsPanel : UserControl
     private readonly DispatcherTimer _saveLayoutTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
     private readonly Dictionary<string, double> _sizes = new();
     private static string LayoutPath => System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FluxFTP", "metrics-layout.json");
-    internal MetricsPanel(Func<MetricsSnapshot> snapshot, Action transferJobs, Action raceLog, Action spreadJobs, Action hide, Action<bool> debugChanged, Func<Task> refreshStats, Func<string> readRaceIdentities, Action<string> saveRaceIdentities, Action bridgeInfo, Action toggleStatus, Func<bool> statusVisible)
+    internal MetricsPanel(Func<MetricsSnapshot> snapshot, Action hide, Action<bool> debugChanged, Func<Task> refreshStats, Func<string> readRaceIdentities, Action<string> saveRaceIdentities, Action toggleStatus, Func<bool> statusVisible)
     {
         _toggleStatus = toggleStatus; _statusVisible = statusVisible;
-        _bridgeInfo = bridgeInfo; _transferJobs = transferJobs; _raceLog = raceLog; _spreadJobs = spreadJobs; _hide = hide;
+        _hide = hide;
         _debugChanged = debugChanged; _refreshStats = refreshStats;
         InitializeComponent(); RaceIdentitiesText.Text = readRaceIdentities(); _saveRaceIdentities = saveRaceIdentities; _snapshot = snapshot; _timer.Tick += (_, _) => RefreshMetrics();
         ConfigureSizes();
@@ -109,15 +109,11 @@ public partial class MetricsPanel : UserControl
     private void Refresh_Click(object sender, RoutedEventArgs e) => RefreshMetrics();
     private void ToggleSizes_Click(object sender, RoutedEventArgs e) => SizeOptions.Visibility =
         SizeOptions.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
-    private void TransferJobs_Click(object sender, RoutedEventArgs e) => _transferJobs();
     private void Status_Click(object sender, RoutedEventArgs e)
     {
         _toggleStatus();
         StatusButton.Content = _statusVisible() ? "Hide Status" : "Show Status";
     }
-    private void BridgeInfo_Click(object sender, RoutedEventArgs e) => _bridgeInfo();
-    private void RaceLog_Click(object sender, RoutedEventArgs e) => _raceLog();
-    private void SpreadJobs_Click(object sender, RoutedEventArgs e) => _spreadJobs();
     private void Close_Click(object sender, RoutedEventArgs e) => _hide();
     private void RefreshMetrics()
     {
