@@ -95,6 +95,32 @@ if (args.FirstOrDefault() == "--metrics-debug-checks")
         if (VisionaryLogVisibility.Show(line, false) || !VisionaryLogVisibility.Show(line, true)) throw new Exception("Debug toggle failed: " + line);
     Console.WriteLine("PASS: Visionary timing requires Debug; queued transfers and errors remain visible."); return;
 }
+if (args.FirstOrDefault() == "--bridge-info-checks")
+{
+    var denial = VisionaryLogVisibility.LoginFailureSummary("VISIONARY source FAILED Very.Long.Release: Race listing site=JBG; operation=connect/login: 530 Access denied | site=JBG; command=USER; retry in 30s");
+    if (denial is not { Site: "JBG" } || !denial.Value.Text.Contains("LOGIN FAILED") || !denial.Value.Text.Contains("ACCESS DENIED") || !denial.Value.Text.Contains("BLOCKED") || denial.Value.Text.Contains("Very.Long.Release"))
+        throw new Exception("Login failure must produce concise site/command summary");
+    foreach (var message in new[] { "site=JBG; command=LIST; 530 Access denied", "site=JBG; command=USER; 550 denied", "site=JBG; command=CWD; 530 denied", "VISIONARY Release 530: waiting" })
+        if (VisionaryLogVisibility.LoginFailureSummary(message) is not null) throw new Exception("Non-login failure misclassified");
+
+    foreach (var message in new[] { "VISIONARY source FAILED Release: denied", "\r\nVISIONARY queued FXP Release", "VISIONARY TIMING [id]", "RACE slots for JBG: login rejected", "RACE watch [A -> B] waiting", "BRIDGE alternate: warning" })
+        if (!VisionaryLogVisibility.IsBridgeMessage(message)) throw new Exception("Missing bridge route: " + message);
+    foreach (var message in new[] { "Transfer completed: file", "Transfer failed: file", "FXP timings: PRET 1ms", "> USER !name", "SERVER STATS [A]", "Connecting to A" })
+        if (VisionaryLogVisibility.IsBridgeMessage(message)) throw new Exception("FTP message misrouted: " + message);
+    var directory = Path.Combine(Path.GetTempPath(), "FluxBridge-" + Guid.NewGuid());
+    try
+    {
+        var bridge = new RaceLogStore(directory, name: "Bridge-Info");
+        var race = new RaceLogStore(directory);
+        bridge.Write("BRIDGE", "source FAILED"); race.Write("TRANSFER", "completed");
+        if (bridge.ActivePath == race.ActivePath || !bridge.ReadTail(bridge.ActivePath).Contains("source FAILED") || race.ReadTail(race.ActivePath).Contains("source FAILED"))
+            throw new Exception("Bridge and race stores must remain separate");
+        if (bridge.ArchivePattern == race.ArchivePattern) throw new Exception("Bridge archive filter must be separate");
+    }
+    finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    Console.WriteLine("PASS: bridge warnings/status routed separately from FTP, with independent stores and archive filters.");
+    return;
+}
 if (args.FirstOrDefault() == "--race-log-checks") { RaceLogChecks.Run(); return; }
 if (args.FirstOrDefault() == "--udp-control-checks") { await UdpControlChecks.Run(); return; }
 if (args.FirstOrDefault() == "--chain-batch-checks") { await ChainBatchChecks.Run(); return; }

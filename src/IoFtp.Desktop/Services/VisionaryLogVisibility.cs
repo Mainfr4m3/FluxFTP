@@ -2,6 +2,26 @@ namespace IoFtp.Desktop.Services;
 
 internal static class VisionaryLogVisibility
 {
+    public static bool IsBridgeMessage(string message)
+    {
+        var text = message.TrimStart();
+        return new[] { "VISIONARY", "BRIDGE", "RACE slots for ", "RACE prequeue:", "RACE watch [", "RACE RESULT [" }
+            .Any(prefix => text.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+    }
+
+    public static (string Site, string Text)? LoginFailureSummary(string message)
+    {
+        // 530 on USER/PASS/ACCT rejects login; other 530 replies can be path permissions.
+        var flags = System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant;
+        if (!System.Text.RegularExpressions.Regex.IsMatch(message, @"\b530\b", flags)) return null;
+        var command = System.Text.RegularExpressions.Regex.Match(message, @"\bcommand=(USER|PASS|ACCT)\b", flags);
+        if (!command.Success) return null;
+        var site = System.Text.RegularExpressions.Regex.Match(message, @"\bsite=([^;\s|]+)", flags);
+        if (!site.Success) return null;
+        var name = site.Groups[1].Value;
+        return (name, $"LOGIN FAILED [{name}] — 530 ACCESS DENIED ({command.Groups[1].Value.ToUpperInvariant()}); connection BLOCKED. Details: Bridge-Info.");
+    }
+
     public static bool Show(string message, bool debug)
     {
         var text = message.TrimStart();

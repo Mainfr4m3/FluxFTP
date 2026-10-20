@@ -4,15 +4,16 @@ using System.Text;
 
 namespace IoFtp.Desktop.Services;
 
-internal sealed class RaceLogStore(string? directory = null, Func<DateTimeOffset>? clock = null)
+internal sealed class RaceLogStore(string? directory = null, Func<DateTimeOffset>? clock = null, string name = "RACE")
 {
     private readonly object _gate = new();
     private readonly string _directory = directory ?? AppContext.BaseDirectory;
     private readonly Func<DateTimeOffset> _clock = clock ?? (() => DateTimeOffset.UtcNow);
-    public string ActivePath => Path.Combine(_directory, "FluxFTP-RACE.log");
+    public string ActivePath => Path.Combine(_directory, $"FluxFTP-{name}.log");
     public string ArchiveDirectory => Path.Combine(_directory, "logs");
     public string? LastError { get; private set; }
-    private const string Header = "# FluxFTP RACE log started UTC: ";
+    public string ArchivePattern => name + "-*.log";
+    private string Header => $"# FluxFTP {name} log started UTC: ";
     public const long MaxBytes = 100_000_000;
     public void Write(string category, string message) => TryWrite(() =>
     {
@@ -30,7 +31,7 @@ internal sealed class RaceLogStore(string? directory = null, Func<DateTimeOffset
         {
             try { action(); LastError = null; }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            { LastError = "RACE log could not be written. Check free disk space and write access to the FluxFTP folder."; }
+            { LastError = $"{name} log could not be written. Check free disk space and write access to the FluxFTP folder."; }
         }
     }
     private void Rotate(DateTimeOffset now)
@@ -52,7 +53,7 @@ internal sealed class RaceLogStore(string? directory = null, Func<DateTimeOffset
             }
             if (now - started < TimeSpan.FromHours(24)) return;
             Directory.CreateDirectory(ArchiveDirectory);
-            var archive = Path.Combine(ArchiveDirectory, $"RACE-{started:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}.log");
+            var archive = Path.Combine(ArchiveDirectory, $"{name}-{started:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}.log");
             File.Move(ActivePath, archive); // Never overwrite an archive.
         }
         File.WriteAllText(ActivePath, Header + now.ToString("O", CultureInfo.InvariantCulture) + Environment.NewLine, new UTF8Encoding(false));

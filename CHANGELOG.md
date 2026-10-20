@@ -2,6 +2,13 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.37 — 2026-10-20
+
+- Metrics keeps its summary cards and action buttons above the scrolling detail area. Site Manager now wraps with the other toolbar buttons at its normal height. The main Quick Connect button is removed; Show/Hide Status moves to Metrics beside Spread Jobs.
+- Bridge-Info beside RACE-Log shows bridge diagnostics, source failures, slot warnings and status in a separate live log with copy and TXT export. Detailed bridge messages no longer fill Connection Log. The bridge log has its own active file and archive filter; RACE-Log retains diagnostic history.
+- Bridge login denials with FTP 530 on USER/PASS/ACCT show a concise LOGIN FAILED / ACCESS DENIED / connection BLOCKED summary in Connection Log, at most once per site per minute. Full details remain in Bridge-Info. BLOCKED describes the denied connection, not a confirmed account ban; LIST/CWD permission errors are not classified as login denials.
+- Includes the existing download progress and cached Visi race slot improvements. No additional bridge script or DLL change is required when updating from 2.1.36.
+
 ## 2.1.36 — 2026-10-19
 
 - Visi-provided directional slots now determine race transfer capacity, with room for listing and open panes; a low imported total login limit no longer silently throttles those race values. Directions without Visi values retain Flux settings, including fallback until the helper first replies.

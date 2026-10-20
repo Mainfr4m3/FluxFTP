@@ -16,9 +16,9 @@ internal sealed class RaceLogWindow : Window
     private readonly CheckBox _follow = new() { Content = "Follow live", IsChecked = true, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 5, 5, 5) };
     private bool _updating;
     private bool _reading;
-    public RaceLogWindow(RaceLogStore store)
+    public RaceLogWindow(RaceLogStore store, string label = "RACE-Log")
     {
-        _store = store; Title = "FluxFTP — RACE-Log"; Width = 1050; Height = 650;
+        _store = store; Title = "FluxFTP — " + label; Width = 1050; Height = 650;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         SetResourceReference(BackgroundProperty, "WindowBrush");
         SetResourceReference(ForegroundProperty, "TextBrush");
@@ -33,7 +33,7 @@ internal sealed class RaceLogWindow : Window
         export.Click += async (_, _) =>
         {
             if (_files.SelectedItem is not string path) return;
-            var picker = new Microsoft.Win32.SaveFileDialog { Filter = "Text files (*.txt)|*.txt", FileName = $"FluxFTP-RACE-{DateTime.Now:yyyyMMdd-HHmmss}.txt", DefaultExt = ".txt" };
+            var picker = new Microsoft.Win32.SaveFileDialog { Filter = "Text files (*.txt)|*.txt", FileName = $"FluxFTP-{label}-{DateTime.Now:yyyyMMdd-HHmmss}.txt", DefaultExt = ".txt" };
             if (picker.ShowDialog(this) != true) return;
             export.IsEnabled = false;
             try { await _store.ExportAsync(path, picker.FileName); _status.Text = "Exported: " + picker.FileName; }
@@ -41,6 +41,9 @@ internal sealed class RaceLogWindow : Window
             finally { export.IsEnabled = true; }
         };
         bar.Children.Add(export);
+        var copy = new Button { Content = "Copy", Margin = new Thickness(5) };
+        copy.Click += (_, _) => { if (_text.Text.Length > 0) Clipboard.SetText(_text.Text); };
+        bar.Children.Add(copy);
         _follow.Checked += (_, _) => FollowLatest();
         _text.AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler((_, e) =>
         {
@@ -67,13 +70,13 @@ internal sealed class RaceLogWindow : Window
         {
             var selected = _files.SelectedItem as string;
             var paths = new[] { _store.ActivePath }.Concat(Directory.Exists(_store.ArchiveDirectory)
-                ? Directory.GetFiles(_store.ArchiveDirectory, "RACE-*.log").OrderByDescending(p => p)
+                ? Directory.GetFiles(_store.ArchiveDirectory, _store.ArchivePattern).OrderByDescending(p => p)
                 : Enumerable.Empty<string>()).ToArray();
             if (!paths.SequenceEqual(_files.Items.Cast<string>()))
             { _files.ItemsSource = paths; _files.SelectedItem = paths.Contains(selected) ? selected : paths[0]; }
             Read();
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { _status.Text = "Unable to read the RACE log folder."; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { _status.Text = "Unable to read the log folder."; }
     }
     private async void Read()
     {

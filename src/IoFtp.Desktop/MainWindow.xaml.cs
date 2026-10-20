@@ -63,6 +63,8 @@ public partial class MainWindow : Window
     private readonly RaceListingService _raceListings = new(async (profile, token) => await CreateWorkerAsync(profile, token));
     private readonly ConcurrentDictionary<Guid, string> _raceSiteNames = new();
     private RaceLogWindow? _raceLogWindow;
+    private readonly RaceLogStore _bridgeInfo = new(name: "Bridge-Info");
+    private RaceLogWindow? _bridgeInfoWindow;
     private readonly System.Windows.Threading.DispatcherTimer _raceLogTimer = new() { Interval = TimeSpan.FromMinutes(1) };
     private GlobalSettings _settings;
     private readonly string _queuePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FluxFTP", "queue.json");
@@ -2379,6 +2381,7 @@ public partial class MainWindow : Window
 
     private void AppendConnectionLog(string message)
     {
+        if (VisionaryLogVisibility.IsBridgeMessage(message)) { AppendBridgeInfo(message); return; }
         if (VisionaryLogVisibility.Show(message, _visionaryDebugEnabled)) LogText.AppendText(message);
     }
 
@@ -2533,7 +2536,7 @@ public partial class MainWindow : Window
                     catch (Exception exception) when (!token.IsCancellationRequested)
                     {
                         _raceSlotRetryAt[profile.Id] = DateTimeOffset.UtcNow.AddMinutes(1);
-                        LogText.AppendText(Environment.NewLine + $"RACE slots for {profile.Name}: login rejected; waiting 60s before replenishing ({FriendlyMessage(exception)}).");
+                        AppendConnectionLog(Environment.NewLine + $"RACE slots for {profile.Name}: login rejected; waiting 60s before replenishing ({FriendlyMessage(exception)}).");
                         break;
                     }
                 }
@@ -3041,6 +3044,27 @@ public partial class MainWindow : Window
         base.OnClosed(e);
     }
 
+    private readonly Dictionary<string, DateTimeOffset> _lastBridgeLoginWarning = new(StringComparer.OrdinalIgnoreCase);
+    private void AppendBridgeInfo(string message)
+    {
+        _bridgeInfo.Write("BRIDGE", message.Trim());
+        if (VisionaryLogVisibility.LoginFailureSummary(message) is not { } summary) return;
+        var now = DateTimeOffset.UtcNow;
+        if (_lastBridgeLoginWarning.TryGetValue(summary.Site, out var previous) && now - previous < TimeSpan.FromSeconds(60)) return;
+        _lastBridgeLoginWarning[summary.Site] = now;
+        LogText.AppendText(Environment.NewLine + $"{DateTime.Now:HH:mm:ss} {summary.Text}");
+        LogText.ScrollToEnd();
+    }
+
+    private void BridgeInfo_Click()
+    {
+        if (_bridgeInfoWindow is not null) { _bridgeInfoWindow.Activate(); return; }
+        _bridgeInfo.Maintain();
+        _bridgeInfoWindow = new RaceLogWindow(_bridgeInfo, "Bridge-Info") { Owner = this };
+        _bridgeInfoWindow.Closed += (_, _) => _bridgeInfoWindow = null;
+        _bridgeInfoWindow.Show();
+    }
+
     private void RaceLog_Click(object sender, RoutedEventArgs e)
     {
         if (_raceLogWindow is not null) { _raceLogWindow.Activate(); return; }
@@ -3335,7 +3359,6 @@ public partial class MainWindow : Window
             _statusHeight = new GridLength(Math.Max(150, StatusRow.ActualHeight));
             StatusHost.Visibility = StatusSplitter.Visibility = Visibility.Collapsed;
             StatusRow.MinHeight = 0; StatusRow.Height = new GridLength(0); StatusSplitterRow.Height = new GridLength(0);
-            StatusButton.Content = "Show Status";
             NormalizePanelSpace();
             return;
         }
@@ -3373,7 +3396,6 @@ public partial class MainWindow : Window
         StatusHost.Visibility = StatusSplitter.Visibility = Visibility.Visible;
         StatusSplitterRow.Height = new GridLength(6);
         StatusRow.MinHeight = 150; StatusRow.Height = _statusHeight;
-        StatusButton.Content = "Hide Status";
         NormalizePanelSpace();
     }
     private GridLength _statusHeight = new(300);
@@ -3400,7 +3422,8 @@ public partial class MainWindow : Window
                 () => TransferJobs_Click(this, new RoutedEventArgs()),
                 () => RaceLog_Click(this, new RoutedEventArgs()),
                 () => SpreadJobs_Click(this, new RoutedEventArgs()),
-                () => Metrics_Click(this, new RoutedEventArgs()), enabled => _visionaryDebugEnabled = enabled, RefreshServerStatsAsync, ReadRaceIdentities, text => new RaceIdentityStore().Save(text));
+                () => Metrics_Click(this, new RoutedEventArgs()), enabled => _visionaryDebugEnabled = enabled, RefreshServerStatsAsync, ReadRaceIdentities, text => new RaceIdentityStore().Save(text), BridgeInfo_Click,
+                () => SiteStatus_Click(this, new RoutedEventArgs()), () => StatusHost.Visibility == Visibility.Visible);
         if (!show) _metricsHeight = new GridLength(Math.Max(70, MetricsRow.ActualHeight));
         MetricsHost.Visibility = MetricsSplitter.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
         MetricsSplitterRow.Height = new GridLength(show ? 6 : 0);
@@ -3850,8 +3873,8 @@ public partial class MainWindow : Window
                 id => Dispatcher.Invoke(() => RemoveTransferJob(id)), id => Dispatcher.Invoke(() => ResetTransferJob(id)),
                 message => Dispatcher.BeginInvoke(() =>
                 {
-                    if (message.StartsWith("VISIONARY", StringComparison.OrdinalIgnoreCase)) _raceLog.Write("VISIONARY", message);
-                    AppendConnectionLog($"{Environment.NewLine}{message}");
+                    _raceLog.Write("BRIDGE", message);
+                    AppendBridgeInfo(message);
                     LogText.ScrollToEnd();
                 }), connectIrc: async request => await await Dispatcher.InvokeAsync(async () =>
                 {

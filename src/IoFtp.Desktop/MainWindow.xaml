@@ -10,20 +10,20 @@
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
-                <StackPanel Orientation="Horizontal">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Top" Margin="0,3,0,0">
                     <TextBlock Text="Flux" Foreground="{DynamicResource AccentBrush}" FontSize="22" FontWeight="Bold" />
                     <TextBlock Text="FTP" FontSize="22" FontWeight="SemiBold" Margin="0,0,16,0" />
-                    <Button Content="Site Manager" Click="SiteManager_Click" />
-                    <Button Content="Quick Connect" Click="QuickConnect_Click" />
                 </StackPanel>
-                <TextBlock x:Name="ConnectionStatus" Grid.Column="1" Text="Offline workspace" Foreground="{DynamicResource MutedTextBrush}"
-                           VerticalAlignment="Center" HorizontalAlignment="Center" />
-                <WrapPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right">
+                <WrapPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Top">
+                    <WrapPanel.Resources>
+                        <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                            <Setter Property="VerticalAlignment" Value="Top"/>
+                        </Style>
+                    </WrapPanel.Resources>
+                    <Button Content="Site Manager" Click="SiteManager_Click" />
                     <Button x:Name="MetricsButton" Content="Show Metrics" Click="Metrics_Click" />
-                    <Button x:Name="StatusButton" Content="Show Status" Click="SiteStatus_Click" />
                     <Button x:Name="ManagerButton" Content="Hide Manager" Click="ToggleManager_Click" />
                     <Button Content="Scripts" Click="Scripts_Click" />
                     <Button Content="Sections" Click="Sections_Click" />
@@ -32,6 +32,8 @@
                     <Button x:Name="ToggleLogButton" Content="Hide Log" Click="ToggleLog_Click" />
                     <Button Content="Global Settings" Click="GlobalSettings_Click" />
                     <Button Content="About" Click="About_Click" />
+                    <TextBlock x:Name="ConnectionStatus" Text="Offline workspace" Foreground="{DynamicResource MutedTextBrush}"
+                               VerticalAlignment="Center" MaxWidth="240" TextTrimming="CharacterEllipsis" Margin="8,0,0,0" />
                 </WrapPanel>
             </Grid>
         </Border>
