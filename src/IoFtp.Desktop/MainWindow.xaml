@@ -46,7 +46,7 @@
                 <ScrollViewer x:Name="StaticStatusHost" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
                         <TextBlock x:Name="StaticStatusText" TextWrapping="NoWrap" VerticalAlignment="Center" Foreground="{DynamicResource TextBrush}"/>
-                        <Grid Width="140" Margin="12,0,4,0" VerticalAlignment="Center">
+                        <Grid x:Name="StaticStatusProgressPanel" Width="140" Margin="12,0,4,0" VerticalAlignment="Center" Visibility="Collapsed">
                             <ProgressBar Style="{StaticResource FilledProgressBar}" Height="18" Minimum="0" Maximum="100"
                                          Value="{Binding Value, ElementName=StatusProgressBar}" IsIndeterminate="{Binding IsIndeterminate, ElementName=StatusProgressBar}" Foreground="{Binding Foreground, ElementName=StatusProgressBar}"/>
                             <TextBlock Text="{Binding Text, ElementName=StatusProgressText}" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="White" FontWeight="SemiBold"/>

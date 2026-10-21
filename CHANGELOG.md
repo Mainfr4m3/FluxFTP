@@ -2,6 +2,12 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.45 — 2026-10-21
+
+- The main window title displays FluxFTP followed by the same randomly selected startup message shown in the status bar. The title message stays for the session.
+- The status progress bar is hidden while the startup message is shown and appears after the first transfer starts.
+- No bridge script or DLL update is required.
+
 ## 2.1.44 — 2026-10-21
 
 - Adds COMMANDS immediately after FTP-LOG for raw SITE commands and their replies, including server user/stat reports.

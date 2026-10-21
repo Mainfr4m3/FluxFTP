@@ -117,6 +117,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        Title = $"FluxFTP — {_startupMessage.Text}";
         _settings = _settingsStore.Load();
         ConfigureSkippedItemColors();
         _columnVisibility = new ColumnVisibilityController(_settings.Layout, (key, hidden) =>
@@ -3648,6 +3649,7 @@ public partial class MainWindow : Window
 
     private void UpdateStatusProgress()
     {
+        StaticStatusProgressPanel.Visibility = _startupMessage.TransferStarted ? Visibility.Visible : Visibility.Collapsed;
         var active = _queue.Where(item => item.State is "Queued" or "Transferring").ToList();
         if (active.Count == 0)
         {
