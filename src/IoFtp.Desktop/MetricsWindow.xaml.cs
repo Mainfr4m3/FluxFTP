@@ -32,7 +32,8 @@ internal sealed record MetricsSnapshot(int ConnectedSites, int ConfiguredSites, 
     MetricsDashboard? Dashboard = null);
 internal sealed record MetricsDashboard(string Transferred, long Files, string Uptime, int Pool, long Hits, string FxpRate,
     IReadOnlyList<(long Minute, long Bytes)> Traffic, IReadOnlyList<(string Name, TimeSpan Elapsed)>? FxpTimings = null,
-    IReadOnlyList<MetricServerStats>? ServerStats = null, IReadOnlyList<Services.RaceRouteCount>? RaceRoutes = null, IReadOnlyList<Services.RaceDestinationWins>? RaceWins = null);
+    IReadOnlyList<MetricServerStats>? ServerStats = null, IReadOnlyList<Services.RaceRouteCount>? RaceRoutes = null, IReadOnlyList<Services.RaceDestinationWins>? RaceWins = null,
+    long SessionPeakSpeed = 0, long AllTimePeakSpeed = 0);
 internal sealed record MetricServerStats(string Site, string User, DateTimeOffset Updated, string Report, string Command = "STATS")
 {
     public string Header => $"{Site} · {User} · {(Command == "USER" ? "User info" : "Stats")} · {Updated.ToLocalTime():HH:mm:ss}";

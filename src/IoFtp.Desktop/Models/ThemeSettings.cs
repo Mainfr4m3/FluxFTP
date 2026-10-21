@@ -14,4 +14,5 @@ public sealed record ThemeSettings(
     string Hover = "#263746",
     string FontFamily = "Segoe UI",
     string MonospaceFontFamily = "Cascadia Mono, Consolas",
-    double FontSize = 13);
+    double FontSize = 13,
+    string ResumeProgress = "#E6B450");

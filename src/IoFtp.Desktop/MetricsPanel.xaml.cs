@@ -123,6 +123,8 @@ public partial class MetricsPanel : UserControl
         if (value.Dashboard is { } dashboard)
         {
             BytesText.Text = dashboard.Transferred; FilesText.Text = dashboard.Files.ToString("N0");
+            SessionPeakText.Text = $"{dashboard.SessionPeakSpeed / 1_000_000d:0.00} MB/s";
+            AllTimePeakText.Text = $"{dashboard.AllTimePeakSpeed / 1_000_000d:0.00} MB/s";
             SpeedText.Text = dashboard.FxpRate; PoolText.Text = dashboard.Pool.ToString(); UptimeText.Text = dashboard.Uptime;
             string Timing(string name)
             {

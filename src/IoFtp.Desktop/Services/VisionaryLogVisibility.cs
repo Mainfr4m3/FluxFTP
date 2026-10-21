@@ -2,16 +2,29 @@ namespace IoFtp.Desktop.Services;
 
 internal static class VisionaryLogVisibility
 {
+    public static bool IsCommandReport(string message) =>
+        message.TrimStart().StartsWith("SERVER STATS", StringComparison.OrdinalIgnoreCase) ||
+        message.TrimStart().StartsWith("SERVER DETAILS", StringComparison.OrdinalIgnoreCase) &&
+        message.Contains("SITE ", StringComparison.OrdinalIgnoreCase);
+
+    public static string? FailureSite(string message)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(message, @"\bsite=([^;|\r\n]+)",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        return match.Success ? match.Groups[1].Value.Trim() : null;
+    }
+
     public static bool Is550(string message) => System.Text.RegularExpressions.Regex.IsMatch(message,
         @"(?:^|[\s:])550(?:[\s:-]|$)", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
-    public static string CompactTransferFailure(string filename, string message)
+    public static string CompactTransferFailure(string filename, string message, string? site = null)
     {
         var category = IoFtp.Core.Transport.TransferRejection.Category(message);
         var heading = category == "FILE-LOCKED" ? "FILE LOCK FAILED" : "TRANSFER FAILED";
         if (category != "FILE-LOCKED" && Is550(message)) heading += " (550)";
         else if (category is not null && category != "FILE-LOCKED") heading += " [" + category + "]";
-        return heading + " : " + filename;
+        if (!string.IsNullOrWhiteSpace(site)) heading += " [" + site + "]";
+        return filename == "FTP" ? heading : heading + " : " + filename;
     }
 
     public static bool IsBridgeMessage(string message)

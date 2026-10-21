@@ -97,6 +97,29 @@ if (args.FirstOrDefault() == "--metrics-debug-checks")
 }
 if (args.FirstOrDefault() == "--bridge-info-checks")
 {
+    var at = new DateTime(2026, 10, 21, 12, 35, 8);
+    var stamped = FtpLogTimestamp.Format("\r\n12:35:08 [TIS] < 550 denied\r\nOVERWRITE : file.rar", at);
+    if (stamped != "\r\n2026.10.21-12:35:08 [TIS] < 550 denied\r\n2026.10.21-12:35:08 OVERWRITE : file.rar")
+        throw new Exception("FTP timestamps must preserve line endings and replace old time-only prefixes");
+    if (FtpLogTimestamp.Format(stamped, at.AddDays(1)) != stamped)
+        throw new Exception("Existing timestamps must not be duplicated or changed");
+
+    var commandRouter = new SiteCommandLogRouter();
+    if (commandRouter.Route("> USER !test") || commandRouter.Route("< 331 Password required"))
+        throw new Exception("Login traffic must remain in FTP-LOG");
+    foreach (var line in new[] { "> SITE USER test", "< 200-User info", "< Credits: 123", "< 200 End" })
+        if (!commandRouter.Route(line)) throw new Exception("SITE command/reply must go to COMMANDS");
+    if (commandRouter.Route("> LIST /") || commandRouter.Route("< 150 Opening data"))
+        throw new Exception("SITE routing must reset at next FTP command");
+    if (!commandRouter.Route("> site rules") || !commandRouter.Route("< 550 denied"))
+        throw new Exception("SITE failure replies must stay with command");
+    if (!VisionaryLogVisibility.IsCommandReport("SERVER STATS [TIS] SITE STATS test") ||
+        VisionaryLogVisibility.IsCommandReport("SERVER DETAILS [file.rar] Transfer CRC failed"))
+        throw new Exception("Command report classification failed");
+    var failureSite = VisionaryLogVisibility.FailureSite("FTP 550 denied | site=TIS; command=RETR /file");
+    if (failureSite != "TIS" || VisionaryLogVisibility.CompactTransferFailure("FTP", "550 denied", failureSite) != "TRANSFER FAILED (550) [TIS]")
+        throw new Exception("550 summary must identify the replying site");
+
     var startup = new StartupMessage();
     if (string.IsNullOrWhiteSpace(startup.Text) || startup.Display("Queued") != startup.Text || startup.TransferStarted)
         throw new Exception("Startup message must remain visible before first transfer");

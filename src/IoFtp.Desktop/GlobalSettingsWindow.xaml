@@ -121,7 +121,7 @@
                             <Grid.ColumnDefinitions><ColumnDefinition Width="145"/><ColumnDefinition Width="150"/><ColumnDefinition Width="145"/><ColumnDefinition Width="150"/></Grid.ColumnDefinitions>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/></Grid.RowDefinitions>
                             <TextBlock Text="Theme name" VerticalAlignment="Center"/><TextBox x:Name="ThemeNameBox" Grid.Column="1" Grid.ColumnSpan="3" Margin="0,4"/>
                             <TextBlock Grid.Row="1" Text="Window" VerticalAlignment="Center"/><TextBox x:Name="ThemeWindowBox" Grid.Row="1" Grid.Column="1" Margin="0,4"/>
                             <TextBlock Grid.Row="1" Grid.Column="2" Text="Surface" VerticalAlignment="Center"/><TextBox x:Name="ThemeSurfaceBox" Grid.Row="1" Grid.Column="3" Margin="0,4"/>
@@ -136,7 +136,8 @@
                             <TextBlock Grid.Row="6" Text="UI font" VerticalAlignment="Center"/><TextBox x:Name="ThemeFontBox" Grid.Row="6" Grid.Column="1" Grid.ColumnSpan="3" Margin="0,4" ToolTip="For example Segoe UI"/>
                             <TextBlock Grid.Row="7" Text="Monospace font" VerticalAlignment="Center"/><TextBox x:Name="ThemeMonoFontBox" Grid.Row="7" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,4" ToolTip="For example Cascadia Mono, Consolas"/>
                             <TextBlock Grid.Row="7" Grid.Column="3" Text="Size" VerticalAlignment="Center" HorizontalAlignment="Left" Margin="8,0,0,0"/><TextBox x:Name="ThemeFontSizeBox" Grid.Row="7" Grid.Column="3" Width="58" HorizontalAlignment="Right" Margin="0,4"/>
-                            <StackPanel Grid.Row="8" Grid.ColumnSpan="4" Orientation="Horizontal" Margin="0,14,0,0">
+                            <TextBlock Grid.Row="8" Text="Resume progress" VerticalAlignment="Center"/><TextBox x:Name="ThemeResumeBox" Grid.Row="8" Grid.Column="1" Margin="0,4" ToolTip="Progress bar fill for transfers resumed from a nonzero offset."/>
+                            <StackPanel Grid.Row="9" Grid.ColumnSpan="4" Orientation="Horizontal" Margin="0,14,0,0">
                                 <Button Content="Preview" Click="PreviewTheme_Click"/><Button Content="Reset default" Click="ResetTheme_Click"/><Button Content="Import…" Click="ImportTheme_Click"/><Button Content="Export…" Click="ExportTheme_Click"/>
                             </StackPanel>
                         </Grid>

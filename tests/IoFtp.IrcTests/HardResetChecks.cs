@@ -27,8 +27,18 @@ internal static class HardResetChecks
         recovery.Remove(id);
         if (!recovery.Expired(id, policy)) throw new Exception("Removed job retained retry state");
         var defaults = JsonSerializer.Deserialize<GlobalSettings>("{}")!;
-        if (defaults.VisionaryConcurrentScheduling != 32) throw new Exception("Existing installs must retain 32 scheduling slots");
-        if (defaults.AutoHardReset || defaults.HardResetCooldownSeconds != 30 || defaults.HardResetRetries != 2 || defaults.HardResetLookbackMinutes != 10) throw new Exception("Existing installs must default to manual-only recovery");
+        if (defaults != new GlobalSettings()) throw new Exception("Missing settings must use constructor defaults");
+        if (defaults.TransferJobHistory != 100 || defaults.TransferHistory != 5000 || defaults.LogBufferHistory != 4096 ||
+            defaults.PreparedJobExpirationSeconds != 120 || defaults.StarterTimeoutSeconds != 200 || defaults.MaxTransferRuntimeMinutes != 0 ||
+            defaults.MaxActiveSpreadJobs != 300 || defaults.VisionaryConcurrentScheduling != 300 || defaults.VisionaryRecheckSeconds != 3)
+            throw new Exception("Visi bridge defaults do not match the configured baseline");
+        if (!defaults.AutoHardReset || defaults.HardResetCooldownSeconds != 120 || defaults.HardResetRetries != 5 || defaults.HardResetLookbackMinutes != 15)
+            throw new Exception("Recovery defaults do not match the configured baseline");
+        var saved = defaults with { TransferHistory = 10000, StarterTimeoutSeconds = 300, MaxActiveSpreadJobs = 32,
+            VisionaryConcurrentScheduling = 32, VisionaryRecheckSeconds = null, AutoHardReset = false,
+            HardResetCooldownSeconds = 30, HardResetRetries = 2, HardResetLookbackMinutes = 10 };
+        if (JsonSerializer.Deserialize<GlobalSettings>(JsonSerializer.Serialize(saved)) != saved)
+            throw new Exception("Explicit saved preferences must remain unchanged by new defaults");
         var settings = defaults with { VisionaryRecheckSeconds = 1, VisionaryConcurrentScheduling = 64, AutoHardReset = true, HardResetCooldownSeconds = 45, HardResetRetries = 3, HardResetLookbackMinutes = 15 };
         if (JsonSerializer.Deserialize<GlobalSettings>(JsonSerializer.Serialize(settings)) != settings) throw new Exception("Recovery preferences not persisted");
         Console.WriteLine("PASS: hard reset cooldown, bounded retries, duplicate claims, lookback, permanent rejection exclusions and preference migration.");

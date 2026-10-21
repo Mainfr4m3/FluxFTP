@@ -233,10 +233,11 @@ public partial class GlobalSettingsWindow : Window
     private ThemeSettings ReadTheme() => new(
         ThemeNameBox.Text.Trim(), ThemeWindowBox.Text.Trim(), ThemeSurfaceBox.Text.Trim(), ThemeRaisedBox.Text.Trim(), ThemeBorderBox.Text.Trim(),
         ThemeAccentBox.Text.Trim(), ThemeAccentStrongBox.Text.Trim(), ThemeTextBox.Text.Trim(), ThemeMutedTextBox.Text.Trim(), ThemeSelectionBox.Text.Trim(), ThemeHoverBox.Text.Trim(),
-        ThemeFontBox.Text.Trim(), ThemeMonoFontBox.Text.Trim(), double.TryParse(ThemeFontSizeBox.Text, out var size) ? size : 0);
+        ThemeFontBox.Text.Trim(), ThemeMonoFontBox.Text.Trim(), double.TryParse(ThemeFontSizeBox.Text, out var size) ? size : 0, ThemeResumeBox.Text.Trim());
 
     private void LoadTheme(ThemeSettings theme)
     {
+        ThemeResumeBox.Text=theme.ResumeProgress;
         ThemeNameBox.Text=theme.Name; ThemeWindowBox.Text=theme.Window; ThemeSurfaceBox.Text=theme.Surface; ThemeRaisedBox.Text=theme.SurfaceRaised; ThemeBorderBox.Text=theme.Border;
         ThemeAccentBox.Text=theme.Accent; ThemeAccentStrongBox.Text=theme.AccentStrong; ThemeTextBox.Text=theme.Text; ThemeMutedTextBox.Text=theme.MutedText;
         ThemeSelectionBox.Text=theme.Selection; ThemeHoverBox.Text=theme.Hover; ThemeFontBox.Text=theme.FontFamily; ThemeMonoFontBox.Text=theme.MonospaceFontFamily; ThemeFontSizeBox.Text=$"{theme.FontSize:0.##}";

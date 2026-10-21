@@ -17,6 +17,7 @@ internal static class ThemeManager
         SetBrush(resources, "SurfaceRaisedBrush", theme.SurfaceRaised);
         SetBrush(resources, "BorderBrush", theme.Border);
         SetBrush(resources, "AccentBrush", theme.Accent);
+        SetBrush(resources, "ResumeProgressBrush", theme.ResumeProgress);
         SetBrush(resources, "AccentStrongBrush", theme.AccentStrong);
         SetBrush(resources, "TextBrush", theme.Text);
         SetBrush(resources, "MutedTextBrush", theme.MutedText);
@@ -52,6 +53,7 @@ internal static class ThemeManager
     {
         yield return new("Window", t.Window); yield return new("Surface", t.Surface);
         yield return new("Raised surface", t.SurfaceRaised); yield return new("Border", t.Border);
+        yield return new("Resume progress", t.ResumeProgress);
         yield return new("Accent", t.Accent); yield return new("Strong accent", t.AccentStrong);
         yield return new("Text", t.Text); yield return new("Muted text", t.MutedText);
         yield return new("Selection", t.Selection); yield return new("Hover", t.Hover);

@@ -6,6 +6,8 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../../src/IoFtp.Desktop/Services/FtpLogTimestamp.cs" Link="FtpLogTimestamp.cs" />
+    <Compile Include="../../src/IoFtp.Desktop/Services/SiteCommandLogRouter.cs" Link="SiteCommandLogRouter.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/StartupMessage.cs" Link="StartupMessage.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/VisionarySlotCache.cs" Link="VisionarySlotCache.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/RaceRouteStatistics.cs" Link="RaceRouteStatistics.cs" />

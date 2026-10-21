@@ -2,6 +2,15 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.44 — 2026-10-21
+
+- Adds COMMANDS immediately after FTP-LOG for raw SITE commands and their replies, including server user/stat reports.
+- FTP-LOG timestamps use local yyyy.MM.dd-HH:mm:ss. Transfer failures include the site where known; overwrite recovery uses concise OVERWRITE messages while resumed retries remain labelled RESUMING.
+- Resumed transfers use a separate configurable Resume progress theme color in the bottom status bar, including local downloads/uploads and FXP.
+- Metrics shows session and all-time measured peak speeds beside FXP rate. Disk-copy speeds and estimated FXP speeds do not set these records.
+- New settings default to 300 active spread jobs, 300 Visionary scheduling slots and a 3-second race recheck. Recovery defaults to enabled, 120-second cooldown, five retries and a 15-minute lookback. Starter timeout is 200 seconds and transfer history is 5000. Explicit saved settings remain unchanged.
+- Local test build for verification before GitHub publication. No bridge script or DLL update is required.
+
 ## 2.1.43 — 2026-10-20
 
 - Race source inventory excludes paired drFTPD information markers [SUB]-...-[SUB], [AUDIO]-...-[AUDIO] and [VIDEO]-...-[VIDEO] when represented as directories or zero-byte entries. They are not descended into or copied. Nonempty files and real Subs/Sample/CD folders remain eligible.

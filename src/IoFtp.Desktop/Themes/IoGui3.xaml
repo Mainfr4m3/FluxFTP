@@ -15,6 +15,7 @@
     <SolidColorBrush x:Key="SurfaceBrush" Color="{StaticResource SurfaceColor}" />
     <SolidColorBrush x:Key="SurfaceRaisedBrush" Color="{StaticResource SurfaceRaisedColor}" />
     <SolidColorBrush x:Key="BorderBrush" Color="{StaticResource BorderColor}" />
+    <SolidColorBrush x:Key="ResumeProgressBrush" Color="#E6B450" />
     <SolidColorBrush x:Key="AccentBrush" Color="{StaticResource AccentColor}" />
     <SolidColorBrush x:Key="AccentStrongBrush" Color="{StaticResource AccentStrongColor}" />
     <SolidColorBrush x:Key="TextBrush" Color="{StaticResource TextColor}" />

@@ -63,6 +63,7 @@ public partial class MainWindow : Window
     private readonly RaceListingService _raceListings = new(async (profile, token) => await CreateWorkerAsync(profile, token));
     private readonly ConcurrentDictionary<Guid, string> _raceSiteNames = new();
     private readonly RaceLogStore _bridgeInfo = new(name: "Bridge-Info");
+    private readonly RaceLogStore _commandsInfo = new(name: "Commands");
     private readonly System.Windows.Threading.DispatcherTimer _raceLogTimer = new() { Interval = TimeSpan.FromMinutes(1) };
     private GlobalSettings _settings;
     private readonly string _queuePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FluxFTP", "queue.json");
@@ -136,7 +137,7 @@ public partial class MainWindow : Window
             if (!migratedLayout.ContainsKey(key)) migratedLayout[key] = new(_columnVisibility.Hidden(key), key == "Queue" ? "" : "Name");
         _settings = _settings with { Layout = migratedLayout };
         _reverseFxpPairs = _fxpRouteStore.LoadReverseRoutes();
-        LogText.Text = $"FluxFTP {UpdateCheckService.CurrentVersion} started.{Environment.NewLine}No network connections have been opened.";
+        LogText.Text = FtpLogTimestamp.Format($"FluxFTP {UpdateCheckService.CurrentVersion} started.{Environment.NewLine}No network connections have been opened.", DateTime.Now);
         _engine = new GlobalTransferEngine(new DesktopTransferExecutor(this));
         _engine.ConfigureLocalSlots(_settings.MaxLocalDownloadSlots, _settings.MaxLocalUploadSlots, _settings.SerializeLocalTransfers);
         _engine.StateChanged += Engine_StateChanged;
@@ -147,7 +148,7 @@ public partial class MainWindow : Window
             if (!_settings.EnableVisionaryBridge || _workerPoolShuttingDown || _racePoolGate.CurrentCount == 0) return;
             try { await MaintainRaceSlotsAsync(_racePoolStop.Token); }
             catch (OperationCanceledException) when (_racePoolStop.IsCancellationRequested) { }
-            catch (Exception exception) { LogText.AppendText(Environment.NewLine + "RACE idle slots: " + FriendlyMessage(exception)); }
+            catch (Exception exception) { AppendFtpLog(Environment.NewLine + "RACE idle slots: " + FriendlyMessage(exception)); }
         };
         _racePoolTimer.Start();
         _hardResetTimer.Tick += (_, _) => MaintainHardResetCandidates();
@@ -205,7 +206,7 @@ public partial class MainWindow : Window
         }
         catch (Exception exception)
         {
-            LogText.AppendText($"{Environment.NewLine}Local browse error: {exception.Message}");
+            AppendFtpLog($"{Environment.NewLine}Local browse error: {exception.Message}");
         }
     }
 
@@ -248,7 +249,7 @@ public partial class MainWindow : Window
         ConnectionStatus.Text = $"Connecting to {profile.Host}:{profile.Port}…";
         if (left) LeftSiteTitle.Text = $"REMOTE — {profile.Name.ToUpperInvariant()}";
         else RemoteSiteTitle.Text = $"REMOTE — {profile.Name.ToUpperInvariant()}";
-        LogText.AppendText($"{Environment.NewLine}Connecting with {TransferProtocolNames.Display(profile.Protocol)} to {profile.Host}:{profile.Port}…");
+        AppendFtpLog($"{Environment.NewLine}Connecting with {TransferProtocolNames.Display(profile.Protocol)} to {profile.Host}:{profile.Port}…");
         try
         {
             await DisposePooledWorkersAsync(profile.Id);
@@ -283,7 +284,7 @@ public partial class MainWindow : Window
             }
             new ProfileStore().PromoteAddress(profile.Id, session.ConnectedHost, session.ConnectedPort);
             ConnectionStatus.Text = $"Connected: {session.ConnectedHost}:{session.ConnectedPort}; loading files…";
-            LogText.AppendText(profile.Protocol == TransferProtocol.Sftp
+            AppendFtpLog(profile.Protocol == TransferProtocol.Sftp
                 ? $"{Environment.NewLine}SFTP login succeeded. Loading directory…"
                 : $"{Environment.NewLine}TLS login succeeded. Loading directory with {DescribeListingMode(profile.ListingMode, session.Capabilities)}…");
             LogText.ScrollToEnd();
@@ -293,15 +294,15 @@ public partial class MainWindow : Window
             if (left) ShowLeftRemoteEntries(options.BasePath, entries); else ShowRemoteEntries(options.BasePath, entries);
             ReloadBookmarks(left);
             ConnectionStatus.Text = $"Connected: {session.ConnectedHost}:{session.ConnectedPort}";
-            LogText.AppendText($"{Environment.NewLine}Connected. {entries.Count} remote entries received.");
-            LogText.AppendText($"{Environment.NewLine}Capabilities: {string.Join(", ", session.Capabilities.OrderBy(value => value))}");
+            AppendFtpLog($"{Environment.NewLine}Connected. {entries.Count} remote entries received.");
+            AppendFtpLog($"{Environment.NewLine}Capabilities: {string.Join(", ", session.Capabilities.OrderBy(value => value))}");
             await RunScriptsAsync("OnConnect", new() { ["site"] = profile.Name, ["host"] = session.ConnectedHost, ["path"] = options.BasePath, ["status"] = "Connected" }, true);
         }
         catch (Exception exception)
         {
             ConnectionStatus.Text = "Connection failed";
             if (left) LocalList.ItemsSource = null; else RemoteList.ItemsSource = null;
-            LogText.AppendText($"{Environment.NewLine}Connection failed: {FriendlyMessage(exception)}");
+            AppendFtpLog($"{Environment.NewLine}Connection failed: {FriendlyMessage(exception)}");
         }
         finally { SetConnectionBusy(left, false); LogText.ScrollToEnd(); }
     }
@@ -319,10 +320,12 @@ public partial class MainWindow : Window
     private void AttachProtocolLog(FtpRemoteSession session, string siteName)
     {
         session.ProtocolDetailMessage += message => _raceLog.Write("FTP-DETAIL", $"[{siteName}] {message}");
+        var commands = new SiteCommandLogRouter();
         session.ProtocolMessage += message => Dispatcher.BeginInvoke(() =>
         {
-            if (VisionaryLogVisibility.Is550(message)) { Append550(message, siteName); return; }
-            LogText.AppendText($"{Environment.NewLine}{DateTime.Now:HH:mm:ss} [{siteName}] {message}");
+            if (commands.Route(message)) { AppendCommands($"[{siteName}] {message}"); return; }
+            if (VisionaryLogVisibility.Is550(message)) { Append550(message, "FTP", siteName); return; }
+            AppendFtpLog($"{Environment.NewLine}{DateTime.Now:HH:mm:ss} [{siteName}] {message}");
             LogText.ScrollToEnd();
         });
     }
@@ -333,7 +336,7 @@ public partial class MainWindow : Window
     }
 
     private void ClearLog_Click(object sender, RoutedEventArgs e) =>
-        LogText.Text = $"FluxFTP {UpdateCheckService.CurrentVersion} log cleared at {DateTime.Now:yyyy-MM-dd HH:mm:ss}.";
+        LogText.Text = FtpLogTimestamp.Format($"FluxFTP {UpdateCheckService.CurrentVersion} log cleared.", DateTime.Now);
 
     private ConnectionProfile ApplyGlobalProxy(ConnectionProfile profile)
     {
@@ -425,7 +428,7 @@ public partial class MainWindow : Window
         catch (Exception exception)
         {
             ConnectionStatus.Text = "Disconnect failed";
-            LogText.AppendText($"{Environment.NewLine}Disconnect failed: {FriendlyMessage(exception)}");
+            AppendFtpLog($"{Environment.NewLine}Disconnect failed: {FriendlyMessage(exception)}");
         }
         finally { SetConnectionBusy(left, false); }
     }
@@ -440,7 +443,7 @@ public partial class MainWindow : Window
         LocalList.ItemsSource = null; _leftRemoteDirectory = "/"; LocalPath.Text = "/";
         LeftSiteTitle.Text = _leftProfile is null ? "REMOTE SITE" : $"REMOTE — {_leftProfile.Name.ToUpperInvariant()} (DISCONNECTED)";
         ConnectionStatus.Text = "Remote disconnected";
-        LogText.AppendText($"{Environment.NewLine}Remote disconnected."); LogText.ScrollToEnd();
+        AppendFtpLog($"{Environment.NewLine}Remote disconnected."); LogText.ScrollToEnd();
     }
 
     private async Task DisconnectRightAsync()
@@ -453,7 +456,7 @@ public partial class MainWindow : Window
         RemoteList.ItemsSource = null; _remoteDirectory = "/"; RemotePath.Text = "/";
         RemoteSiteTitle.Text = _rightProfile is null ? "REMOTE SITE" : $"REMOTE — {_rightProfile.Name.ToUpperInvariant()} (DISCONNECTED)";
         ConnectionStatus.Text = "Remote disconnected";
-        LogText.AppendText($"{Environment.NewLine}Remote disconnected."); LogText.ScrollToEnd();
+        AppendFtpLog($"{Environment.NewLine}Remote disconnected."); LogText.ScrollToEnd();
     }
 
     private bool _commandPaneLeft;
@@ -614,7 +617,7 @@ public partial class MainWindow : Window
         layout[key] = (layout.GetValueOrDefault(key) ?? new()) with { SortBy = property, Descending = direction == ListSortDirection.Descending };
         var updated = _settings with { Layout = layout };
         try { _settingsStore.Save(updated); _settings = updated; }
-        catch (Exception exception) { LogText.AppendText(Environment.NewLine + "Could not save sorting: " + exception.Message); }
+        catch (Exception exception) { AppendFtpLog(Environment.NewLine + "Could not save sorting: " + exception.Message); }
     }
 
     private void ApplyViewLayouts()
@@ -751,7 +754,7 @@ public partial class MainWindow : Window
             ShowLeftRemoteEntries(path, entries);
             CommitNavigation(true, previous, _leftRemoteDirectory);
         }
-        catch (Exception exception) { LogText.AppendText($"{Environment.NewLine}Remote: {FriendlyMessage(exception)}"); }
+        catch (Exception exception) { AppendFtpLog($"{Environment.NewLine}Remote: {FriendlyMessage(exception)}"); }
         finally { _leftNavigationGate.Release(); }
     }
 
@@ -772,7 +775,7 @@ public partial class MainWindow : Window
             UpdateDriveBarSelection(RightDriveBar, full);
             CommitNavigation(false, previous, full);
         }
-        catch (Exception exception) { LogText.AppendText($"{Environment.NewLine}Local browse error: {exception.Message}"); }
+        catch (Exception exception) { AppendFtpLog($"{Environment.NewLine}Local browse error: {exception.Message}"); }
     }
 
     private static string NormalizeLocalDirectory(string directory)
@@ -907,7 +910,7 @@ public partial class MainWindow : Window
         catch (Exception exception)
         {
             ConnectionStatus.Text = "Directory load failed";
-            LogText.AppendText($"{Environment.NewLine}Could not open {normalized}: {FriendlyMessage(exception)}");
+            AppendFtpLog($"{Environment.NewLine}Could not open {normalized}: {FriendlyMessage(exception)}");
             LogText.ScrollToEnd();
         }
         finally { _rightNavigationGate.Release(); }
@@ -1282,12 +1285,12 @@ public partial class MainWindow : Window
                 await RemoteDeletion.DeleteAsync(session, path, directory, profile?.Protocol != TransferProtocol.Sftp, timeout.Token,
                     message => AppendConnectionLog($"{Environment.NewLine}{message}"));
             }
-            LogText.AppendText($"{Environment.NewLine}Deleted: {path}");
+            AppendFtpLog($"{Environment.NewLine}Deleted: {path}");
             return true;
         }
         catch (Exception exception)
         {
-            LogText.AppendText($"{Environment.NewLine}Delete failed for {path}: {exception.Message}");
+            AppendFtpLog($"{Environment.NewLine}Delete failed for {path}: {exception.Message}");
             MessageBox.Show(FriendlyMessage(exception), "Delete", MessageBoxButton.OK, MessageBoxImage.Error);
             return false;
         }
@@ -1325,7 +1328,7 @@ public partial class MainWindow : Window
                 try { children = await source.ListAsync(folder.Source, timeout.Token); }
                 catch (Exception exception) when (!folder.Source.Equals(sourceRoot, StringComparison.Ordinal))
                 {
-                    LogText.AppendText($"{Environment.NewLine}Skipped inaccessible remote folder {folder.Source}: {FriendlyMessage(exception)}");
+                    AppendFtpLog($"{Environment.NewLine}Skipped inaccessible remote folder {folder.Source}: {FriendlyMessage(exception)}");
                     continue;
                 }
                 var nuke = NukeDetector.DetectDirectory(RemoteLeaf(folder.Source), children);
@@ -1333,7 +1336,7 @@ public partial class MainWindow : Window
                         $"'{RemoteLeaf(folder.Source)}' is marked {nuke.Display}.\n\nQueue it anyway?",
                         "Nuked release", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
                 {
-                    LogText.AppendText($"{Environment.NewLine}Nuke detection blocked transfer: {folder.Source} ({nuke.Display}).");
+                    AppendFtpLog($"{Environment.NewLine}Nuke detection blocked transfer: {folder.Source} ({nuke.Display}).");
                     LogText.ScrollToEnd();
                     return;
                 }
@@ -1353,11 +1356,11 @@ public partial class MainWindow : Window
             var queuedEntries = files.OrderBy(file => PriorityRank(file.Entry.Name, file.Entry.FullPath)).ThenBy(file => file.Entry.Name, NaturalNameComparer.Instance)
                 .Select(file => AddQueue(file.Entry.Name, file.Entry.FullPath, file.Destination, direction, file.Entry.Size ?? 0, persist: false)).ToList();
             if (startImmediately) ScheduleBatch(queuedEntries); else { SaveQueue(); UpdateQueueStatus(); }
-            LogText.AppendText($"{Environment.NewLine}Queued remote folder {sourceRoot}: {fileCount} files.");
+            AppendFtpLog($"{Environment.NewLine}Queued remote folder {sourceRoot}: {fileCount} files.");
         }
         catch (Exception exception)
         {
-            LogText.AppendText($"{Environment.NewLine}Could not queue remote folder {sourceRoot}: {FriendlyMessage(exception)}");
+            AppendFtpLog($"{Environment.NewLine}Could not queue remote folder {sourceRoot}: {FriendlyMessage(exception)}");
             ConnectionStatus.Text = "Remote folder queue failed";
         }
         LogText.ScrollToEnd();
@@ -1433,7 +1436,7 @@ public partial class MainWindow : Window
                 if (output.Length > FileViewerWindow.MaximumFileSize)
                     throw new IOException($"The file is larger than the internal viewer limit of {FileViewerWindow.MaximumFileSize / 1024 / 1024} MB.");
                 content = output.ToArray();
-                LogText.AppendText($"{Environment.NewLine}Internal preview downloaded: {path}");
+                AppendFtpLog($"{Environment.NewLine}Internal preview downloaded: {path}");
                 LogText.ScrollToEnd();
             }
             new FileViewerWindow(name, path, content) { Owner = this }.Show();
@@ -1475,7 +1478,7 @@ public partial class MainWindow : Window
                 await using var output = new FileStream(openPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
                 using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(5));
                 await session.DownloadAsync(path, output, 0, null, timeout.Token);
-                LogText.AppendText($"{Environment.NewLine}Preview downloaded: {path}");
+                AppendFtpLog($"{Environment.NewLine}Preview downloaded: {path}");
             }
             Process.Start(new ProcessStartInfo(openPath) { UseShellExecute = true });
         }
@@ -1526,7 +1529,7 @@ public partial class MainWindow : Window
                         $"'{RemoteLeaf(folder.Source)}' is marked {nuke.Display}.\n\nDownload it anyway?",
                         "Nuked release", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
                 {
-                    LogText.AppendText($"{Environment.NewLine}Nuke detection blocked download: {folder.Source} ({nuke.Display}).");
+                    AppendFtpLog($"{Environment.NewLine}Nuke detection blocked download: {folder.Source} ({nuke.Display}).");
                     LogText.ScrollToEnd();
                     return;
                 }
@@ -1547,13 +1550,13 @@ public partial class MainWindow : Window
             var queuedEntries = files.OrderBy(file => PriorityRank(file.Entry.Name, file.Entry.FullPath)).ThenBy(file => file.Entry.Name, NaturalNameComparer.Instance)
                 .Select(file => AddQueue(file.Entry.Name, file.Entry.FullPath, file.Destination, direction, file.Entry.Size ?? 0, persist: false)).ToList();
             if (startImmediately) ScheduleBatch(queuedEntries); else { SaveQueue(); UpdateQueueStatus(); }
-            LogText.AppendText($"{Environment.NewLine}Queued remote folder for local download {sourceRoot}: {files.Count} files.");
+            AppendFtpLog($"{Environment.NewLine}Queued remote folder for local download {sourceRoot}: {files.Count} files.");
             LogText.ScrollToEnd();
             if (direction == TransferDirection.Download) LoadLocalDirectory(_localDirectory); else LoadRightLocalDirectory(_rightLocalDirectory);
         }
         catch (Exception exception)
         {
-            LogText.AppendText($"{Environment.NewLine}Could not queue remote folder {sourceRoot}: {FriendlyMessage(exception)}");
+            AppendFtpLog($"{Environment.NewLine}Could not queue remote folder {sourceRoot}: {FriendlyMessage(exception)}");
             LogText.ScrollToEnd();
         }
     }
@@ -1587,11 +1590,11 @@ public partial class MainWindow : Window
             var queuedEntries = files.OrderBy(file => PriorityRank(file.File.Name, file.File.FullName)).ThenBy(file => file.File.Name, NaturalNameComparer.Instance)
                 .Select(file => AddQueue(file.File.Name, file.File.FullName, file.Destination, direction, file.File.Length, persist: false)).ToList();
             if (startImmediately) ScheduleBatch(queuedEntries); else { SaveQueue(); UpdateQueueStatus(); }
-            LogText.AppendText($"{Environment.NewLine}Queued local folder {sourceRoot}: {files.Count} files.");
+            AppendFtpLog($"{Environment.NewLine}Queued local folder {sourceRoot}: {files.Count} files.");
         }
         catch (Exception exception)
         {
-            LogText.AppendText($"{Environment.NewLine}Could not queue local folder {sourceRoot}: {FriendlyMessage(exception)}");
+            AppendFtpLog($"{Environment.NewLine}Could not queue local folder {sourceRoot}: {FriendlyMessage(exception)}");
             ConnectionStatus.Text = "Local folder queue failed";
         }
         LogText.ScrollToEnd();
@@ -1773,7 +1776,7 @@ public partial class MainWindow : Window
                     CopyDirectoryTree(item.Source, item.Destination);
                 }
             });
-            LogText.AppendText($"{Environment.NewLine}Local copy completed: {approved.Count} item(s) to {destinationDirectory}");
+            AppendFtpLog($"{Environment.NewLine}Local copy completed: {approved.Count} item(s) to {destinationDirectory}");
             LogText.ScrollToEnd();
         }
         catch (Exception exception)
@@ -1800,7 +1803,7 @@ public partial class MainWindow : Window
                 AddQueue(Path.GetFileName(file), file, destination, TransferDirection.LocalCopy, new FileInfo(file).Length);
             }
         }
-        LogText.AppendText($"{Environment.NewLine}Added local items to queue. Press Start queue to begin.");
+        AppendFtpLog($"{Environment.NewLine}Added local items to queue. Press Start queue to begin.");
         LogText.ScrollToEnd();
     }
 
@@ -1939,6 +1942,7 @@ public partial class MainWindow : Window
             _startupMessage.StartTransfer();
             entry.State = "Transferring";
             entry.SavingToDestination = false;
+            entry.IsResuming = false;
             long sessionNewBytes = entry.TotalBytes;
             entry.StartedAt ??= DateTimeOffset.Now;
             SaveQueue();
@@ -2022,6 +2026,7 @@ public partial class MainWindow : Window
                     if (!entry.SavingToDestination)
                     {
                         entry.SavingToDestination = true;
+                        entry.IsResuming = false;
                         hasSpeedSample = false;
                         entry.SpeedBytesPerSecond = 0;
                     }
@@ -2030,8 +2035,12 @@ public partial class MainWindow : Window
                     UpdateStatusProgress();
                 });
                 var measurement = await LocalDownload.RunAsync(entry.Destination,
-                    (output, offset) => session.DownloadAsync(source, output, offset, progress, cancellationToken),
-                    progress, cancellationToken, allowResume: FtpTransferMode.CanResume(source, (entry.Direction == TransferDirection.ApiDownload ? apiProfile! : entry.Direction == TransferDirection.Download ? rightProfile! : leftProfile!).EffectiveOptions), overwriteIfResumeRejected: _settings.OverwriteIfResumeFails, reconnect: () => session.ReconnectForRetryAsync(cancellationToken), log: message => Dispatcher.BeginInvoke(() => { LogText.AppendText(Environment.NewLine + entry.Name + ": " + message); _raceLog.Write("RESUME", entry.Id + " " + message); }),
+                    async (output, offset) =>
+                    {
+                        await Dispatcher.InvokeAsync(() => { entry.IsResuming = offset > 0; UpdateStatusProgress(); });
+                        await session.DownloadAsync(source, output, offset, progress, cancellationToken);
+                    },
+                    progress, cancellationToken, allowResume: FtpTransferMode.CanResume(source, (entry.Direction == TransferDirection.ApiDownload ? apiProfile! : entry.Direction == TransferDirection.Download ? rightProfile! : leftProfile!).EffectiveOptions), overwriteIfResumeRejected: _settings.OverwriteIfResumeFails, reconnect: () => session.ReconnectForRetryAsync(cancellationToken), log: message => Dispatcher.BeginInvoke(() => { AppendFtpLog(Environment.NewLine + entry.Name + ": " + message); _raceLog.Write("RESUME", entry.Id + " " + message); }),
                     tempDirectory: _settings.DownloadTempPath,
                     sourceIdentity: $"{entry.Id}:{(entry.Direction == TransferDirection.ApiDownload ? apiProfile! : entry.Direction == TransferDirection.Download ? rightProfile! : leftProfile!).Id}:{source}", savingProgress: savingProgress);
                 entry.BytesTransferred = measurement.ResumeOffset + measurement.Bytes;
@@ -2040,7 +2049,7 @@ public partial class MainWindow : Window
                 if (measureDownload)
                 {
                 var diagnostic = FormattableString.Invariant($"Download measurement: {entry.Name} | new bytes={measurement.Bytes}; resume={measurement.ResumeOffset}; total={measurement.ElapsedSeconds:F3}s; average={measurement.Bytes / 1000000.0 / Math.Max(measurement.ElapsedSeconds, 0.001):F2} MB/s; flush={measurement.FlushSeconds:F3}s; rename={measurement.FinalizeSeconds:F3}s | {session.LastDownloadMeasurement}");
-                LogText.AppendText(Environment.NewLine + diagnostic);
+                AppendFtpLog(Environment.NewLine + diagnostic);
                 _raceLog.Write("DOWNLOAD-MEASURE", diagnostic);
                 }
                 AppendTransferIntegrityNotices(entry, ("source", session));
@@ -2054,10 +2063,12 @@ public partial class MainWindow : Window
                 sessionNewBytes = input.Length - offset;
                 await ResumeRecovery.RunAsync(offset, _settings.OverwriteIfResumeFails, async attemptOffset =>
                 {
+                    entry.IsResuming = attemptOffset > 0;
+                    UpdateStatusProgress();
                     input.Position = attemptOffset;
                     sessionNewBytes = input.Length - attemptOffset;
                     await session.UploadAsync(entry.Destination, input, attemptOffset, progress, cancellationToken);
-                }, async () => { await session.ReconnectForRetryAsync(cancellationToken); entry.BytesTransferred = 0; }, message => { LogText.AppendText(Environment.NewLine + entry.Name + ": " + message); _raceLog.Write("RESUME", entry.Id + " " + message); }, cancellationToken);
+                }, async () => { await session.ReconnectForRetryAsync(cancellationToken); entry.BytesTransferred = 0; }, message => { AppendFtpLog(Environment.NewLine + entry.Name + ": " + message); _raceLog.Write("RESUME", entry.Id + " " + message); }, cancellationToken);
                 AppendTransferIntegrityNotices(entry, ("destination", session));
             }
             else
@@ -2091,7 +2102,7 @@ public partial class MainWindow : Window
                             entry.State = "Skipped"; _skippedTransferJobs.Add(entry.Id); reuseWorkers = true; return;
                         }
                         if (action == ExistingTargetAction.Resume && FtpTransferMode.CanResume(entry.Source, sourceProfile.EffectiveOptions) && FtpTransferMode.CanResume(entry.Destination, destinationProfile.EffectiveOptions)) fxpOffset = targetSize.Value;
-                        LogText.AppendText($"{Environment.NewLine}Existing target: {entry.Name}; action={(fxpOffset > 0 ? "Resume" : "Overwrite")}; offset={fxpOffset}.");
+                        AppendFtpLog($"{Environment.NewLine}Existing target: {entry.Name}; action={(fxpOffset > 0 ? "Resume" : "Overwrite")}; offset={fxpOffset}.");
                     }
                 }
                 var asciiFxp = FtpTransferMode.IsAscii(entry.Source, sourceProfile.EffectiveOptions) && !destinationProfile.EffectiveOptions.ForceBinaryMode;
@@ -2114,7 +2125,7 @@ public partial class MainWindow : Window
                     var resumeOverwriteAttempted = false;
                     try
                     {
-                        LogText.AppendText($"{Environment.NewLine}Attempting direct {(clearFxp ? "clear" : "secure")} FXP: {entry.Name}");
+                        AppendFtpLog($"{Environment.NewLine}Attempting direct {(clearFxp ? "clear" : "secure")} FXP: {entry.Name}");
                         var measureAverage = _settings.EnableFxpSpeedMonitoring;
                         entry.FxpMonitoringDisabled = !measureAverage;
                         entry.SpeedBytesPerSecond = 0;
@@ -2125,11 +2136,13 @@ public partial class MainWindow : Window
                         async Task TransferAttempt(long attemptOffset)
                         {
                             fxpOffset = attemptOffset;
+                            entry.IsResuming = attemptOffset > 0;
+                            UpdateStatusProgress();
                             sessionNewBytes = Math.Max(0, entry.TotalBytes - attemptOffset);
                             if (useReverse)
                             {
                                 var routeSource = configuredReverse == true ? "configured" : learnedReverse ? "learned" : "source CPSV preferred";
-                                LogText.AppendText($"{Environment.NewLine}Using {routeSource} source-passive FXP route for {sourceProfile.Name} → {destinationProfile.Name}: {entry.Name}");
+                                AppendFtpLog($"{Environment.NewLine}Using {routeSource} source-passive FXP route for {sourceProfile.Name} → {destinationProfile.Name}: {entry.Name}");
                                 await RunEstimatedFxpAsync(entry, sourceProfile, destinationProfile, sourceSession, destinationSession, fxpOffset, measureAverage && !asciiFxp,
                                     () => sourceSession.FxpToAsync(destinationSession, entry.Source, entry.Destination,
                                         cancellationToken, reverseDataConnection: true, offset: fxpOffset), cancellationToken);
@@ -2142,12 +2155,12 @@ public partial class MainWindow : Window
                                     (clearFxp || sourceSession.Capabilities.Contains("CPSV") ||
                                     sourceSession.Capabilities.Contains("SSCN") && destinationSession.Capabilities.Contains("SSCN")))
                                 {
-                                    LogText.AppendText($"{Environment.NewLine}Standard FXP returned 425; retrying with source passive and destination PORT, preserving data protection: {entry.Name}");
+                                    AppendFtpLog($"{Environment.NewLine}Standard FXP returned 425; retrying with source passive and destination PORT, preserving data protection: {entry.Name}");
                                     await RunEstimatedFxpAsync(entry, sourceProfile, destinationProfile, sourceSession, destinationSession, fxpOffset, measureAverage && !asciiFxp,
                                         () => sourceSession.RetryFxpWithReversedTopologyAsync(
                                             destinationSession, entry.Source, entry.Destination, cancellationToken, offset: fxpOffset), cancellationToken);
                                     if (_reverseFxpPairs.Add(pair)) _fxpRouteStore.SaveReverseRoutes(_reverseFxpPairs);
-                                    LogText.AppendText($"{Environment.NewLine}Remembered reverse FXP route permanently for {sourceProfile.Name} → {destinationProfile.Name}.");
+                                    AppendFtpLog($"{Environment.NewLine}Remembered reverse FXP route permanently for {sourceProfile.Name} → {destinationProfile.Name}.");
                                 }
                             }
                         }
@@ -2155,11 +2168,11 @@ public partial class MainWindow : Window
                         {
                         await ResumeRecovery.RunAsync(fxpOffset, _settings.OverwriteIfResumeFails, TransferAttempt,
                             () => { resumeOverwriteAttempted = true; return Task.WhenAll(sourceSession.ReconnectForRetryAsync(cancellationToken), destinationSession.ReconnectForRetryAsync(cancellationToken)); },
-                            message => { LogText.AppendText(Environment.NewLine + entry.Name + ": " + message); _raceLog.Write("RESUME", entry.Id + " " + message); }, cancellationToken);
+                            message => { AppendFtpLog(Environment.NewLine + entry.Name + ": " + message); _raceLog.Write("RESUME", entry.Id + " " + message); }, cancellationToken);
                         }
                         catch (FtpCommandException exception) when (exception.StatusCode == 426 && !cancellationToken.IsCancellationRequested)
                         {
-                            void RecoveryLog(string message) { AppendConnectionLog(Environment.NewLine + message); _raceLog.Write("FXP-426", entry.Id + " " + message); }
+                            void RecoveryLog(string message) { if (_visionaryDebugEnabled) AppendConnectionLog(Environment.NewLine + message); _raceLog.Write("FXP-426", entry.Id + " " + message); }
                             RecoveryLog($"FXP 426: reconnecting both sessions before checking target; preserving configured TLS: {entry.Name}");
                             // Prevent all recovery failures from falling through to relay.
                             resumeOverwriteAttempted = true;
@@ -2178,6 +2191,7 @@ public partial class MainWindow : Window
                                 FtpTransferMode.CanResume(entry.Source, sourceProfile.EffectiveOptions) && FtpTransferMode.CanResume(entry.Destination, destinationProfile.EffectiveOptions)
                                 ? targetSize.Value : 0;
                             RecoveryLog($"FXP 426: one direct retry; offset={offset}; {entry.Name}");
+                            if (!_visionaryDebugEnabled) AppendConnectionLog(Environment.NewLine + $"{(offset == 0 ? "OVERWRITE" : "RESUMING")} : {entry.Name}");
                             await TransferAttempt(offset);
                         }
                         if (entry.TotalBytes > 0) entry.BytesTransferred = entry.TotalBytes;
@@ -2187,12 +2201,12 @@ public partial class MainWindow : Window
                             entry.SpeedBytesPerSecond = average;
                             _fxpPairSpeeds.Record(sourceProfile.Id, destinationProfile.Id, sessionNewBytes, sourceSession.LastFxpTransferElapsed);
                             var measurement = FormattableString.Invariant($"FXP average: {entry.Name} | bytes={sessionNewBytes}; transfer={sourceSession.LastFxpTransferElapsed.TotalSeconds:F3}s; average={average / 1000000.0:F2} MB/s; mode=passive");
-                            LogText.AppendText(Environment.NewLine + FormattableString.Invariant($"FXP average: {entry.Name} | {average / 1000000.0:F2} MB/s"));
+                            AppendFtpLog(Environment.NewLine + FormattableString.Invariant($"FXP average: {entry.Name} | {average / 1000000.0:F2} MB/s"));
                             _raceLog.Write("FXP-AVERAGE", $"{entry.Id} {sourceProfile.Name} -> {destinationProfile.Name}: {measurement}");
                         }
                         AppendFxpTimings(sourceSession);
                         AppendTransferIntegrityNotices(entry, ("source", sourceSession), ("destination", destinationSession));
-                        LogText.AppendText($"{Environment.NewLine}Direct FXP completed via {sourceSession.LastFxpNegotiation}: {entry.Name}");
+                        AppendFtpLog($"{Environment.NewLine}Direct FXP completed via {sourceSession.LastFxpNegotiation}: {entry.Name}");
                         entry.State = "Completed";
                         RecordSessionCompletion(entry, sessionNewBytes);
                         await RunScriptsAsync("AfterTransfer", TransferScriptVariables(entry, "Completed"), true);
@@ -2216,12 +2230,12 @@ public partial class MainWindow : Window
                             _reverseFxpPairs.Remove(pair))
                         {
                             _fxpRouteStore.SaveReverseRoutes(_reverseFxpPairs);
-                            LogText.AppendText($"{Environment.NewLine}Removed stale learned reverse route for {sourceProfile.Name} → {destinationProfile.Name}.");
+                            AppendFtpLog($"{Environment.NewLine}Removed stale learned reverse route for {sourceProfile.Name} → {destinationProfile.Name}.");
                         }
                         AppendFxpTimings(sourceSession);
                         AppendFxpFailureDiagnostic(entry, sourceProfile, destinationProfile, sourceSession,
                             destinationSession, clearFxp, PreferredReverseFxp(sourceProfile, destinationProfile));
-                        LogText.AppendText($"{Environment.NewLine}Direct FXP rejected ({FriendlyMessage(fxpException)}). Reconnecting for client relay…");
+                        AppendFtpLog($"{Environment.NewLine}Direct FXP rejected ({FriendlyMessage(fxpException)}). Reconnecting for client relay…");
                         if (entry.Direction == TransferDirection.ApiFxp)
                         {
                             if (apiFxpSourceWorker is not null) await DisposeTransferWorkerAsync(apiFxpSourceWorker);
@@ -2243,8 +2257,9 @@ public partial class MainWindow : Window
                         }
                     }
                 }
-                else LogText.AppendText($"{Environment.NewLine}Secure direct FXP is unavailable in Auto mode; using client relay.");
+                else AppendFtpLog($"{Environment.NewLine}Secure direct FXP is unavailable in Auto mode; using client relay.");
 
+                entry.IsResuming = false;
                 sessionNewBytes = entry.TotalBytes; // Client relay restarts the whole file.
                 var temporary = Path.Combine(Path.GetTempPath(), $"ioftp-fxp-{Guid.NewGuid():N}.part");
                 try
@@ -2261,7 +2276,7 @@ public partial class MainWindow : Window
             }
             entry.State = "Completed";
             RecordSessionCompletion(entry, sessionNewBytes);
-            LogText.AppendText($"{Environment.NewLine}Transfer completed: {entry.Name}");
+            AppendFtpLog($"{Environment.NewLine}Transfer completed: {entry.Name}");
             await RunScriptsAsync("AfterTransfer", TransferScriptVariables(entry, "Completed"), true);
             reuseWorkers = true;
         }
@@ -2271,7 +2286,7 @@ public partial class MainWindow : Window
             ApplyXdupeReply(entry, exception.Message);
             entry.BytesTransferred = entry.TotalBytes;
             entry.State = "Completed";
-            LogText.AppendText($"{Environment.NewLine}XDUPE skipped existing remote file: {entry.Name}");
+            AppendFtpLog($"{Environment.NewLine}XDUPE skipped existing remote file: {entry.Name}");
             await RunScriptsAsync("AfterTransfer", TransferScriptVariables(entry, "XDUPE skipped"), true);
             reuseWorkers = true;
             return;
@@ -2279,7 +2294,7 @@ public partial class MainWindow : Window
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             entry.State = "Paused";
-            LogText.AppendText($"{Environment.NewLine}Transfer paused: {entry.Name}");
+            AppendFtpLog($"{Environment.NewLine}Transfer paused: {entry.Name}");
             throw;
         }
         catch (Exception exception)
@@ -2304,7 +2319,7 @@ public partial class MainWindow : Window
             _raceLog.Write(rejection ?? "ERROR", $"{entry.Id} {entry.Name}: {exception.GetType().Name}: {exception.Message}");
             if (exception is TransferVerificationException)
             {
-                LogText.AppendText($"{Environment.NewLine}Transfer integrity FAILED ({entry.Name}): server rejected CRC/size verification; file is not marked complete.");
+                AppendFtpLog($"{Environment.NewLine}Transfer integrity FAILED ({entry.Name}): server rejected CRC/size verification; file is not marked complete.");
                 AppendConnectionLog($"{Environment.NewLine}SERVER DETAILS [{entry.Name}]{Environment.NewLine}{exception.Message}");
             }
             else if (VisionaryLogVisibility.Is550(exception.Message)) Append550(exception.Message, entry.Name);
@@ -2400,12 +2415,15 @@ public partial class MainWindow : Window
     private readonly Dictionary<(Guid Site, string Command), MetricServerStats> _serverStats = [];
     private bool _visionaryDebugEnabled = MetricsPanel.ReadDebugPreference();
 
+    private void AppendFtpLog(string message) => LogText.AppendText(FtpLogTimestamp.Format(message, DateTime.Now));
+
     private void AppendConnectionLog(string message)
     {
+        if (VisionaryLogVisibility.IsCommandReport(message)) { AppendCommands(message); return; }
         if (VisionaryLogVisibility.Is550(message)) { Append550(message); return; }
         if (VisionaryLogVisibility.IsBridgeMessage(message) || VisionaryLogVisibility.UploadBusySummary(message) is not null)
         { AppendBridgeInfo(message); return; }
-        if (VisionaryLogVisibility.Show(message, _visionaryDebugEnabled)) LogText.AppendText(message);
+        if (VisionaryLogVisibility.Show(message, _visionaryDebugEnabled)) AppendFtpLog(message);
     }
 
     private void AppendFxpTimings(FtpRemoteSession session)
@@ -2414,7 +2432,7 @@ public partial class MainWindow : Window
         _latestFxpTimings = session.LastFxpStageTimings.ToArray();
         var values = session.LastFxpStageTimings.Select(stage =>
             $"{stage.Name} {(stage.Elapsed.TotalSeconds >= 1 ? $"{stage.Elapsed.TotalSeconds:0.00}s" : $"{stage.Elapsed.TotalMilliseconds:0}ms")}");
-        LogText.AppendText($"{Environment.NewLine}FXP timings: {string.Join(" | ", values)}");
+        AppendFtpLog($"{Environment.NewLine}FXP timings: {string.Join(" | ", values)}");
     }
 
     private void RecordSessionCompletion(QueueEntryView entry, long newBytes)
@@ -2435,7 +2453,7 @@ public partial class MainWindow : Window
             if (entry.DestinationProfileId is { } destination) _raceListings.Invalidate(destination);
             race.NotifyTransferCompleted();
         }
-        if (_totalStatistics.LastError is { } error) LogText.AppendText(Environment.NewLine + error);
+        if (_totalStatistics.LastError is { } error) AppendFtpLog(Environment.NewLine + error);
     }
 
     private void RecordMeasuredPeakSpeed(QueueEntryView? completed = null)
@@ -2593,7 +2611,7 @@ public partial class MainWindow : Window
             var line = Regex.Replace(rawLine, "\\x1B\\[[0-9;?]*[ -/]*[@-~]", "").Trim();
             if (line.Length == 0 || !seen.Add(line)) continue;
             var marker = line.Contains("BADCRC", StringComparison.OrdinalIgnoreCase) ? "BADCRC" : "0SIZE";
-            LogText.AppendText($"{Environment.NewLine}Transfer integrity [{marker}] ({role}, {entry.Name}): {line}");
+            AppendFtpLog($"{Environment.NewLine}Transfer integrity [{marker}] ({role}, {entry.Name}): {line}");
         }
     }
 
@@ -2657,7 +2675,7 @@ public partial class MainWindow : Window
             _engine.Remove(queued.Id);
             queued.BytesTransferred = queued.TotalBytes;
             queued.State = "Completed";
-            LogText.AppendText($"{Environment.NewLine}XDUPE skipped queued duplicate: {queued.Name}");
+            AppendFtpLog($"{Environment.NewLine}XDUPE skipped queued duplicate: {queued.Name}");
         }
     }
 
@@ -2679,14 +2697,14 @@ public partial class MainWindow : Window
         {
             foreach (var result in await _scriptRunner.RunEventAsync(eventName, variables))
             {
-                LogText.AppendText($"{Environment.NewLine}Script [{eventName}] {result.Name}: exit {result.ExitCode}");
-                if (!string.IsNullOrWhiteSpace(result.Output)) LogText.AppendText($"{Environment.NewLine}{result.Output.TrimEnd()}");
-                if (!string.IsNullOrWhiteSpace(result.Error)) LogText.AppendText($"{Environment.NewLine}{result.Error.TrimEnd()}");
+                AppendFtpLog($"{Environment.NewLine}Script [{eventName}] {result.Name}: exit {result.ExitCode}");
+                if (!string.IsNullOrWhiteSpace(result.Output)) AppendFtpLog($"{Environment.NewLine}{result.Output.TrimEnd()}");
+                if (!string.IsNullOrWhiteSpace(result.Error)) AppendFtpLog($"{Environment.NewLine}{result.Error.TrimEnd()}");
             }
         }
         catch (Exception exception)
         {
-            LogText.AppendText($"{Environment.NewLine}External script failed [{eventName}]: {exception.Message}");
+            AppendFtpLog($"{Environment.NewLine}External script failed [{eventName}]: {exception.Message}");
             if (!ignoreFailure) throw;
         }
     }
@@ -2816,7 +2834,7 @@ public partial class MainWindow : Window
                 try { return await CreateTransferWorkerAsync(pair.Key, cancellationToken); }
                 catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
                 {
-                    LogText.Dispatcher.Invoke(() => LogText.AppendText(
+                    LogText.Dispatcher.Invoke(() => AppendFtpLog(
                         $"{Environment.NewLine}Could not prewarm a slot for {pair.Key.Name}: {FriendlyMessage(exception)}"));
                     return null;
                 }
@@ -2825,7 +2843,7 @@ public partial class MainWindow : Window
                 if (session is not null) pool.Add(new PooledWorker(session, DateTimeOffset.UtcNow));
         }));
         var elapsed = DateTime.UtcNow - started;
-        LogText.AppendText($"{Environment.NewLine}Transfer slots ready in {elapsed.TotalSeconds:0.00}s.");
+        AppendFtpLog($"{Environment.NewLine}Transfer slots ready in {elapsed.TotalSeconds:0.00}s.");
     }
 
     private async Task ReleaseWorkerAsync(ConnectionProfile? profile, FtpRemoteSession? session, bool reusable)
@@ -2945,7 +2963,7 @@ public partial class MainWindow : Window
             UpdateQueueStatus();
             if (source == _oldQueuePath) SaveQueue();
         }
-        catch (Exception exception) { LogText.AppendText($"{Environment.NewLine}Queue load error: {exception.Message}"); }
+        catch (Exception exception) { AppendFtpLog($"{Environment.NewLine}Queue load error: {exception.Message}"); }
     }
 
     private void SaveQueue()
@@ -3074,22 +3092,26 @@ public partial class MainWindow : Window
         base.OnClosed(e);
     }
 
-    private void Append550(string message, string subject = "FTP")
+    private void AppendCommands(string message) => _commandsInfo.Write("COMMAND", message.Trim());
+
+    private void Append550(string message, string subject = "FTP", string? site = null)
     {
-        _raceLog.Write("FTP-550", message);
-        if (_visionaryDebugEnabled) { LogText.AppendText(Environment.NewLine + message.Trim()); return; }
-        var shortText = VisionaryLogVisibility.CompactTransferFailure(subject, message);
+        var knownSite = site ?? VisionaryLogVisibility.FailureSite(message) ?? "SITE UNKNOWN";
+        _raceLog.Write("FTP-550", $"[{knownSite}] {message}");
+        if (_visionaryDebugEnabled) { AppendFtpLog(Environment.NewLine + $"[{knownSite}] {message.Trim()}"); return; }
+        var shortText = VisionaryLogVisibility.CompactTransferFailure(subject, message, knownSite);
         var key = "550:" + shortText;
         var now = DateTimeOffset.UtcNow;
         if (_lastBridgeLoginWarning.TryGetValue(key, out var previous) && now - previous < TimeSpan.FromSeconds(10)) return;
         _lastBridgeLoginWarning[key] = now;
-        LogText.AppendText(Environment.NewLine + shortText);
+        AppendFtpLog(Environment.NewLine + shortText);
         LogText.ScrollToEnd();
     }
 
     private readonly Dictionary<string, DateTimeOffset> _lastBridgeLoginWarning = new(StringComparer.OrdinalIgnoreCase);
     private void AppendBridgeInfo(string message)
     {
+        if (VisionaryLogVisibility.IsCommandReport(message)) { AppendCommands(message); return; }
         if (VisionaryLogVisibility.Is550(message)) { Append550(message); return; }
         _bridgeInfo.Write("BRIDGE", message.Trim());
         if (VisionaryLogVisibility.UploadBusySummary(message) is { } upload)
@@ -3098,7 +3120,7 @@ public partial class MainWindow : Window
             var timestamp = DateTimeOffset.UtcNow;
             if (_lastBridgeLoginWarning.TryGetValue(key, out var last) && timestamp - last < TimeSpan.FromSeconds(10)) return;
             _lastBridgeLoginWarning[key] = timestamp;
-            LogText.AppendText(Environment.NewLine + $"{DateTime.Now:HH:mm:ss} {upload}");
+            AppendFtpLog(Environment.NewLine + $"{DateTime.Now:HH:mm:ss} {upload}");
             LogText.ScrollToEnd();
             return;
         }
@@ -3106,13 +3128,15 @@ public partial class MainWindow : Window
         var now = DateTimeOffset.UtcNow;
         if (_lastBridgeLoginWarning.TryGetValue(summary.Site, out var previous) && now - previous < TimeSpan.FromSeconds(60)) return;
         _lastBridgeLoginWarning[summary.Site] = now;
-        LogText.AppendText(Environment.NewLine + $"{DateTime.Now:HH:mm:ss} {summary.Text}");
+        AppendFtpLog(Environment.NewLine + $"{DateTime.Now:HH:mm:ss} {summary.Text}");
         LogText.ScrollToEnd();
     }
 
     private void LogTabs_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
         if (!ReferenceEquals(e.Source, LogTabs) || BridgeInfoHost is null || SpreadJobsHost is null || RaceLogHost is null || TransferJobsHost is null) return;
+        if (CommandsLogTab?.IsSelected == true && CommandsLogHost is not null && CommandsLogHost.Content is null)
+            CommandsLogHost.Content = new LogViewerControl(_commandsInfo, "Commands");
         if (BridgeInfoTab.IsSelected && BridgeInfoHost.Content is null)
             BridgeInfoHost.Content = new LogViewerControl(_bridgeInfo, "Bridge-Info");
         if (SpreadJobsTab.IsSelected && SpreadJobsHost.Content is null)
@@ -3150,7 +3174,7 @@ public partial class MainWindow : Window
         ScheduleBatch(candidates.Where(entry => !snapshot.ContainsKey(entry.Id)));
         _engine.Resume(candidates.Where(entry => snapshot.TryGetValue(entry.Id, out var status) &&
             status.State is TransferWorkState.Paused or TransferWorkState.Failed).Select(entry => entry.Id));
-        LogText.AppendText($"{Environment.NewLine}Transfer queue started.");
+        AppendFtpLog($"{Environment.NewLine}Transfer queue started.");
         LogText.ScrollToEnd();
     }
 
@@ -3158,7 +3182,7 @@ public partial class MainWindow : Window
     {
         foreach (var status in _engine.Snapshot().Where(status => status.State is TransferWorkState.Queued or TransferWorkState.Running))
             _engine.Pause(status.Item.Id);
-        LogText.AppendText($"{Environment.NewLine}Transfer queue stopped. Active jobs are being paused.");
+        AppendFtpLog($"{Environment.NewLine}Transfer queue stopped. Active jobs are being paused.");
         LogText.ScrollToEnd();
     }
 
@@ -3537,7 +3561,8 @@ public partial class MainWindow : Window
                 _sessionStatistics.Completed, FormatTransferTime(_sessionStatistics.Uptime), _workerPool.Values.Sum(pool => pool.Count),
                 _sessionStatistics.Hits, $"{_sessionStatistics.FxpRecentRate / 1_000_000d:0.00} MB/s", _sessionStatistics.TrafficMinutes, _latestFxpTimings,
                 _serverStats.Values.GroupBy(value => value.Site, StringComparer.OrdinalIgnoreCase).Select(group => group.OrderBy(value => value.Command == "USER" ? 0 : value.Command == "STATS" ? 1 : 2).First())
-                    .OrderBy(value => value.Site, StringComparer.OrdinalIgnoreCase).ToArray(), _raceRouteStatistics.Snapshot(), _raceRouteStatistics.Wins()));
+                    .OrderBy(value => value.Site, StringComparer.OrdinalIgnoreCase).ToArray(), _raceRouteStatistics.Snapshot(), _raceRouteStatistics.Wins(),
+                _sessionStatistics.PeakSpeedBytesPerSecond, total.PeakSpeedBytesPerSecond));
     }
 
     private readonly System.Windows.Threading.DispatcherTimer _statusScrollTimer = new() { Interval = TimeSpan.FromMilliseconds(30) };
@@ -3626,6 +3651,7 @@ public partial class MainWindow : Window
         var active = _queue.Where(item => item.State is "Queued" or "Transferring").ToList();
         if (active.Count == 0)
         {
+            StatusProgressBar.SetResourceReference(System.Windows.Controls.Control.ForegroundProperty, "AccentBrush");
             StatusProgressBar.IsIndeterminate = false;
             StatusProgressBar.Value = 0;
             StatusProgressText.Text = "Idle";
@@ -3637,6 +3663,8 @@ public partial class MainWindow : Window
         }
 
         var current = CurrentStatusTransfer() ?? active[0];
+        StatusProgressBar.SetResourceReference(System.Windows.Controls.Control.ForegroundProperty,
+            current.IsResuming ? "ResumeProgressBrush" : "AccentBrush");
         var direction = current.Direction switch
         {
             TransferDirection.Download or TransferDirection.DownloadFromLeft or TransferDirection.ApiDownload => "Receiving",
@@ -3731,7 +3759,7 @@ public partial class MainWindow : Window
             ConfigureTrayIcon();
             UpdateLegendBar();
             _engine.ConfigureLocalSlots(_settings.MaxLocalDownloadSlots, _settings.MaxLocalUploadSlots, _settings.SerializeLocalTransfers);
-            LogText.AppendText($"{Environment.NewLine}Global settings updated.");
+            AppendFtpLog($"{Environment.NewLine}Global settings updated.");
             await RestartApiServerAsync();
             await RestartIrcAsync();
         }
@@ -3756,7 +3784,7 @@ public partial class MainWindow : Window
             : result.UpdateAvailable
                 ? $"Update available: FluxFTP {result.LatestVersion} — {result.ReleaseUrl}"
                 : $"Update status: Latest version ({result.CurrentVersion}).";
-        LogText.AppendText($"{Environment.NewLine}{status}");
+        AppendFtpLog($"{Environment.NewLine}{status}");
         LogText.ScrollToEnd();
     }
 
@@ -3902,7 +3930,7 @@ public partial class MainWindow : Window
                         _engine.RegisterOrUpdateSite(new SitePolicy(profile.Id, profile.Name, TransferSlotLimit(profile), options.AllowDownload ? options.MaxDownloadSlots : 0, options.AllowUpload ? options.MaxUploadSlots : 0, options.Priority));
                     }
                 }
-                catch { LogText.AppendText($"{Environment.NewLine}IRC settings saved; reopen the site selector to refresh the view."); }
+                catch { AppendFtpLog($"{Environment.NewLine}IRC settings saved; reopen the site selector to refresh the view."); }
             }
             return result;
         }), routing: routing, catcher: catcher);
@@ -3942,12 +3970,12 @@ public partial class MainWindow : Window
                 }), visionaryStep: RunVisionaryStepAsync, visionarySlots: UpdateVisionarySlotsAsync,
                 sourcePriority: site => _raceSitePriorities.GetValueOrDefault(site), raceObserved: request => _raceRouteStatistics.Record(request.SrcSection!, request.Name!, request.SrcSite!, request.DstSite!), raceResult: RecordRaceResult);
             if (_settings.EnableHttpsApi)
-                LogText.AppendText($"{Environment.NewLine}HTTPS/JSON API listening on {(_settings.ApiLocalhostOnly ? "localhost" : "0.0.0.0")}:{_settings.HttpsApiPort}");
+                AppendFtpLog($"{Environment.NewLine}HTTPS/JSON API listening on {(_settings.ApiLocalhostOnly ? "localhost" : "0.0.0.0")}:{_settings.HttpsApiPort}");
         }
         catch (Exception exception)
         {
             if (_apiServer is not null) await _apiServer.DisposeAsync(); _apiServer = null;
-            LogText.AppendText($"{Environment.NewLine}API failed to start: {exception.Message}");
+            AppendFtpLog($"{Environment.NewLine}API failed to start: {exception.Message}");
         }
         LogText.ScrollToEnd();
     }
@@ -4150,7 +4178,7 @@ public partial class MainWindow : Window
             var validation = SectionReleaseValidator.Validate(validationSection, ruleRelease);
             if (!validation.Accepted)
             {
-                LogText.AppendText($"{Environment.NewLine}Section precheck {validation.Mode}: {validation.Message}");
+                AppendFtpLog($"{Environment.NewLine}Section precheck {validation.Mode}: {validation.Message}");
                 LogText.ScrollToEnd();
                 if (validation.Mode == SectionValidationMode.Block)
                     throw new InvalidOperationException($"Transfer blocked: {validation.Message}");
@@ -4454,7 +4482,7 @@ public partial class MainWindow : Window
                 file.Entry.Size ?? 0, profile.Id, persist: false)).ToList();
         queued = queuedEntries.Count;
         ScheduleBatch(queuedEntries);
-        LogText.AppendText($"{Environment.NewLine}API queued {queued} download(s) from {profile.Name}: {remote}"); LogText.ScrollToEnd();
+        AppendFtpLog($"{Environment.NewLine}API queued {queued} download(s) from {profile.Name}: {remote}"); LogText.ScrollToEnd();
         return new { site = profile.Name, description = profile.Description, remote_path = remote, local_path = localRoot, queued, status = "QUEUED" };
     });
 
@@ -4495,9 +4523,9 @@ public partial class MainWindow : Window
             entry.FxpEstimatedBytes = null; entry.FxpSpeedEstimated = false; entry.StartedAt = null;
             _queue.Add(entry); Schedule(entry); count++;
             var message = $"Hard reset: queued with fresh control sessions and unchanged TLS/target policy: {entry.Name}";
-            _raceLog.Write("HARD-RESET", message); LogText.AppendText(Environment.NewLine + message);
+            _raceLog.Write("HARD-RESET", message); AppendFtpLog(Environment.NewLine + message);
         }
-        if (selected is not null && count == 0) LogText.AppendText(Environment.NewLine + "Hard reset: job is not eligible (cooldown, retry limit, lookback or expired race).");
+        if (selected is not null && count == 0) AppendFtpLog(Environment.NewLine + "Hard reset: job is not eligible (cooldown, retry limit, lookback or expired race).");
         return count;
     }
 
@@ -4596,6 +4624,7 @@ public partial class MainWindow : Window
         public long DisplayBytesTransferred => FxpEstimatedBytes ?? BytesTransferred;
         private bool _savingToDestination;
         public bool SavingToDestination { get => _savingToDestination; set { _savingToDestination = value; Changed(); Changed(nameof(ProgressDisplay)); } }
+        public bool IsResuming { get; set; }
         public bool FxpSpeedUnavailable { get; set; }
         public bool FxpLiveMeasured { get; set; }
         public bool FxpAverageMeasured { get; set; }
