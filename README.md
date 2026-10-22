@@ -52,11 +52,8 @@ HTTPS/JSON API jobs use saved site profiles and reusable slots and do not requir
 the sites to be open in the two visible Remote panes. Keep **Localhost only**
 enabled when mIRC and FluxFTP run on the same computer.
 
-d-tool's current line-oriented `/raw` parser also prints standalone JSON
-delimiters. The compatible parser fix is available in
-[scriptzteam/d-tool#1](https://github.com/scriptzteam/d-tool/pull/1).
-
-Standalone mIRC/AdiIRC control scripts and the VISIONARY bridge are included in [extras/irc](extras/irc/README.md). VISIONARY preserves explicit source/target chains through a current-user-only Windows named pipe.
+Standalone mIRC/AdiIRC control scripts and the VISIONARY bridge are included. VISIONARY 
+preserves explicit source/target chains through a current-user-only Windows named pipe.
 
 ## Screenshots
 
@@ -72,7 +69,9 @@ Standalone mIRC/AdiIRC control scripts and the VISIONARY bridge are included in 
 
 ![FluxFTP Global Settings](docs/screenshots/global-settings.png)
 
-Saved sites may contain multiple addresses or FTP bouncers in the **Address(es)** field, separated by spaces. FluxFTP tries the first address immediately and starts the remaining attempts after one second. The first successful address is promoted to the front of the saved list for future connections.
+Saved sites may contain multiple addresses or FTP bouncers in the **Address(es)** field, separated by spaces. 
+FluxFTP tries the first address immediately and starts the remaining attempts after one second. 
+The first successful address is promoted to the front of the saved list for future connections.
 
 Site Manager can import saved sites from FTPRush 3 `site.json`, legacy FTPRush
 `RushSite.xml`, and FlashFXP `Sites.ftp` XML exports. A preview lets you select
@@ -102,11 +101,6 @@ The Commands window currently includes presets for:
 
 **Load SITE HELP** can add commands advertised by the connected server. FTPRush `RushCmd.xml` command packs can also be imported. The raw-command field accepts one FTP command at a time; credential commands `USER`, `PASS` and `ACCT` are blocked there to avoid exposing or replacing the active login.
 
-## Project boundaries
-
-- `IoFtp.Core`: protocol-neutral connection, browsing and transfer contracts.
-- `IoFtp.Desktop`: Windows desktop shell and theme resources.
-- `docs`: product scope and architecture decisions.
 
 ## Initial milestones
 
