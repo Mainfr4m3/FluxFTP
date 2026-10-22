@@ -3519,6 +3519,7 @@ public partial class MainWindow : Window
         var active = _queue.Count(item => item.State is "Queued" or "Transferring");
         var running = _queue.Where(item => item.State == "Transferring").ToList();
         var speed = running.Sum(item => item.SpeedBytesPerSecond); var bytes = _queue.Sum(item => item.BytesTransferred);
+        var currentSpeed = $"{(running.Any(item => item.FxpSpeedEstimated) ? "≈" : "")}{FormatSize(speed)}/s";
         var fxp = _queue.Where(item => item.Direction.ToString().StartsWith("Relay", StringComparison.Ordinal)).ToList();
         var total = _totalStatistics.Snapshot();
         var rows = new List<MetricRow>
@@ -3544,7 +3545,7 @@ public partial class MainWindow : Window
             new("Transfer jobs", _queue.Count.ToString(), $"Queued/active: {active}"),
             new("Completed", _queue.Count(item => item.State == "Completed").ToString(), $"Failed: {_queue.Count(item => item.State == "Failed")}"),
             new("FXP jobs", fxp.Count.ToString(), $"Completed: {fxp.Count(item => item.State == "Completed")}   Failed: {fxp.Count(item => item.State == "Failed")}"),
-            new("Current throughput", $"{(running.Any(item => item.FxpSpeedEstimated) ? "≈" : "")}{FormatSize(speed)}/s", $"Running transfers: {running.Count}; ≈ includes display-only FXP estimates"),
+            new("Current throughput", currentSpeed, $"Running transfers: {running.Count}; ≈ includes display-only FXP estimates"),
             new("Transferred this queue", FormatSize(bytes), $"Remaining: {FormatSize(_queue.Sum(item => Math.Max(0, item.TotalBytes - item.BytesTransferred)))}"),
             new("API", _settings.EnableHttpsApi ? "Enabled" : "Disabled", _settings.EnableHttpsApi ? $"HTTPS port {_settings.HttpsApiPort}" : "—")
         };
@@ -3557,10 +3558,10 @@ public partial class MainWindow : Window
                     live is null ? "Flux limits: no Visi values received yet. Install/reload the Visionary helper."
                     : $"Last known limits: DN {(live.Downloads is null ? "Flux fallback" : "Visi")}; UP {(live.Uploads is null ? "Flux fallback" : "Visi")}. Retained on timeout and restart."));
             }
-        return new(connected, profiles.Count, active, $"{(running.Any(item => item.FxpSpeedEstimated) ? "≈" : "")}{FormatSize(speed)}/s", FormatSize(bytes), rows,
+        return new(connected, profiles.Count, active, currentSpeed, FormatSize(bytes), rows,
             new MetricsDashboard(FormatSize(_sessionStatistics.Uploaded + _sessionStatistics.Downloaded + _sessionStatistics.Fxp + _sessionStatistics.Local),
                 _sessionStatistics.Completed, FormatTransferTime(_sessionStatistics.Uptime), _workerPool.Values.Sum(pool => pool.Count),
-                _sessionStatistics.Hits, $"{_sessionStatistics.FxpRecentRate / 1_000_000d:0.00} MB/s", _sessionStatistics.TrafficMinutes, _latestFxpTimings,
+                _sessionStatistics.Hits, currentSpeed, _sessionStatistics.TrafficMinutes, _latestFxpTimings,
                 _serverStats.Values.GroupBy(value => value.Site, StringComparer.OrdinalIgnoreCase).Select(group => group.OrderBy(value => value.Command == "USER" ? 0 : value.Command == "STATS" ? 1 : 2).First())
                     .OrderBy(value => value.Site, StringComparer.OrdinalIgnoreCase).ToArray(), _raceRouteStatistics.Snapshot(), _raceRouteStatistics.Wins(),
                 _sessionStatistics.PeakSpeedBytesPerSecond, total.PeakSpeedBytesPerSecond));

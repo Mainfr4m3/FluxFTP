@@ -2,6 +2,12 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.46 — 2026-10-22
+
+- The FXP rate card in Metrics uses the same current aggregate Speed value as the status bar, including its estimated-speed indicator and units. The card is labelled CURRENT instead of LAST 60 S.
+- The separate last-60-second completed FXP rate remains available in detailed statistics.
+- Local test build; no bridge script or DLL update is required.
+
 ## 2.1.45 — 2026-10-21
 
 - The main window title displays FluxFTP followed by the same randomly selected startup message shown in the status bar. The title message stays for the session.
