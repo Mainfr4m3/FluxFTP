@@ -1,10 +1,48 @@
 <Window x:Class="IoFtp.Desktop.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         xmlns:primitives="clr-namespace:System.Windows.Controls.Primitives;assembly=PresentationFramework"
         Title="FluxFTP" Width="1165" Height="750" MinWidth="900" MinHeight="600"
         WindowStartupLocation="CenterScreen" PreviewKeyDown="MainWindow_PreviewKeyDown">
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="32" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False"/>
+    </shell:WindowChrome.WindowChrome>
     <DockPanel Background="{DynamicResource WindowBrush}">
+        <Grid DockPanel.Dock="Top" Height="32" Background="{DynamicResource WindowBrush}">
+            <Grid.Resources>
+                <Style x:Key="CaptionButton" TargetType="Button">
+                    <Setter Property="Width" Value="46"/>
+                    <Setter Property="Height" Value="32"/>
+                    <Setter Property="Margin" Value="0"/>
+                    <Setter Property="Padding" Value="0"/>
+                    <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+                    <Setter Property="shell:WindowChrome.IsHitTestVisibleInChrome" Value="True"/>
+                    <Setter Property="Template"><Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Chrome" Background="Transparent">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Chrome" Property="Background" Value="{DynamicResource SurfaceRaisedBrush}"/></Trigger>
+                                <Trigger Property="IsPressed" Value="True"><Setter TargetName="Chrome" Property="Background" Value="{DynamicResource BorderBrush}"/></Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value></Setter>
+                </Style>
+            </Grid.Resources>
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
+                <Image Source="Assets/fluxftp-server-icon.png" Width="16" Height="16" Margin="0,0,6,0"/>
+                <TextBlock Text="FluxFTP" Foreground="{DynamicResource TextBrush}" VerticalAlignment="Center"/>
+            </StackPanel>
+            <TextBlock x:Name="TitleMessageText" Margin="150,0" TextAlignment="Center" TextTrimming="CharacterEllipsis"
+                       Foreground="{DynamicResource TextBrush}" VerticalAlignment="Center"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Style="{StaticResource CaptionButton}" Content="&#x2014;" ToolTip="Minimize" Click="CaptionMinimize_Click"/>
+                <Button Style="{StaticResource CaptionButton}" Content="&#x25A1;" ToolTip="Maximize / Restore" Click="CaptionMaximize_Click"/>
+                <Button Style="{StaticResource CaptionButton}" Content="&#x2715;" ToolTip="Close" Click="CaptionClose_Click"/>
+            </StackPanel>
+        </Grid>
         <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceRaisedBrush}"
                 BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="8">
             <Grid>
@@ -25,9 +63,15 @@
                     <Button Content="Site Manager" Click="SiteManager_Click" />
                     <Button x:Name="MetricsButton" Content="Show Metrics" Click="Metrics_Click" />
                     <Button x:Name="ManagerButton" Content="Hide Manager" Click="ToggleManager_Click" />
-                    <Button Content="Scripts" Click="Scripts_Click" />
-                    <Button Content="Sections" Click="Sections_Click" />
-                    <Button Content="IRC Add-ons" Click="Visionary_Click" />
+                    <Button x:Name="ToolsButton" Content="TOOLS" Click="Tools_Click">
+                        <Button.ContextMenu>
+                            <ContextMenu Placement="Bottom">
+                                <MenuItem Header="IRC ADD-ONS" Click="Visionary_Click"/>
+                                <MenuItem Header="SCRIPTS" Click="Scripts_Click"/>
+                                <MenuItem Header="SECTIONS" Click="Sections_Click"/>
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                    </Button>
                     <Button x:Name="ToggleQueueButton" Content="Show Queue" Click="ToggleQueue_Click" />
                     <Button x:Name="ToggleLogButton" Content="Hide Log" Click="ToggleLog_Click" />
                     <Button Content="Global Settings" Click="GlobalSettings_Click" />
@@ -43,19 +87,21 @@
                 BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0"
                 SizeChanged="LegendBar_SizeChanged">
             <Grid ClipToBounds="True">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
                 <ScrollViewer x:Name="StaticStatusHost" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
-                        <TextBlock x:Name="StaticStatusText" TextWrapping="NoWrap" VerticalAlignment="Center" Foreground="{DynamicResource TextBrush}"/>
-                        <Grid x:Name="StaticStatusProgressPanel" Width="140" Margin="12,0,4,0" VerticalAlignment="Center" Visibility="Collapsed">
-                            <ProgressBar Style="{StaticResource FilledProgressBar}" Height="18" Minimum="0" Maximum="100"
-                                         Value="{Binding Value, ElementName=StatusProgressBar}" IsIndeterminate="{Binding IsIndeterminate, ElementName=StatusProgressBar}" Foreground="{Binding Foreground, ElementName=StatusProgressBar}"/>
-                            <TextBlock Text="{Binding Text, ElementName=StatusProgressText}" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="White" FontWeight="SemiBold"/>
-                        </Grid>
-                    </StackPanel>
+                    <TextBlock x:Name="StaticStatusText" TextWrapping="NoWrap" VerticalAlignment="Center" Foreground="{DynamicResource TextBrush}"/>
                 </ScrollViewer>
                 <Canvas x:Name="ScrollingStatusHost" ClipToBounds="True" Visibility="Collapsed">
                     <TextBlock x:Name="ScrollingStatusText" TextWrapping="NoWrap" Foreground="{DynamicResource TextBrush}"/>
                 </Canvas>
+                <Grid x:Name="StaticStatusProgressPanel" Grid.Column="1" Width="140" Margin="12,0,4,0" VerticalAlignment="Center" Visibility="Collapsed">
+                    <ProgressBar Style="{StaticResource FilledProgressBar}" Height="18" Minimum="0" Maximum="100"
+                                 Value="{Binding Value, ElementName=StatusProgressBar}" IsIndeterminate="{Binding IsIndeterminate, ElementName=StatusProgressBar}" Foreground="{Binding Foreground, ElementName=StatusProgressBar}"/>
+                    <TextBlock Text="{Binding Text, ElementName=StatusProgressText}" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="White" FontWeight="SemiBold"/>
+                </Grid>
 <Grid HorizontalAlignment="Stretch" Visibility="Collapsed">
                 <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
@@ -278,7 +324,17 @@
                               PreviewMouseRightButtonDown="FileList_PreviewMouseRightButtonDown"
                               ScrollViewer.VerticalScrollBarVisibility="Auto"
                               ScrollViewer.HorizontalScrollBarVisibility="Auto">
-                        <ListView.ContextMenu><ContextMenu><MenuItem Header="Remove job" Click="RemoveQueueJob_Click"/></ContextMenu></ListView.ContextMenu>
+                        <ListView.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="Start queue" Click="StartQueue_Click"/>
+                                <MenuItem Header="Stop queue" Click="StopQueue_Click"/>
+                                <Separator/>
+                                <MenuItem Header="Resume selected" Click="ResumeTransfer_Click"/>
+                                <MenuItem Header="Remove selected" Click="RemoveQueueJob_Click"/>
+                                <Separator/>
+                                <MenuItem Header="Reset failed jobs" Click="ResetFailedQueueJobs_Click" ToolTip="Retry eligible saved connection/timeout failures with fresh sessions; cooldown and retry limits apply."/>
+                            </ContextMenu>
+                        </ListView.ContextMenu>
                         <ListView.View>
                             <GridView>
                                 <GridViewColumn x:Name="QueueStateColumn" DisplayMemberBinding="{Binding State}" Width="82"><GridViewColumn.Header><GridViewColumnHeader x:Name="QueueStateHeader" Content="State" Tag="State" Click="QueueHeader_Click"/></GridViewColumn.Header></GridViewColumn>

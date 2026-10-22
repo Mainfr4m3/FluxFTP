@@ -118,6 +118,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         Title = $"FluxFTP — {_startupMessage.Text}";
+        TitleMessageText.Text = _startupMessage.Text;
         _settings = _settingsStore.Load();
         ConfigureSkippedItemColors();
         _columnVisibility = new ColumnVisibilityController(_settings.Layout, (key, hidden) =>
@@ -2896,14 +2897,20 @@ public partial class MainWindow : Window
         if (QueueList.SelectedItem is QueueEntryView entry) _engine.Pause(entry.Id);
     }
 
-    private async void ResumeTransfer_Click(object sender, RoutedEventArgs e)
+    private void ResumeTransfer_Click(object sender, RoutedEventArgs e)
     {
-        if (QueueList.SelectedItem is QueueEntryView { State: "Paused" or "Failed" } entry)
-        {
-            if (_engine.Snapshot().Any(status => status.Item.Id == entry.Id)) _engine.Resume(entry.Id);
-            else Schedule(entry);
-            await Task.CompletedTask;
-        }
+        var selected = QueueList.SelectedItems.Cast<QueueEntryView>()
+            .Where(entry => entry.State is "Paused" or "Failed").ToList();
+        var snapshot = _engine.Snapshot().Select(status => status.Item.Id).ToHashSet();
+        ScheduleBatch(selected.Where(entry => !snapshot.Contains(entry.Id)));
+        _engine.Resume(selected.Where(entry => snapshot.Contains(entry.Id)).Select(entry => entry.Id));
+    }
+
+    private void ResetFailedQueueJobs_Click(object sender, RoutedEventArgs e)
+    {
+        var count = HardResetJobs(null);
+        if (count == 0) AppendFtpLog(Environment.NewLine + "Reset failed jobs: no eligible saved failures (cooldown, retry limit or lookback).");
+        SaveQueue(); UpdateQueueStatus();
     }
 
     private void ClearFinished_Click(object sender, RoutedEventArgs e)
@@ -2914,7 +2921,7 @@ public partial class MainWindow : Window
 
     private void RemoveQueueJob_Click(object sender, RoutedEventArgs e)
     {
-        if (QueueList.SelectedItem is QueueEntryView entry) RemoveTransferJob(entry.Id);
+        foreach (var entry in QueueList.SelectedItems.Cast<QueueEntryView>().ToList()) RemoveTransferJob(entry.Id);
     }
 
     private void ClearAll_Click(object sender, RoutedEventArgs e)
@@ -3166,6 +3173,23 @@ public partial class MainWindow : Window
             previous = entry.State;
             Record();
         };
+    }
+
+    private void CaptionMinimize_Click(object sender, RoutedEventArgs e) => SystemCommands.MinimizeWindow(this);
+    private void CaptionMaximize_Click(object sender, RoutedEventArgs e)
+    {
+        if (WindowState == WindowState.Maximized) SystemCommands.RestoreWindow(this);
+        else SystemCommands.MaximizeWindow(this);
+    }
+    private void CaptionClose_Click(object sender, RoutedEventArgs e) => Close();
+
+    private void Tools_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { ContextMenu: { } menu } button)
+        {
+            menu.PlacementTarget = button;
+            menu.IsOpen = true;
+        }
     }
 
     private void StartQueue_Click(object sender, RoutedEventArgs e)
@@ -3561,7 +3585,7 @@ public partial class MainWindow : Window
         return new(connected, profiles.Count, active, currentSpeed, FormatSize(bytes), rows,
             new MetricsDashboard(FormatSize(_sessionStatistics.Uploaded + _sessionStatistics.Downloaded + _sessionStatistics.Fxp + _sessionStatistics.Local),
                 _sessionStatistics.Completed, FormatTransferTime(_sessionStatistics.Uptime), _workerPool.Values.Sum(pool => pool.Count),
-                _sessionStatistics.Hits, currentSpeed, _sessionStatistics.TrafficMinutes, _latestFxpTimings,
+                _sessionStatistics.Hits, $"{_sessionStatistics.FxpRecentRate / 1_000_000d:0.00} MB/s", _sessionStatistics.TrafficMinutes, _latestFxpTimings,
                 _serverStats.Values.GroupBy(value => value.Site, StringComparer.OrdinalIgnoreCase).Select(group => group.OrderBy(value => value.Command == "USER" ? 0 : value.Command == "STATS" ? 1 : 2).First())
                     .OrderBy(value => value.Site, StringComparer.OrdinalIgnoreCase).ToArray(), _raceRouteStatistics.Snapshot(), _raceRouteStatistics.Wins(),
                 _sessionStatistics.PeakSpeedBytesPerSecond, total.PeakSpeedBytesPerSecond));
@@ -3596,7 +3620,7 @@ public partial class MainWindow : Window
         var mode = _settings.LegendBarMode;
         LegendBar.Visibility = mode.Equals("Hidden", StringComparison.OrdinalIgnoreCase) ? Visibility.Collapsed : Visibility.Visible;
         if (LegendBar.Visibility != Visibility.Visible) return;
-        var scrolling = mode.Equals("Scrolling", StringComparison.OrdinalIgnoreCase);
+        var scrolling = _startupMessage.TransferStarted && mode.Equals("Scrolling", StringComparison.OrdinalIgnoreCase);
         ApplyLegendLayout(scrolling);
         var snapshot = GetMetricsSnapshot();
         var compact = $"Sites {snapshot.ConnectedSites}/{snapshot.ConfiguredSites} · Jobs {snapshot.ActiveJobs}/{_queue.Count} · Speed {snapshot.TotalSpeed}";
@@ -3611,6 +3635,8 @@ public partial class MainWindow : Window
         var fontSize = Math.Clamp(_settings.StatusBarFontSize, 8, 32);
         StaticStatusText.FontSize = ScrollingStatusText.FontSize = fontSize;
         LegendBar.Height = Math.Max(30, fontSize + 20);
+        Grid.SetColumnSpan(StaticStatusHost, _startupMessage.TransferStarted ? 1 : 2);
+        StaticStatusText.TextAlignment = TextAlignment.Center;
         StaticStatusHost.Visibility = scrolling ? Visibility.Collapsed : Visibility.Visible;
         ScrollingStatusHost.Visibility = scrolling ? Visibility.Visible : Visibility.Collapsed;
         ScrollingStatusText.Text = fullStatus;
@@ -3800,6 +3826,22 @@ public partial class MainWindow : Window
         {
             var menu = new System.Windows.Forms.ContextMenuStrip();
             menu.Items.Add("Open FluxFTP", null, (_, _) => Dispatcher.Invoke(RestoreFromTray));
+            menu.Items.Add("Show Manager", null, (_, _) => Dispatcher.Invoke(() =>
+            {
+                RestoreFromTray();
+                if (!_managerVisible) ToggleManager_Click(this, new RoutedEventArgs());
+            }));
+            menu.Items.Add("Show Tools", null, (_, _) => Dispatcher.Invoke(() =>
+            {
+                RestoreFromTray();
+                Dispatcher.BeginInvoke(() => Tools_Click(ToolsButton, new RoutedEventArgs()),
+                    System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            }));
+            menu.Items.Add("Show Global Settings", null, (_, _) => Dispatcher.Invoke(() =>
+            {
+                RestoreFromTray();
+                GlobalSettings_Click(this, new RoutedEventArgs());
+            }));
             menu.Items.Add("Show Metrics", null, (_, _) => Dispatcher.Invoke(() =>
             {
                 RestoreFromTray();

@@ -9,11 +9,11 @@ public sealed record GlobalSettings(
     bool EnableHttpsApi = false,
     int HttpsApiPort = 55477,
     bool ApiLocalhostOnly = true,
-    int PreparedJobExpirationSeconds = 120,
-    int StarterTimeoutSeconds = 200,
-    int MaxTransferRuntimeMinutes = 0,
-    int TransferJobHistory = 100,
-    int TransferHistory = 5000,
+    int PreparedJobExpirationSeconds = 45,
+    int StarterTimeoutSeconds = 15,
+    int MaxTransferRuntimeMinutes = 15,
+    int TransferJobHistory = 2000,
+    int TransferHistory = 2000,
     int LogBufferHistory = 4096,
     string DefaultUsername = "anonymous",
     int DefaultSlots = 2,
@@ -69,8 +69,8 @@ public sealed record GlobalSettings(
     bool? UseAdvancedSkipFilters = null,
     int StatusBarFontSize = 12, int StatusBarScrollSpeed = 60,
     bool SmartResume = false, int SmartResumeAttempts = 2,
-    bool AutoHardReset = true, int HardResetCooldownSeconds = 120, int HardResetRetries = 5, int HardResetLookbackMinutes = 15,
-    int MaxActiveSpreadJobs = 300, int VisionaryConcurrentScheduling = 300, int? VisionaryRecheckSeconds = 3, string DownloadTempPath = "");
+    bool AutoHardReset = false, int HardResetCooldownSeconds = 120, int HardResetRetries = 2, int HardResetLookbackMinutes = 5,
+    int MaxActiveSpreadJobs = 150, int VisionaryConcurrentScheduling = 150, int? VisionaryRecheckSeconds = 1, string DownloadTempPath = "");
 
 public sealed record ViewLayoutSettings(string[]? HiddenColumns = null, string SortBy = "Name",
     bool Descending = false, string FontFamily = "", double FontSize = 0, bool Bold = false);

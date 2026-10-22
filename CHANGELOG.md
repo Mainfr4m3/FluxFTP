@@ -2,6 +2,23 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.48 — 2026-10-22
+
+- Centers the startup message across the full status bar, including when scrolling status is selected. The selected scrolling mode resumes after the first transfer starts.
+- Adds a themed title bar with the startup message centered, FluxFTP name/icon on the left and minimize, maximize/restore and close buttons on the right.
+- Includes the Jobs defaults, restored FXP rate calculation, right-aligned status progress bar, queue context actions, TOOLS menu and tray shortcuts from 2.1.47.
+- Local test build; no bridge script or DLL update is required.
+
+## 2.1.47 — 2026-10-22
+
+- Restores the completed FXP/relay bytes over the last 60 seconds calculation for the FXP RATE card while retaining the CURRENT label. The tooltip explains the calculation.
+- Jobs defaults now use history limits 2000/2000/4096, prepared expiration 45 seconds, starter timeout 15 seconds and maximum runtime 15 minutes. Automatic hard reset defaults off, with cooldown 120 seconds, two retries and five-minute lookback. Spread jobs and Visionary scheduling default to 150, with a one-second race recheck. Explicit saved settings remain unchanged.
+- The bottom status progress bar is fixed at the right edge, including scrolling mode, and stays hidden during the startup message.
+- Transfer queue context menu adds Start queue, Stop queue, Resume selected, Remove selected and Reset failed jobs. Resume/remove support multiple selections; reset retains existing recovery eligibility and retry limits.
+- TOOLS groups IRC ADD-ONS, SCRIPTS and SECTIONS in the main toolbar.
+- Tray menu adds Show Manager, Show Tools and Show Global Settings, restoring the main window before opening the requested view.
+- Local test build; no bridge script or DLL update is required.
+
 ## 2.1.46 — 2026-10-22
 
 - The FXP rate card in Metrics uses the same current aggregate Speed value as the status bar, including its estimated-speed indicator and units. The card is labelled CURRENT instead of LAST 60 S.

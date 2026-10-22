@@ -28,11 +28,11 @@ internal static class HardResetChecks
         if (!recovery.Expired(id, policy)) throw new Exception("Removed job retained retry state");
         var defaults = JsonSerializer.Deserialize<GlobalSettings>("{}")!;
         if (defaults != new GlobalSettings()) throw new Exception("Missing settings must use constructor defaults");
-        if (defaults.TransferJobHistory != 100 || defaults.TransferHistory != 5000 || defaults.LogBufferHistory != 4096 ||
-            defaults.PreparedJobExpirationSeconds != 120 || defaults.StarterTimeoutSeconds != 200 || defaults.MaxTransferRuntimeMinutes != 0 ||
-            defaults.MaxActiveSpreadJobs != 300 || defaults.VisionaryConcurrentScheduling != 300 || defaults.VisionaryRecheckSeconds != 3)
+        if (defaults.TransferJobHistory != 2000 || defaults.TransferHistory != 2000 || defaults.LogBufferHistory != 4096 ||
+            defaults.PreparedJobExpirationSeconds != 45 || defaults.StarterTimeoutSeconds != 15 || defaults.MaxTransferRuntimeMinutes != 15 ||
+            defaults.MaxActiveSpreadJobs != 150 || defaults.VisionaryConcurrentScheduling != 150 || defaults.VisionaryRecheckSeconds != 1)
             throw new Exception("Visi bridge defaults do not match the configured baseline");
-        if (!defaults.AutoHardReset || defaults.HardResetCooldownSeconds != 120 || defaults.HardResetRetries != 5 || defaults.HardResetLookbackMinutes != 15)
+        if (defaults.AutoHardReset || defaults.HardResetCooldownSeconds != 120 || defaults.HardResetRetries != 2 || defaults.HardResetLookbackMinutes != 5)
             throw new Exception("Recovery defaults do not match the configured baseline");
         var saved = defaults with { TransferHistory = 10000, StarterTimeoutSeconds = 300, MaxActiveSpreadJobs = 32,
             VisionaryConcurrentScheduling = 32, VisionaryRecheckSeconds = null, AutoHardReset = false,
