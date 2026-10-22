@@ -2,6 +2,12 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.49 — 2026-10-22
+
+- Main toolbar order and labels are now Sites, Tools, Metrics, Manager, Queue, Log, Global Settings and About.
+- Panel buttons keep their short labels; Show/Hide actions are described in tooltips.
+- Includes the centered title/status startup messages and all changes from 2.1.48. Local test build; no bridge update is required.
+
 ## 2.1.48 — 2026-10-22
 
 - Centers the startup message across the full status bar, including when scrolling status is selected. The selected scrolling mode resumes after the first transfer starts.

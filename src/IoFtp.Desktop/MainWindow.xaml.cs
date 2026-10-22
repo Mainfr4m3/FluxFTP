@@ -3408,7 +3408,7 @@ public partial class MainWindow : Window
             LogSplitterRow.Height = new GridLength(0);
             LogPanel.Visibility = Visibility.Collapsed;
             LogSplitter.Visibility = Visibility.Collapsed;
-            ToggleLogButton.Content = "Show Log";
+            ToggleLogButton.ToolTip = "Show Log";
         }
         else
         {
@@ -3418,7 +3418,7 @@ public partial class MainWindow : Window
             LogSplitterRow.Height = new GridLength(8);
             LogRow.MinHeight = 70;
             LogRow.Height = !_managerVisible ? new GridLength(1, GridUnitType.Star) : _visibleLogHeight.Value > 0 ? _visibleLogHeight : new GridLength(150);
-            ToggleLogButton.Content = "Hide Log";
+            ToggleLogButton.ToolTip = "Hide Log";
         }
         NormalizePanelSpace();
     }
@@ -3433,7 +3433,7 @@ public partial class MainWindow : Window
             QueueSplitterRow.Height = new GridLength(0);
             QueuePanel.Visibility = Visibility.Collapsed;
             QueueSplitter.Visibility = Visibility.Collapsed;
-            ToggleQueueButton.Content = "Show Queue";
+            ToggleQueueButton.ToolTip = "Show Queue";
         }
         else
         {
@@ -3443,7 +3443,7 @@ public partial class MainWindow : Window
             QueueSplitterRow.Height = new GridLength(8);
             QueueRow.MinHeight = 80;
             QueueRow.Height = _visibleQueueHeight.Value > 0 ? _visibleQueueHeight : new GridLength(190);
-            ToggleQueueButton.Content = "Hide Queue";
+            ToggleQueueButton.ToolTip = "Hide Queue";
         }
         NormalizePanelSpace();
     }
@@ -3514,7 +3514,7 @@ public partial class MainWindow : Window
         foreach (var child in _managerElements!) child.Visibility = _managerVisible ? Visibility.Visible : Visibility.Collapsed;
         ManagerRow.Height = _managerVisible ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
         if (LogPanel.Visibility == Visibility.Visible) LogRow.Height = _managerVisible ? _visibleLogHeight : new GridLength(1, GridUnitType.Star);
-        ManagerButton.Content = _managerVisible ? "Hide Manager" : "Show Manager";
+        ManagerButton.ToolTip = _managerVisible ? "Hide Manager" : "Show Manager";
         NormalizePanelSpace();
     }
     private void Metrics_Click(object sender, RoutedEventArgs e)
@@ -3530,7 +3530,7 @@ public partial class MainWindow : Window
         MetricsSplitterRow.Height = new GridLength(show ? 6 : 0);
         MetricsRow.MinHeight = show ? 200 : 0;
         MetricsRow.Height = show ? _metricsHeight : new GridLength(0);
-        MetricsButton.Content = show ? "Hide Metrics" : "Show Metrics";
+        MetricsButton.ToolTip = show ? "Hide Metrics" : "Show Metrics";
         NormalizePanelSpace();
     }
     private void Scripts_Click(object sender, RoutedEventArgs e) => new ExternalScriptsWindow { Owner = this }.Show();
