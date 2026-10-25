@@ -100,13 +100,3 @@ The Commands window currently includes presets for:
 - `SITE ioGuiExt who` is used internally for ioFTPD FXP speed monitoring
 
 **Load SITE HELP** can add commands advertised by the connected server. FTPRush `RushCmd.xml` command packs can also be imported. The raw-command field accepts one FTP command at a time; credential commands `USER`, `PASS` and `ACCT` are blocked there to avoid exposing or replacing the active login.
-
-
-## Initial milestones
-
-1. Usable dual-pane shell and ioGUI3 theme foundation.
-2. Persistent queue and resumable local copy reference implementation.
-3. FTP/FTPS transport with capability detection.
-4. Server-to-server FXP orchestration.
-5. Site profiles and cbftpd-aware commands.
-6. SFTP transport as an optional provider.
