@@ -9,13 +9,13 @@ FluxFTP supports FTP/FTPS connections, dual remote sessions, resumable transfers
 and secure FXP with automatic client-relay fallback.
 
 Per-site affiliate/group names can be edited in Site Options and are exposed as
-`affils` through the cbftp-compatible API for automatic d-tool synchronization.
+`affils` through the cbftp-compatible API for automatic synchronization.
 Spread Jobs also supports reusable presets for section, source and target routes.
 Optional unique site descriptions are exposed through the sites API and can be
-used in API or d-tool download commands instead of the technical site name.
+used in API or download commands instead of the technical site name.
 Sections can enforce release-name prechecks with wildcard or `regex:` allow and
 deny rules. Warning mode allows a manual override, while Block mode prevents PRE
-and section-based API/d-tool race or FXP jobs.
+and section-based API race or FXP jobs.
 Common ioFTPD/glFTPD nuke directory names and marker files are detected
 automatically. Nuked entries are highlighted in both panes, manual transfers
 require confirmation, and unattended API transfers are blocked before
