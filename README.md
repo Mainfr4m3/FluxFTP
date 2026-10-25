@@ -18,7 +18,7 @@ deny rules. Warning mode allows a manual override, while Block mode prevents PRE
 and section-based API/d-tool race or FXP jobs.
 Common ioFTPD/glFTPD nuke directory names and marker files are detected
 automatically. Nuked entries are highlighted in both panes, manual transfers
-require confirmation, and unattended API/d-tool transfers are blocked before
+require confirmation, and unattended API transfers are blocked before
 any files are queued. The `/path` API exposes `nuked` and `nuke_reason`.
 Direct FXP protection is configurable per site. The default **Auto** mode always
 requires TLS-protected server-to-server data through CPSV/SSCN. **Clear** must be
