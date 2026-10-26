@@ -1854,13 +1854,19 @@ public partial class MainWindow : Window
             var (sourceSite, destinationSite) = SitesFor(entry.Direction);
             if (entry.HardResetConnections) { sourceSite = entry.SourceProfileId; destinationSite = entry.DestinationProfileId; }
             else { sourceSite ??= entry.SourceProfileId; destinationSite ??= entry.DestinationProfileId; }
+            if (!entry.VisionaryRace && entry.ManualQueueOrder == int.MaxValue)
+            {
+                var previousOrder = _queue.Where(item => !item.VisionaryRace && item.ManualQueueOrder != int.MaxValue)
+                    .Select(item => item.ManualQueueOrder).DefaultIfEmpty(-1).Max();
+                if (previousOrder >= 0) entry.ManualQueueOrder = previousOrder + 1;
+            }
             entry.State = "Queued";
             entry.QueuedAt ??= DateTimeOffset.Now;
             work.Add(new TransferWorkItem(entry.Id, entry.Id, entry.Name, sourceSite, destinationSite,
                 entry.Source, entry.Destination, entry.TotalBytes,
                 SourceLimits: !entry.VisionaryRace && sourceSite is { } ms && profiles.TryGetValue(ms, out var sp) ? ManualSlotPolicy(sp) : null,
                 DestinationLimits: !entry.VisionaryRace && destinationSite is { } mt && profiles.TryGetValue(mt, out var dp) ? ManualSlotPolicy(dp) : null,
-                QueuedAt: entry.QueuedAt.Value.ToUniversalTime(), FilePriorityRank: entry.VisionaryRace ? TransferFilePriority.RaceRank(entry.Name) : TransferFilePriority.Rank(entry.Name, entry.Source, _settings,
+                ManualQueueOrder: entry.ManualQueueOrder, QueuedAt: entry.QueuedAt.Value.ToUniversalTime(), FilePriorityRank: entry.VisionaryRace ? TransferFilePriority.RaceRank(entry.Name) : TransferFilePriority.Rank(entry.Name, entry.Source, _settings,
                     [sourceSite is { } s ? profiles.GetValueOrDefault(s) : null, destinationSite is { } d ? profiles.GetValueOrDefault(d) : null])));
         }
         if (work.Count > 0) _engine.Enqueue(work);
@@ -2913,6 +2919,30 @@ public partial class MainWindow : Window
         SaveQueue(); UpdateQueueStatus();
     }
 
+    private void MoveQueueJobs_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem { Tag: string direction }) return;
+        var visible = QueueList.Items.Cast<QueueEntryView>().ToList();
+        var selected = QueueList.SelectedItems.Cast<QueueEntryView>().ToHashSet();
+        if (selected.Count == 0) return;
+        var ordered = QueueOrder.Move(visible, selected, direction);
+        var view = CollectionViewSource.GetDefaultView(QueueList.ItemsSource);
+        if (view is ListCollectionView listView) listView.CustomSort = null;
+        view.SortDescriptions.Clear();
+        _queueSortProperty = "";
+        SaveViewSort("Queue", "", ListSortDirection.Ascending);
+        var slots = _queue.Select((entry, index) => (entry, index)).Where(pair => !pair.entry.VisionaryRace).Select(pair => pair.index).ToArray();
+        for (var i = 0; i < ordered.Count; i++)
+        {
+            ordered[i].ManualQueueOrder = i;
+            _queue.Move(_queue.IndexOf(ordered[i]), slots[i]);
+        }
+        _engine.UpdateQueueOrder(ordered.ToDictionary(entry => entry.Id, entry => entry.ManualQueueOrder));
+        foreach (var entry in selected) if (!QueueList.SelectedItems.Contains(entry)) QueueList.SelectedItems.Add(entry);
+        QueueList.ScrollIntoView(ordered.First(entry => selected.Contains(entry)));
+        SaveQueue();
+    }
+
     private void ClearFinished_Click(object sender, RoutedEventArgs e)
     {
         foreach (var entry in _queue.Where(item => item.State is "Completed" or "Failed").ToList()) _queue.Remove(entry);
@@ -2966,7 +2996,7 @@ public partial class MainWindow : Window
                     continue;
                 }
                 _queue.Add(new QueueEntryView(item.Name, item.Source, item.Destination, item.Direction, item.Id == Guid.Empty ? Guid.NewGuid() : item.Id)
-                { State = item.State is "Completed" ? "Completed" : "Paused", BytesTransferred = item.BytesTransferred, TotalBytes = item.TotalBytes, SourceProfileId = item.SourceProfileId, DestinationProfileId = item.DestinationProfileId, QueuedAt = item.QueuedAt, StartedAt = item.StartedAt, RuleSection = item.RuleSection, RuleRelease = item.RuleRelease });
+                { State = item.State is "Completed" ? "Completed" : "Paused", BytesTransferred = item.BytesTransferred, TotalBytes = item.TotalBytes, SourceProfileId = item.SourceProfileId, DestinationProfileId = item.DestinationProfileId, QueuedAt = item.QueuedAt, StartedAt = item.StartedAt, RuleSection = item.RuleSection, RuleRelease = item.RuleRelease, ManualQueueOrder = item.ManualQueueOrder });
             }
             UpdateQueueStatus();
             if (source == _oldQueuePath) SaveQueue();
@@ -2980,7 +3010,7 @@ public partial class MainWindow : Window
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_queuePath)!);
             // A partial race transfer must not resume as a standalone completed-release job after restart.
-            var snapshots = _queue.Where(item => !item.VisionaryRace).Select(item => new QueueSnapshot(item.Name, item.Source, item.Destination, item.Direction, item.State, item.BytesTransferred, item.TotalBytes, item.Id, item.SourceProfileId, item.DestinationProfileId, item.QueuedAt, item.StartedAt, item.RuleSection, item.RuleRelease));
+            var snapshots = _queue.Where(item => !item.VisionaryRace).Select(item => new QueueSnapshot(item.Name, item.Source, item.Destination, item.Direction, item.State, item.BytesTransferred, item.TotalBytes, item.Id, item.SourceProfileId, item.DestinationProfileId, item.QueuedAt, item.StartedAt, item.RuleSection, item.RuleRelease, item.ManualQueueOrder));
             var temporary = _queuePath + ".tmp"; File.WriteAllText(temporary, JsonSerializer.Serialize(snapshots, new JsonSerializerOptions { WriteIndented = true }));
             File.Move(temporary, _queuePath, true);
         }
@@ -4652,7 +4682,7 @@ public partial class MainWindow : Window
     {
         public override string ToString() => Label;
     }
-    private sealed record QueueSnapshot(string Name, string Source, string Destination, TransferDirection Direction, string State, long BytesTransferred, long TotalBytes = 0, Guid Id = default, Guid? SourceProfileId = null, Guid? DestinationProfileId = null, DateTimeOffset? QueuedAt = null, DateTimeOffset? StartedAt = null, string? RuleSection = null, string? RuleRelease = null);
+    private sealed record QueueSnapshot(string Name, string Source, string Destination, TransferDirection Direction, string State, long BytesTransferred, long TotalBytes = 0, Guid Id = default, Guid? SourceProfileId = null, Guid? DestinationProfileId = null, DateTimeOffset? QueuedAt = null, DateTimeOffset? StartedAt = null, string? RuleSection = null, string? RuleRelease = null, int ManualQueueOrder = int.MaxValue);
 
     private sealed class QueueEntryView(string name, string source, string destination, TransferDirection direction, Guid? id = null, long totalBytes = 0) : INotifyPropertyChanged
     {
@@ -4660,6 +4690,7 @@ public partial class MainWindow : Window
         public string Name { get; } = name; public string Source { get; } = source; public string Destination { get; } = destination;
         public TransferDirection Direction { get; } = direction;
         public Guid Id { get; } = id ?? Guid.NewGuid();
+        public int ManualQueueOrder { get; set; } = int.MaxValue;
         private long _totalBytes = totalBytes;
         public long TotalBytes { get => _totalBytes; set { _totalBytes = value; Changed(); Changed(nameof(ProgressPercent)); Changed(nameof(ProgressDisplay)); } }
         private long _speedBytesPerSecond;

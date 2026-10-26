@@ -332,6 +332,12 @@
                                 <MenuItem Header="Resume selected" Click="ResumeTransfer_Click"/>
                                 <MenuItem Header="Remove selected" Click="RemoveQueueJob_Click"/>
                                 <Separator/>
+                                <MenuItem Header="Move up" Tag="Up" Click="MoveQueueJobs_Click"/>
+                                <MenuItem Header="Move down" Tag="Down" Click="MoveQueueJobs_Click"/>
+                                <MenuItem Header="Move to top" Tag="Top" Click="MoveQueueJobs_Click"/>
+                                <MenuItem Header="Move to bottom" Tag="Bottom" Click="MoveQueueJobs_Click"/>
+
+                                <Separator/>
                                 <MenuItem Header="Reset failed jobs" Click="ResetFailedQueueJobs_Click" ToolTip="Retry eligible saved connection/timeout failures with fresh sessions; cooldown and retry limits apply."/>
                             </ContextMenu>
                         </ListView.ContextMenu>

@@ -17,7 +17,8 @@ public sealed record TransferWorkItem(
     DateTimeOffset? QueuedAt = null,
     int FilePriorityRank = int.MaxValue,
     SitePolicy? SourceLimits = null,
-    SitePolicy? DestinationLimits = null);
+    SitePolicy? DestinationLimits = null,
+    int ManualQueueOrder = int.MaxValue);
 
 public sealed record TransferWorkStatus(
     TransferWorkItem Item,

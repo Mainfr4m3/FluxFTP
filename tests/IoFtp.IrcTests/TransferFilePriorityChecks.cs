@@ -52,6 +52,29 @@ internal static class TransferFilePriorityChecks
         executor.Release.TrySetResult();
         await executor.Finished.Task.WaitAsync(TimeSpan.FromSeconds(10));
         Check(executor.Names.SequenceEqual(new[] { "running", "release.nfo", "release.sfv", "release.r00", "image.jpg", "clip.mkv" }), "scheduler follows changed order for pending FXP files");
+        Check(QueueOrder.Move(new[] { 1, 2, 3, 4, 5 }, new HashSet<int> { 2, 3 }, "Up").SequenceEqual(new[] { 2, 3, 1, 4, 5 }), "selected block moves up once");
+        Check(QueueOrder.Move(new[] { 1, 2, 3, 4, 5 }, new HashSet<int> { 2, 3 }, "Down").SequenceEqual(new[] { 1, 4, 2, 3, 5 }), "selected block moves down once");
+        Check(QueueOrder.Move(new[] { 1, 2, 3, 4, 5 }, new HashSet<int> { 2, 4 }, "Top").SequenceEqual(new[] { 2, 4, 1, 3, 5 }), "top retains relative selected order");
+        Check(QueueOrder.Move(new[] { 1, 2, 3, 4, 5 }, new HashSet<int> { 2, 4 }, "Bottom").SequenceEqual(new[] { 1, 3, 5, 2, 4 }), "bottom retains relative selected order");
+        Check(QueueOrder.Move(new[] { 1, 2, 3 }, new HashSet<int> { 1, 2 }, "Up").SequenceEqual(new[] { 1, 2, 3 }), "top boundary is unchanged");
+        Check(QueueOrder.Move(new[] { 1, 2, 3 }, new HashSet<int> { 2, 3 }, "Down").SequenceEqual(new[] { 1, 2, 3 }), "bottom boundary is unchanged");
+        Check(QueueOrder.Move(new[] { 1, 2, 3 }, new HashSet<int>(), "Top").SequenceEqual(new[] { 1, 2, 3 }), "empty selection is unchanged");
+        var manualExecutor = new Recorder();
+        await using var manualEngine = new GlobalTransferEngine(manualExecutor);
+        manualEngine.RegisterOrUpdateSite(new(source, "source", 1, 1, 1));
+        manualEngine.RegisterOrUpdateSite(new(target, "target", 1, 1, 1));
+        var manualRunning = running with { Id = Guid.NewGuid() };
+        manualEngine.Enqueue([manualRunning]);
+        await manualExecutor.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        manualEngine.Enqueue(work);
+        var explicitOrder = work.Reverse().Select((item, index) => (item.Id, index)).ToDictionary(pair => pair.Id, pair => pair.index);
+        manualEngine.UpdateQueueOrder(explicitOrder);
+        Check(manualEngine.Snapshot().Single(status => status.Item.Id == manualRunning.Id).State == TransferWorkState.Running, "manual queue move leaves running transfer intact");
+        var persistedWork = JsonSerializer.Deserialize<TransferWorkItem>(JsonSerializer.Serialize(work[0] with { ManualQueueOrder = 4 }));
+        Check(persistedWork!.ManualQueueOrder == 4, "manual order persists");
+        manualExecutor.Release.TrySetResult();
+        await manualExecutor.Finished.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Check(manualExecutor.Names.SequenceEqual(new[] { "running" }.Concat(work.Reverse().Select(item => item.Name))), "manual order overrides automatic file priority for pending jobs");
         Console.WriteLine($"PASS: {count} transfer category, imported priority, persistence and scheduler checks.");
     }
 

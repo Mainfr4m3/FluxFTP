@@ -2,6 +2,13 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.50 — 2026-10-26
+
+- Transfer Queue context menu adds Move up, Move down, Move to top and Move to bottom, supporting multiple selected files while preserving their relative order.
+- Manual queue order is saved and used by the scheduler for pending jobs ahead of automatic priorities. Running transfers continue; slot limits still apply. Moving jobs clears column sorting so the displayed queue reflects the manual order.
+- New manual jobs scheduled after a reordered queue are appended to its manual order. Automatic race entries retain their existing priorities unless an explicit manual queue order is present on another job.
+- Validation: 25 file priority, queue movement, persistence and scheduler checks plus 77 global settings checks passed. Local test build; no bridge update is required.
+
 ## 2.1.49 — 2026-10-22
 
 - Main toolbar order and labels are now Sites, Tools, Metrics, Manager, Queue, Log, Global Settings and About.

@@ -69,6 +69,16 @@ public sealed class GlobalTransferEngine : IAsyncDisposable
         RaiseStateChanged();
     }
 
+    public void UpdateQueueOrder(IReadOnlyDictionary<Guid, int> order)
+    {
+        lock (_gate)
+            foreach (var work in _work.Values)
+                if (order.TryGetValue(work.Item.Id, out var rank))
+                    work.Item = work.Item with { ManualQueueOrder = rank };
+        RaiseStateChanged();
+        RequestPump();
+    }
+
     public void UpdateFilePriorities(IReadOnlyDictionary<Guid, int> ranks)
     {
         lock (_gate)
@@ -130,7 +140,8 @@ public sealed class GlobalTransferEngine : IAsyncDisposable
         {
             var now = DateTimeOffset.UtcNow;
             return _work.Values.Select(work => new TransferWorkStatus(work.Item, work.State, Score(work.Item, now), work.Error))
-                .OrderByDescending(status => SitePriority(status.Item.SourceSiteId))
+                .OrderBy(status => status.Item.ManualQueueOrder)
+                .ThenByDescending(status => SitePriority(status.Item.SourceSiteId))
                 .ThenBy(status => status.Item.FilePriorityRank)
                 .ThenByDescending(status => SitePriority(status.Item.DestinationSiteId))
                 .ThenBy(status => status.Item.QueuedAt ?? DateTimeOffset.MaxValue)
@@ -156,7 +167,8 @@ public sealed class GlobalTransferEngine : IAsyncDisposable
                 _pumpScheduled = false;
                 var now = DateTimeOffset.UtcNow;
                 selected = _work.Values.Where(work => work.State == TransferWorkState.Queued && IsAllowed(work.Item))
-                    .OrderByDescending(work => SitePriority(work.Item.SourceSiteId))
+                    .OrderBy(work => work.Item.ManualQueueOrder)
+                    .ThenByDescending(work => SitePriority(work.Item.SourceSiteId))
                     .ThenBy(work => work.Item.FilePriorityRank)
                     .ThenByDescending(work => SitePriority(work.Item.DestinationSiteId))
                     .ThenBy(work => work.Item.QueuedAt ?? DateTimeOffset.MaxValue)
