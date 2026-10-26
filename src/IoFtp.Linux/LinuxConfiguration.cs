@@ -78,7 +78,9 @@ internal sealed record LinuxSection(string Name, Dictionary<string, string> Site
     public override string ToString() => Name;
 }
 internal sealed record LinuxOptions(string DownloadPath, int MaxLocalDownloads = 1, int MaxLocalUploads = 1,
-    bool SerializeLocalTransfers = true, int StarterTimeoutSeconds = 15, int MaxTransferRuntimeMinutes = 15, ProxyConfiguration? Proxy = null, LinuxApiOptions? Api = null);
+    bool SerializeLocalTransfers = true, int StarterTimeoutSeconds = 15, int MaxTransferRuntimeMinutes = 15, ProxyConfiguration? Proxy = null, LinuxApiOptions? Api = null,
+    int LogBufferLines = 4096, bool ClearCompletedManualTransfers = false, LinuxLayout? Layout = null);
+internal sealed record LinuxLayout(bool Metrics = true, bool Manager = true, bool Queue = true, bool Log = true);
 internal sealed record LinuxState(List<SavedSite> Sites, List<LinuxSection> Sections, LinuxOptions Options);
 internal sealed class LinuxConfiguration
 {

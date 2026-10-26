@@ -58,7 +58,7 @@ internal sealed partial class LinuxApiServer : IAsyncDisposable
             catch (Exception ex)
             { _log("API request failed: " + ex.GetType().Name); if (!context.Response.HasStarted) { context.Response.StatusCode = 500; await context.Response.WriteAsJsonAsync(new { error = "Operation failed; check the local FTP log." }); } }
         });
-        app.MapGet("/info", () => Results.Json(new { name = "FluxFTP Linux", version = "0.1.0-preview.3", api = "cbftp-compatible", tls = true, udp = false }));
+        app.MapGet("/info", () => Results.Json(new { name = "FluxFTP Linux", version = "0.1.0-preview.4", api = "cbftp-compatible", tls = true, udp = false }));
         app.MapGet("/sites", () => Results.Json(Sites().Select(site => site.Name)));
         app.MapGet("/sites/{name}", (string name) => Results.Json(ApiSite(FindSite(name))));
         app.MapPost("/sites", (Delegate)(async (HttpContext context) => await SaveSite(null, context)));

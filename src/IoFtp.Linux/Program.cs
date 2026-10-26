@@ -3,6 +3,8 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Headless;
 using Avalonia.Themes.Fluent;
 using Avalonia.Styling;
+using Avalonia.Controls;
+using Avalonia.Media;
 using System.Runtime.InteropServices;
 using IoFtp.Core.Transport;
 namespace IoFtp.Linux;
@@ -17,6 +19,11 @@ internal static class Program
         if (args.FirstOrDefault() is "--smoke-test" or "--ftp-check") return SmokeTests.Run(args).GetAwaiter().GetResult();
         if (args.FirstOrDefault() == "--api-check")
             return AppBuilder.Configure<App>().UseHeadless(new AvaloniaHeadlessPlatformOptions()).StartWithClassicDesktopLifetime(args);
+        if (args.FirstOrDefault() == "--settings-checks")
+        {
+            AppBuilder.Configure<App>().UseHeadless(new AvaloniaHeadlessPlatformOptions()).SetupWithoutStarting();
+            return SettingsChecks.Run();
+        }
         if (args.FirstOrDefault() == "--ui-check")
         {
             AppBuilder.Configure<App>().UseHeadless(new AvaloniaHeadlessPlatformOptions()).SetupWithoutStarting();
@@ -28,7 +35,17 @@ internal static class Program
 }
 public sealed class App : Application
 {
-    public override void Initialize() { RequestedThemeVariant = ThemeVariant.Dark; Styles.Add(new FluentTheme()); }
+    public override void Initialize()
+    {
+        RequestedThemeVariant = ThemeVariant.Dark; Styles.Add(new FluentTheme());
+        Styles.Add(new Style(selector => selector.OfType<Window>()) { Setters = { new Setter(Window.BackgroundProperty, Brush.Parse("#101820")), new Setter(Window.ForegroundProperty, Brush.Parse("#E5EEF4")), new Setter(Window.FontSizeProperty, 13d) } });
+        Styles.Add(new Style(selector => selector.OfType<Button>()) { Setters = { new Setter(Button.BackgroundProperty, Brush.Parse("#20313F")), new Setter(Button.ForegroundProperty, Brush.Parse("#E5EEF4")), new Setter(Button.BorderBrushProperty, Brush.Parse("#354C5D")), new Setter(Button.BorderThicknessProperty, new Thickness(1)), new Setter(Button.VerticalAlignmentProperty, Avalonia.Layout.VerticalAlignment.Center) } });
+        Styles.Add(new Style(selector => selector.OfType<TextBox>()) { Setters = { new Setter(TextBox.BackgroundProperty, Brush.Parse("#0D171F")), new Setter(TextBox.BorderBrushProperty, Brush.Parse("#354C5D")) } });
+        Styles.Add(new Style(selector => selector.OfType<ListBox>()) { Setters = { new Setter(ListBox.BackgroundProperty, Brush.Parse("#17232D")), new Setter(ListBox.BorderBrushProperty, Brush.Parse("#354C5D")), new Setter(ListBox.BorderThicknessProperty, new Thickness(1)) } });
+        Styles.Add(new Style(selector => selector.OfType<ListBoxItem>()) { Setters = { new Setter(ListBoxItem.PaddingProperty, new Thickness(7, 3)), new Setter(ListBoxItem.MinHeightProperty, 26d) } });
+        Styles.Add(new Style(selector => selector.OfType<TabItem>()) { Setters = { new Setter(TabItem.FontSizeProperty, 13d), new Setter(TabItem.PaddingProperty, new Thickness(10, 8)) } });
+        Styles.Add(new Style(selector => selector.OfType<ComboBox>()) { Setters = { new Setter(ComboBox.BackgroundProperty, Brush.Parse("#17232D")), new Setter(ComboBox.BorderBrushProperty, Brush.Parse("#354C5D")) } });
+    }
     public override void OnFrameworkInitializationCompleted()
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)

@@ -75,7 +75,8 @@ internal static class WindowsBackupImport
         var mergedSections = current.Sections.ToDictionary(section => section.Name, StringComparer.OrdinalIgnoreCase);
         foreach (var section in sections) mergedSections[section.Name] = section;
         var options = new LinuxOptions(localDirectory, Number("MaxLocalDownloadSlots", 1, 0, 2048), Number("MaxLocalUploadSlots", 1, 0, 2048), Flag("SerializeLocalTransfers", true),
-            Number("StarterTimeoutSeconds", 15, 1, 3600), Number("MaxTransferRuntimeMinutes", 15, 0, 1440), proxy, current.Options.Api);
+            Number("StarterTimeoutSeconds", 15, 1, 3600), Number("MaxTransferRuntimeMinutes", 15, 0, 1440), proxy, current.Options.Api,
+            current.Options.LogBufferLines, current.Options.ClearCompletedManualTransfers, current.Options.Layout);
         var state = new LinuxState(merged.Values.ToList(), mergedSections.Values.ToList(), options);
         return new(state, sites.Count, sections.Count, $"Ready: {sites.Count} sites (including portable passwords), {sections.Count} sections, local slots, transfer timeouts and proxy settings.\nExisting sites with matching IDs will be updated; other sites are preserved.\nWindows local paths are replaced by: {localDirectory}\nVisi, scripts, rules, theme/layout, history and queued jobs are not activated/imported in this preview.");
     }

@@ -28,8 +28,11 @@ internal static class BackupImportChecks
         Check(new LinuxConfiguration().Load().Sites.Single().Restore().Password == site.Password, "Saved site did not survive restart");
         var extra = new ConnectionProfile(Guid.NewGuid(), "Existing Linux site", "existing.invalid", 21, "user", TransferProtocol.Ftp, Password: "existing-secret");
         store.SaveSite(extra);
+        var api = new LinuxApiOptions(Port: 55479, Password: "keep-api-secret");
+        store.Update(state => state with { Options = state.Options with { Api = api, Layout = new(Metrics: false), LogBufferLines = 1234, ClearCompletedManualTransfers = true } });
         var merge = WindowsBackupImport.Read(backup, "linux-test-password", root, store.Load());
         Check(merge.State.Sites.Count == 2 && merge.State.Sites.Any(saved => saved.Restore().Password == "existing-secret"), "Merge lost existing Linux site or duplicated imported ID");
+        Check(merge.State.Options.Api == api && merge.State.Options.Layout?.Metrics == false && merge.State.Options.LogBufferLines == 1234 && merge.State.Options.ClearCompletedManualTransfers, "Windows import overwrote Linux API, layout or log settings");
         Rejected(() => WindowsBackupImport.Read(backup, "wrong-password", root, store.Load()));
         Check(new LinuxConfiguration().Load().Sites.Count == 2, "Failed import changed settings");
         var fixture = Path.Combine(root, "bad.fluxbackup");

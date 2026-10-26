@@ -27,12 +27,13 @@ internal sealed class FilePane : UserControl
     private LinuxSessionLease? _loginSlot;
     public ConnectionProfile? Profile { get; private set; }
     public string CurrentPath { get; private set; } = "";
+    public Func<Task>? TransferRequested { get; set; }
     public FilePane(Action<string> log)
     {
         _log = log;
         var panel = new DockPanel { Margin = new Thickness(5) };
         var controls = new StackPanel { Spacing = 5 };
-        var saved = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5 };
+        var saved = new WrapPanel { Orientation = Orientation.Horizontal };
         _sites.ItemTemplate = new FuncDataTemplate<ConnectionProfile>((_, _) => new TextBlock { [!TextBlock.TextProperty] = new Binding(nameof(ConnectionProfile.Name)) });
         saved.Children.Add(_sites); saved.Children.Add(_sections);
         saved.Children.Add(Ui.Button("Save site", () =>
@@ -45,8 +46,7 @@ internal sealed class FilePane : UserControl
         _sites.SelectionChanged += (_, _) =>
         {
             if (_loading || _sites.SelectedItem is not ConnectionProfile site) return;
-            _selectedSite = site; _host.Text = site.Host; _port.Text = site.Port.ToString(); _user.Text = site.Username;
-            _password.Text = site.Password; _protocol.SelectedItem = site.Protocol; _fingerprint.Text = site.SshHostKeyFingerprint;
+            SelectSite(site);
         };
         _sections.SelectionChanged += async (_, _) =>
         {
@@ -61,12 +61,16 @@ internal sealed class FilePane : UserControl
         _path.Text = _configuration.Load().Options.DownloadPath;
         var connection = new WrapPanel { Orientation = Orientation.Horizontal };
         foreach (var control in new Control[] { _host, _port, _user, _password, _protocol }) connection.Children.Add(control);
-        controls.Children.Add(connection); controls.Children.Add(_fingerprint);
-        var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5 };
+        var quickFields = new StackPanel { Spacing = 5 }; quickFields.Children.Add(connection); quickFields.Children.Add(_fingerprint);
+        controls.Children.Add(new Expander { Header = "Quick Connect...", Content = quickFields, IsExpanded = false, HorizontalAlignment = HorizontalAlignment.Stretch });
+        var actions = new WrapPanel { Orientation = Orientation.Horizontal };
         actions.Children.Add(Ui.Button("Connect", Connect));
+        actions.Children.Add(Ui.Button("Disconnect", Disconnect));
         actions.Children.Add(Ui.Button("Local", async () => { await Disconnect(); _path.Text = _configuration.Load().Options.DownloadPath; await Refresh(); }));
         actions.Children.Add(Ui.Button("Up", async () => { _path.Text = Profile is null ? System.IO.Path.GetDirectoryName(CurrentPath.TrimEnd(System.IO.Path.DirectorySeparatorChar)) ?? "/" : RemoteParent(CurrentPath); await Refresh(); }));
-        actions.Children.Add(Ui.Button("Refresh", Refresh)); controls.Children.Add(actions); controls.Children.Add(_path);
+        actions.Children.Add(Ui.Button("Refresh", Refresh));
+        actions.Children.Add(Ui.Button("Transfer selected", () => TransferRequested?.Invoke() ?? Task.CompletedTask));
+        controls.Children.Add(actions); controls.Children.Add(_path);
         _path.KeyDown += async (_, e) => { if (e.Key == Avalonia.Input.Key.Enter) await Refresh(); };
         DockPanel.SetDock(controls, Dock.Top); panel.Children.Add(controls); panel.Children.Add(_list); Content = panel;
         _list.DoubleTapped += async (_, _) => { if (_list.SelectedItem is FileItem { Directory: true } item) { _path.Text = item.Path; await Refresh(); } };
@@ -81,16 +85,34 @@ internal sealed class FilePane : UserControl
     public void ReloadSites()
     {
         _loading = true;
-        try { var state = _configuration.Load(); _sites.ItemsSource = state.Sites.Select(site => site.Restore()).OrderBy(site => site.Name).ToList(); _sections.ItemsSource = state.Sections; }
+        try
+        {
+            var id = _selectedSite?.Id; var sectionName = (_sections.SelectedItem as LinuxSection)?.Name;
+            var state = _configuration.Load(); var sites = state.Sites.Select(site => site.Restore()).OrderBy(site => site.Name).ToList();
+            _sites.ItemsSource = sites; _sections.ItemsSource = state.Sections;
+            _sections.SelectedItem = state.Sections.FirstOrDefault(section => section.Name == sectionName);
+            _sites.SelectedItem = sites.FirstOrDefault(site => site.Id == id);
+            if (_sites.SelectedItem is ConnectionProfile selected) SelectSite(selected); else _selectedSite = null;
+        }
         finally { _loading = false; }
+    }
+    private void SelectSite(ConnectionProfile site)
+    {
+        _selectedSite = site; _host.Text = site.Host; _port.Text = site.Port.ToString(); _user.Text = site.Username;
+        _password.Text = site.Password; _protocol.SelectedItem = site.Protocol; _fingerprint.Text = site.SshHostKeyFingerprint;
+    }
+    public async Task SelectAndConnect(Guid id)
+    {
+        ReloadSites();
+        _sites.SelectedItem = ((IEnumerable<ConnectionProfile>)_sites.ItemsSource!).Single(site => site.Id == id);
+        await Connect();
     }
     private ConnectionProfile EditedProfile()
     {
         if (!int.TryParse(_port.Text, out var port) || port is < 1 or > 65535 || string.IsNullOrWhiteSpace(_host.Text)) throw new InvalidDataException("Enter a host and valid port.");
-        var state = _configuration.Load();
         var profile = _selectedSite ?? new ConnectionProfile(Guid.NewGuid(), _host.Text.Trim(), _host.Text.Trim(), port, _user.Text ?? "", (TransferProtocol)_protocol.SelectedItem!);
         return profile with { Host = _host.Text.Trim(), Port = port, Username = _user.Text ?? "", Password = _password.Text ?? "",
-            Protocol = (TransferProtocol)_protocol.SelectedItem!, SshHostKeyFingerprint = _fingerprint.Text ?? "", Proxy = profile.Proxy ?? state.Options.Proxy };
+            Protocol = (TransferProtocol)_protocol.SelectedItem!, SshHostKeyFingerprint = _fingerprint.Text ?? "" };
     }
     public List<FileItem> Selected() => _list.SelectedItems?.Cast<FileItem>().ToList() ?? [];
     private async Task Connect()
@@ -102,11 +124,11 @@ internal sealed class FilePane : UserControl
             await Disconnect();
             var protocol = (TransferProtocol)_protocol.SelectedItem!;
             if (protocol == TransferProtocol.Sftp && string.IsNullOrWhiteSpace(_fingerprint.Text)) throw new InvalidOperationException("Enter the verified SFTP host-key fingerprint first.");
-            var profile = EditedProfile();
+            var edited = EditedProfile(); var profile = edited with { Proxy = edited.Proxy ?? _configuration.Load().Options.Proxy };
             using var connectionTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(_configuration.Load().Options.StarterTimeoutSeconds));
             _loginSlot = await LinuxSessionLease.Acquire([profile], connectionTimeout.Token);
             var session = new FtpRemoteSession(); session.ProtocolMessage += _log;
-            try { using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30)); await session.ConnectAsync(profile, timeout.Token); }
+            try { await session.ConnectAsync(profile, connectionTimeout.Token); }
             catch { await session.DisposeAsync(); _loginSlot?.Dispose(); _loginSlot = null; throw; }
             _session = session; Profile = profile; _path.Text = _sections.SelectedItem is LinuxSection section ? section.SitePaths.FirstOrDefault(pair => pair.Key.Equals(profile.Name, StringComparison.OrdinalIgnoreCase)).Value ?? profile.EffectiveOptions.BasePath : profile.EffectiveOptions.BasePath; _log("Connected: " + profile.Name);
         }

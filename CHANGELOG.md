@@ -2,6 +2,14 @@
 
 All notable FluxFTP changes are documented here.
 
+## Linux 0.1.0-preview.4 — 2026-10-26
+
+- Adds the familiar Sites, Tools, Metrics, Manager, Queue, Log, Global Settings and About toolbar with fixed-size wrapping buttons and saved panel visibility.
+- Adds Global Settings for the local folder and slots, serialized local transfers, connection/runtime timeouts, log history, automatic cleanup of completed manual transfers, global proxy, Windows backup import and API configuration. Independent API settings are preserved when saving other settings or importing a Windows backup.
+- Adds Sites with connection credentials, slots, priority, directory listing/TLS and FXP settings; connection to either pane; and section mappings that follow site renames. Unedited imported site settings are retained. Tools includes a section/path editor, API settings and Windows backup import.
+- Adds basic session Metrics, themed controls, compact file rows, collapsible Quick Connect fields and log copy/clear controls. File transfer buttons move into the panes. Native Debian rendering was inspected for the main window, Global Settings and Sites.
+- Validation: 39 settings/UI checks, 32 HTTPS/RaceTrade checks, 19 Windows backup import checks and local copy/resume checks passed on Debian 13/WSL.
+
 ## Linux 0.1.0-preview.3 — 2026-10-26
 
 - Adds an optional HTTPS API compatible with RaceTrade/CBFTP clients. Configure the listen address, port, password, concurrent API job limit, recheck interval and job lifetime from the Linux toolbar. The API is disabled by default and binds to localhost by default.
