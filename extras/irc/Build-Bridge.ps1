@@ -12,10 +12,10 @@ $combined += @'
 alias fluxbridge {
   if ($1 == metrics) { fluxbridge.metrics $2- | return }
   if ($1 == version || $1 == $null) {
-    echo -ag FluxFTP Bridge v2.0 - live Visionary slots, batch chains and UDP commands; Visionary DLL v2.0 expected
+    echo -ag FluxFTP Bridge v2.0 - metrics reader 2, live Visionary slots, batch chains and UDP commands; Visionary DLL v2.0 expected
     return
   }
-  echo -ag Usage: /fluxbridge version or /fluxbridge metrics on|off or /fluxbridge metrics path <FluxFTP folder>|auto
+  echo -ag Usage: /fluxbridge version or /fluxbridge metrics on|off|status or /fluxbridge metrics path <FluxFTP folder>|auto
 }
 on *:LOAD:{ fluxbridge version | fluxbridge.metrics.start }
 

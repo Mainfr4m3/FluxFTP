@@ -41,8 +41,9 @@ If FluxFTP runs under another Windows account, or automatic discovery is unavail
 /fluxbridge metrics path auto
 ```
 
-Missing or stale data (over six seconds) shows FluxFTP offline; it recovers automatically
+Missing or stale data (over fifteen seconds) shows FluxFTP offline; it recovers automatically
 when FluxFTP starts. Closing or crashing FluxFTP does not block mIRC.
+Use `/fluxbridge metrics status` for local diagnostics: loaded script/client, file path, existence, field count, timestamp and age. It does not send anything to IRC channels. Reader 2 parses the heartbeat directly, retains safe plain-text reads and clears saved "FluxFTP offline" title prefixes when restarting metrics.
 Enable the Visionary bridge in FluxFTP. FluxFTP and mIRC must run on the same Windows machine and user account for the local pipe.
 The unified script already handles FU_FXP_CHAINS; do not add a separate cbftp UDP handler for FluxFTP.
 

@@ -2,6 +2,10 @@
 
 All notable FluxFTP changes are documented here.
 
+## Bridge metrics reader 2 — 2026-10-26 (VM test)
+
+- Reads the metrics heartbeat directly before parsing timestamp/TAB fields, avoids quoting identifier filenames, and handles file errors within that reader. Adds local `/fluxbridge metrics status` diagnostics and a 15-second freshness window for VM scheduling delays. Restarting metrics clears a previously saved "FluxFTP offline" title prefix. No EXE or DLL change is required for this script fix.
+
 ## 2.1.52 — 2026-10-26 (Windows)
 
 - Tools > SITE STATUS now toggles the status panel both open and closed, using the same behavior as the Metrics status button.
