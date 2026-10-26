@@ -7,7 +7,7 @@ A separate Avalonia desktop client for Linux x64, sharing IoFtp.Core and IoFtp.E
 Target: Debian 12/13 or Ubuntu 24.04 x64 with a graphical desktop. Debian 13/WSL is the verified test platform; Ubuntu compatibility still needs a real-machine test. The .NET runtime is included. Avalonia 11 uses X11/XWayland.
 
 ```sh
-sudo apt install ./fluxftp-linux-preview_0.1.0~preview2_amd64.deb
+sudo apt install ./fluxftp-linux-preview_0.1.0.preview2_amd64.deb
 fluxftp-linux-preview
 ```
 

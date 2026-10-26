@@ -39,7 +39,7 @@ find "$stage" -type d -exec chmod 755 {} +
 find "$stage" -type f -exec chmod 644 {} +
 chmod 755 "$stage/opt/fluxftp-linux-preview/FluxFTP.Linux" "$stage/usr/bin/fluxftp-linux-preview"
 chmod 644 "$stage/DEBIAN/control" "$stage/usr/share/applications/fluxftp-linux-preview.desktop" "$stage/usr/share/icons/hicolor/256x256/apps/fluxftp-linux-preview.png"
-dpkg-deb --root-owner-group --build "$stage" "$out/fluxftp-linux-preview_0.1.0~preview2_amd64.deb"
+dpkg-deb --root-owner-group --build "$stage" "$out/fluxftp-linux-preview_0.1.0.preview2_amd64.deb"
 tar -C "$stage/opt" -czf "$out/FluxFTP-linux-x64-0.1.0-preview.2.tar.gz" fluxftp-linux-preview
 cd "$out"
-sha256sum fluxftp-linux-preview_0.1.0~preview2_amd64.deb FluxFTP-linux-x64-0.1.0-preview.2.tar.gz > SHA256SUMS-linux-preview.2.txt
+sha256sum fluxftp-linux-preview_0.1.0.preview2_amd64.deb FluxFTP-linux-x64-0.1.0-preview.2.tar.gz > SHA256SUMS-linux-preview.2.txt
