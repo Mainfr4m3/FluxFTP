@@ -4,19 +4,25 @@ internal static class Transfers
 {
     public static async Task Run(Job job, IProgress<long> progress, Action<string> log, CancellationToken token, int connectTimeoutSeconds = 30)
     {
+        using var connecting = CancellationTokenSource.CreateLinkedTokenSource(token);
+        connecting.CancelAfter(TimeSpan.FromSeconds(connectTimeoutSeconds));
+        using var loginSlots = await LinuxSessionLease.Acquire([job.Source, job.Target], connecting.Token);
         await using var source = new FtpRemoteSession();
         await using var target = new FtpRemoteSession();
         source.ProtocolMessage += log; target.ProtocolMessage += log;
-        using (var connect = CancellationTokenSource.CreateLinkedTokenSource(token))
-        {
-            connect.CancelAfter(TimeSpan.FromSeconds(connectTimeoutSeconds));
-            if (job.Source is not null) await source.ConnectAsync(job.Source, connect.Token);
-            if (job.Target is not null) await target.ConnectAsync(job.Target, connect.Token);
-        }
+        if (job.Source is not null) await source.ConnectAsync(job.Source, connecting.Token);
+        if (job.Target is not null) await target.ConnectAsync(job.Target, connecting.Token);
+        connecting.CancelAfter(Timeout.InfiniteTimeSpan);
         if (job.Source is not null && job.Target is not null)
         {
-            if (await target.GetSizeAsync(job.Destination, token) is not null) throw new IOException("Destination exists; preview does not overwrite remote files.");
-            await source.FxpToAsync(target, job.File.Path, job.Destination, token); progress.Report(job.File.Size); return;
+            var existing = await target.GetSizeAsync(job.Destination, token);
+            if (!job.ApiTransfer && existing is not null) throw new IOException("Destination exists; preview does not overwrite remote files.");
+            if (job.ApiTransfer && existing == job.File.Size) { progress.Report(job.File.Size); return; }
+            if (existing > job.File.Size) throw new IOException("Destination is larger than source; refusing to overwrite.");
+            await source.FxpToAsync(target, job.File.Path, job.Destination, token, offset: job.ApiTransfer ? existing ?? 0 : 0);
+            var completedSize = await target.GetSizeAsync(job.Destination, token);
+            if (completedSize != job.File.Size) throw new IOException("FXP target size verification failed; source may still be growing.");
+            progress.Report(job.File.Size); return;
         }
         if (job.Target is not null)
         {

@@ -24,6 +24,7 @@ internal sealed class FilePane : UserControl
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Action<string> _log;
     private FtpRemoteSession? _session;
+    private LinuxSessionLease? _loginSlot;
     public ConnectionProfile? Profile { get; private set; }
     public string CurrentPath { get; private set; } = "";
     public FilePane(Action<string> log)
@@ -102,9 +103,11 @@ internal sealed class FilePane : UserControl
             var protocol = (TransferProtocol)_protocol.SelectedItem!;
             if (protocol == TransferProtocol.Sftp && string.IsNullOrWhiteSpace(_fingerprint.Text)) throw new InvalidOperationException("Enter the verified SFTP host-key fingerprint first.");
             var profile = EditedProfile();
+            using var connectionTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(_configuration.Load().Options.StarterTimeoutSeconds));
+            _loginSlot = await LinuxSessionLease.Acquire([profile], connectionTimeout.Token);
             var session = new FtpRemoteSession(); session.ProtocolMessage += _log;
             try { using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30)); await session.ConnectAsync(profile, timeout.Token); }
-            catch { await session.DisposeAsync(); throw; }
+            catch { await session.DisposeAsync(); _loginSlot?.Dispose(); _loginSlot = null; throw; }
             _session = session; Profile = profile; _path.Text = _sections.SelectedItem is LinuxSection section ? section.SitePaths.FirstOrDefault(pair => pair.Key.Equals(profile.Name, StringComparison.OrdinalIgnoreCase)).Value ?? profile.EffectiveOptions.BasePath : profile.EffectiveOptions.BasePath; _log("Connected: " + profile.Name);
         }
         catch (Exception ex) { _log(ex.Message); }
@@ -134,7 +137,12 @@ internal sealed class FilePane : UserControl
         catch (Exception ex) { _log(ex.Message); }
         finally { _gate.Release(); }
     }
-    public async Task Disconnect() { var session = _session; _session = null; Profile = null; if (session is not null) await session.DisposeAsync(); }
+    public async Task Disconnect()
+    {
+        var session = _session; _session = null; Profile = null;
+        try { if (session is not null) await session.DisposeAsync(); }
+        finally { _loginSlot?.Dispose(); _loginSlot = null; }
+    }
     private static string RemoteParent(string path) { var i = path.TrimEnd('/').LastIndexOf('/'); return i <= 0 ? "/" : path[..i]; }
 }
 internal static class Ui

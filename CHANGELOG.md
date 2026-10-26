@@ -2,6 +2,14 @@
 
 All notable FluxFTP changes are documented here.
 
+## Linux 0.1.0-preview.3 — 2026-10-26
+
+- Adds an optional HTTPS API compatible with RaceTrade/CBFTP clients. Configure the listen address, port, password, concurrent API job limit, recheck interval and job lifetime from the Linux toolbar. The API is disabled by default and binds to localhost by default.
+- Adds compatible site and section management, remote path/file queries, raw FTP commands, transfer jobs and monitored spread jobs with status, abort and reset operations. API jobs share the UI's login slots and transfer scheduler limits.
+- Spread jobs watch for late files in growing releases, honor source priority and section mappings, resume smaller partial targets, and verify source completion plus target sizes before reporting completion.
+- Adds HTTPS certificate persistence/fingerprint display, encrypted API credentials, input validation and safer API lifecycle/reconfiguration.
+- Validation on Debian 13/WSL: 32 HTTPS/RaceTrade checks passed, including real FTP FXP, recursive release files, growing releases, abort, active-job caps, atomic section updates, certificate persistence and busy-port recovery. RaceTrade's HTTPS request format was exercised; no real site race was run.
+
 ## Linux 0.1.0-preview.2 — 2026-10-26
 
 - Adds a separate Linux x64 Avalonia desktop preview with two local/remote panes and the shared FTP/FTPS/SFTP transport and transfer engine. File download/upload, local copy, direct FXP, pause/resume, protocol logging and progress are available; full Windows parity and Visi integration are not included.

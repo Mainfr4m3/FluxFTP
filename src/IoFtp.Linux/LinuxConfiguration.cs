@@ -78,20 +78,22 @@ internal sealed record LinuxSection(string Name, Dictionary<string, string> Site
     public override string ToString() => Name;
 }
 internal sealed record LinuxOptions(string DownloadPath, int MaxLocalDownloads = 1, int MaxLocalUploads = 1,
-    bool SerializeLocalTransfers = true, int StarterTimeoutSeconds = 15, int MaxTransferRuntimeMinutes = 15, ProxyConfiguration? Proxy = null);
+    bool SerializeLocalTransfers = true, int StarterTimeoutSeconds = 15, int MaxTransferRuntimeMinutes = 15, ProxyConfiguration? Proxy = null, LinuxApiOptions? Api = null);
 internal sealed record LinuxState(List<SavedSite> Sites, List<LinuxSection> Sections, LinuxOptions Options);
 internal sealed class LinuxConfiguration
 {
+    private static readonly object Gate = new();
     private static string StatePath => Path.Combine(SecretStore.DirectoryPath, "state.enc");
-    public LinuxState Load()
+    public LinuxState Load() { lock (Gate) return LoadCore(); }
+    private LinuxState LoadCore()
     {
         if (!File.Exists(StatePath)) return new([], [], new(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)));
         return JsonSerializer.Deserialize<LinuxState>(SecretStore.Unprotect(File.ReadAllText(StatePath))) ?? throw new InvalidDataException("Invalid saved Linux configuration.");
     }
-    public void Save(LinuxState state) => SecretStore.WritePrivate(StatePath, SecretStore.Protect(JsonSerializer.Serialize(state)));
+    public void Save(LinuxState state) { lock (Gate) SecretStore.WritePrivate(StatePath, SecretStore.Protect(JsonSerializer.Serialize(state))); }
+    public void Update(Func<LinuxState, LinuxState> update) { lock (Gate) Save(update(LoadCore())); }
     public void SaveSite(ConnectionProfile profile)
     {
-        var state = Load(); var sites = state.Sites.Where(site => site.Profile.Id != profile.Id).Append(SavedSite.Capture(profile)).ToList();
-        Save(state with { Sites = sites });
+        Update(state => state with { Sites = state.Sites.Where(site => site.Profile.Id != profile.Id).Append(SavedSite.Capture(profile)).ToList() });
     }
 }

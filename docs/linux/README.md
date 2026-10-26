@@ -1,4 +1,4 @@
-# FluxFTP Linux preview 0.1.0-preview.2
+# FluxFTP Linux preview 0.1.0-preview.3
 
 A separate Avalonia desktop client for Linux x64, sharing IoFtp.Core and IoFtp.Engine with Windows. The WPF client is unchanged. This is an early working preview, not feature parity with FluxFTP 2.1.50.
 
@@ -7,7 +7,7 @@ A separate Avalonia desktop client for Linux x64, sharing IoFtp.Core and IoFtp.E
 Target: Debian 12/13 or Ubuntu 24.04 x64 with a graphical desktop. Debian 13/WSL is the verified test platform; Ubuntu compatibility still needs a real-machine test. The .NET runtime is included. Avalonia 11 uses X11/XWayland.
 
 ```sh
-sudo apt install ./fluxftp-linux-preview_0.1.0.preview2_amd64.deb
+sudo apt install ./fluxftp-linux-preview_0.1.0.preview3_amd64.deb
 fluxftp-linux-preview
 ```
 
@@ -21,6 +21,17 @@ Alternatively extract the tar.gz and run `./fluxftp-linux-preview/FluxFTP.Linux`
 - Shared scheduler with imported per-site login/upload/download limits, direction permissions and priority, pause/resume, remove and clear completed.
 - Local downloads/copies use a per-job .part file, resume it when the same job is retried and rename only after completion. Existing final files are preserved. Remote upload/FXP refuses existing destinations in this preview.
 - Progress and speed for local transfers and protocol log. Saved sites and passwords are encrypted in private Linux configuration files.
+- Optional HTTPS API compatible with RaceTrade/CBFTP clients. It can manage sites and sections, browse remote paths, send raw FTP commands, queue transfers and run monitored spread jobs. API jobs use the same FTP login, site slot and transfer scheduler limits as the UI.
+
+## RaceTrade API
+
+Open **API** from the toolbar. The server is off by default and listens only on `127.0.0.1:55477` unless changed. Enable it, set an API password (8–128 printable ASCII characters), then save. Saving restarts the API and cancels its current API jobs; ordinary UI transfers keep running. The settings window shows the HTTPS endpoint and the current certificate's SHA-256 fingerprint.
+
+For RaceTrade on the same computer, use `https://127.0.0.1:55477`. For a different computer on your trusted LAN, set the listen address to `0.0.0.0`, allow the selected TCP port through the Linux firewall, and use `https://<Linux-IP>:55477` in RaceTrade. RaceTrade authentication uses an empty username and the API password. The generated HTTPS certificate is self-signed; the fingerprint is shown in FluxFTP's API settings. Keep the API on a trusted network and do not expose its port to the public internet.
+
+Implemented CBFTP-compatible endpoints include `/info`, `/sites`, `/sections`, `/sites/{site}/sections`, `/path`, `/file`, `/raw`, `/transferjobs` and `/spreadjobs`, with create/update/delete, status, abort and reset operations where applicable. API spread jobs monitor growing releases, can discover files added after the first listing, honor section mappings and source priority, and only report completion after source completion and target size verification. Existing targets of equal size are skipped; smaller partial files resume; larger targets are left untouched. API queue capacity, per-site login slots and transfer limits are enforced. UDP and IRC/Visi bridge integration are not included. RaceTrade's currently used HTTPS request format has been exercised against the Linux API; the Windows Visionary bridge remains separate.
+
+API settings, including the password, are stored in the encrypted Linux configuration. Imported Windows backups do not overwrite or enable the Linux API settings.
 
 ## Import a Windows backup
 
@@ -37,7 +48,7 @@ Saved configuration is AES-GCM encrypted in `$XDG_CONFIG_HOME/fluxftp-linux/stat
 
 ## Not yet ported
 
-Recursive folder transfers, queue persistence/reordering across restarts, bridge/Visi/mIRC integration, full Metrics, themes/settings editor, server command tools, automated recovery and Windows backup export from Linux. Windows backup import is supported as described below. SFTP has not yet been integration-tested on Linux. Secure server-to-server FXP needs testing against real sites; the FTP FXP path is exercised by the local fixture.
+Queue persistence/reordering across restarts, bridge/Visi/mIRC integration, full Metrics, themes/settings editor, automated recovery and Windows backup export from Linux. Windows backup import is supported as described below. SFTP has not yet been integration-tested on Linux. Secure server-to-server FXP needs testing against real sites; the FTP FXP path is exercised by the local fixture.
 
 The transfer queue starts added jobs automatically. Imported/saved sites retain their IDs; already queued jobs retain the credentials from when they were queued. Upload retry is not resumable when the destination exists. FXP progress is completion-based in this preview.
 
@@ -52,17 +63,18 @@ From Windows with .NET 8 SDK and Debian WSL:
 Or publish directly on Linux:
 
 ```sh
-dotnet publish src/IoFtp.Linux/IoFtp.Linux.csproj -c Release -r linux-x64 --self-contained true -o dist/linux-preview-0.1.0-preview.2/publish
+dotnet publish src/IoFtp.Linux/IoFtp.Linux.csproj -c Release -r linux-x64 --self-contained true -o dist/linux-preview-0.1.0-preview.3/publish
 sh docs/linux/package.sh
 ```
 
 Test dependencies: python3-pyftpdlib, python3-openssl, openssl, xvfb, xauth and the native runtime dependencies.
 
 ```sh
-dist/linux-preview-0.1.0-preview.2/publish/FluxFTP.Linux --smoke-test
-dist/linux-preview-0.1.0-preview.2/publish/FluxFTP.Linux --ui-check
-python3 docs/linux/test-ftp.py "$PWD/dist/linux-preview-0.1.0-preview.2/publish/FluxFTP.Linux"
-FLUXFTP_RENDER_PATH="$PWD/docs/linux/preview.png" xvfb-run -a dist/linux-preview-0.1.0-preview.2/publish/FluxFTP.Linux
+dist/linux-preview-0.1.0-preview.3/publish/FluxFTP.Linux --smoke-test
+dist/linux-preview-0.1.0-preview.3/publish/FluxFTP.Linux --ui-check
+python3 docs/linux/test-ftp.py "$PWD/dist/linux-preview-0.1.0-preview.3/publish/FluxFTP.Linux"
+python3 docs/linux/test-api.py "$PWD/dist/linux-preview-0.1.0-preview.3/publish/FluxFTP.Linux"
+FLUXFTP_RENDER_PATH="$PWD/docs/linux/preview.png" xvfb-run -a dist/linux-preview-0.1.0-preview.3/publish/FluxFTP.Linux
 ```
 
 The fixture uses an ephemeral self-signed TLS certificate, accepted only in the test profile. It compares payloads byte for byte for download, resumed download, upload and plain FTP FXP. GUI and packaging checks are separate from transfer tests.

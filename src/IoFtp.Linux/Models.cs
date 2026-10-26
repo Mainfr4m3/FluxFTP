@@ -12,6 +12,7 @@ internal sealed class Job : INotifyPropertyChanged
     public ConnectionProfile? Source { get; init; }
     public ConnectionProfile? Target { get; init; }
     public required string Destination { get; init; }
+    public bool ApiTransfer { get; init; }
     public int Order { get; set; }
     public string State { get; set; } = "Queued";
     public string Error { get; set; } = "";

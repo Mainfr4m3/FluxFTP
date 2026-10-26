@@ -21,10 +21,12 @@ public sealed class MainWindow : Window
     private readonly GlobalTransferEngine _engine;
     private readonly FilePane _left, _right;
     private bool _closing;
+    private LinuxApiServer? _api;
+    private readonly SemaphoreSlim _apiGate = new(1, 1);
     private readonly LinuxConfiguration _configuration = new();
     public MainWindow()
     {
-        Title = "FluxFTP Linux - 0.1.0 preview 2"; Width = 1280; Height = 850; MinWidth = 950; MinHeight = 650;
+        Title = "FluxFTP Linux - 0.1.0 preview 3"; Width = 1280; Height = 850; MinWidth = 950; MinHeight = 650;
         Background = Brush.Parse("#101820");
         _engine = new GlobalTransferEngine(new Executor(this));
         ApplyOptions();
@@ -40,7 +42,8 @@ public sealed class MainWindow : Window
             var dialog = new BackupImportWindow(); await dialog.ShowDialog(this);
             if (dialog.Imported) { _left.ReloadSites(); _right.ReloadSites(); ApplyOptions(); await _left.ApplyLocalOptions(); await _right.ApplyLocalOptions(); Log("Windows backup imported. Saved sites and sections are available in both panes; Visi remains disabled."); }
         }));
-        toolbar.Children.Add(Ui.Button("About", async () => await new Window { Title = "About FluxFTP Linux", Width = 520, Height = 220, Content = new TextBlock { Margin = new Thickness(20), TextWrapping = TextWrapping.Wrap, Text = "FluxFTP Linux 0.1.0 preview 2\nSame FTP/FTPS/SFTP and transfer engine as FluxFTP Windows.\nWindows backup import, saved sites and sections are supported. Bridge, full settings and recursive folder transfers are not ported yet." } }.ShowDialog(this)));
+        toolbar.Children.Add(Ui.Button("API", async () => await new ApiSettingsWindow(_configuration.Load().Options.Api ?? new(), _api?.Endpoint ?? "Disabled", _api?.Fingerprint ?? "", options => ConfigureApi(options, true)).ShowDialog(this)));
+        toolbar.Children.Add(Ui.Button("About", async () => await new Window { Title = "About FluxFTP Linux", Width = 520, Height = 220, Content = new TextBlock { Margin = new Thickness(20), TextWrapping = TextWrapping.Wrap, Text = "FluxFTP Linux 0.1.0 preview 3\nSame FTP/FTPS/SFTP and transfer engine as FluxFTP Windows.\nWindows backup import, saved sites and sections are supported. Bridge, full settings and recursive folder transfers are not ported yet." } }.ShowDialog(this)));
         DockPanel.SetDock(toolbar, Dock.Top); root.Children.Add(toolbar);
         DockPanel.SetDock(_status, Dock.Bottom); root.Children.Add(_status);
         var body = new Grid { RowDefinitions = new RowDefinitions("*,5,220,5,150") };
@@ -66,12 +69,73 @@ public sealed class MainWindow : Window
                 image.Render(this); image.Save(renderPath);
                 Console.WriteLine("PASS: native Linux window rendered to " + renderPath); Close();
             }, TimeSpan.FromSeconds(3));
+        Loaded += async (_, _) =>
+        {
+            try { await ConfigureApi(_configuration.Load().Options.Api ?? new(), false); }
+            catch (Exception ex) { Log("API startup failed: " + ex.Message); }
+        };
         Closing += async (_, e) =>
         {
             if (_closing) return;
             e.Cancel = true; _closing = true;
+            await _apiGate.WaitAsync();
+            try { if (_api is not null) { await _api.DisposeAsync(); _api = null; } }
+            finally { _apiGate.Release(); }
             await _engine.DisposeAsync(); await _left.Disconnect(); await _right.Disconnect(); Close();
         };
+    }
+    internal Task StartApiCheck(LinuxApiOptions options) => ConfigureApi(options, true);
+    internal string ApiFingerprint => _api?.Fingerprint ?? "";
+    private LinuxApiServer CreateApi() => new(_configuration,
+        file => Dispatcher.UIThread.InvokeAsync(() => EnqueueApi(file)).GetTask(),
+        ids => Dispatcher.UIThread.InvokeAsync(() => ApiJobs(ids)).GetTask(),
+        id => Dispatcher.UIThread.InvokeAsync(() => { _engine.Remove(id); var job = _jobs.FirstOrDefault(job => job.Id == id); if (job is not null) _jobs.Remove(job); }).GetTask(),
+        Log, () => Dispatcher.UIThread.Post(() => { _left.ReloadSites(); _right.ReloadSites(); }));
+    private async Task ConfigureApi(LinuxApiOptions options, bool save)
+    {
+        options.Validate(); await _apiGate.WaitAsync();
+        var previous = _configuration.Load().Options.Api ?? new();
+        try
+        {
+            if (_closing) return;
+            if (options.Enabled && (!previous.Enabled || options.Port != previous.Port))
+            {
+                var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Parse(options.Address), options.Port);
+                try { probe.Start(); } finally { probe.Stop(); }
+            }
+            if (_api is not null) { await _api.DisposeAsync(); _api = null; }
+            var candidate = CreateApi();
+            try
+            {
+                await candidate.StartAsync(options);
+                if (save) _configuration.Update(state => state with { Options = state.Options with { Api = options } });
+                _api = candidate;
+            }
+            catch
+            {
+                await candidate.DisposeAsync();
+                if (previous.Enabled) { var restored = CreateApi(); try { await restored.StartAsync(previous); _api = restored; } catch { await restored.DisposeAsync(); } }
+                throw;
+            }
+        }
+        finally { _apiGate.Release(); }
+    }
+    private Guid EnqueueApi(LinuxApiFile file)
+    {
+        if (_closing) throw new OperationCanceledException("Client is closing");
+        if (_jobs.Any(job => job.Target?.Id == file.Target.Id && job.Destination == file.DestinationPath && job.State is "Queued" or "Running" or "Paused")) return Guid.Empty;
+        foreach (var profile in new[] { file.Source, file.Target })
+            _engine.RegisterOrUpdateSite(new(profile.Id, profile.Name, profile.EffectiveOptions.MaxSlots, profile.EffectiveOptions.AllowDownload ? profile.EffectiveOptions.MaxDownloadSlots : 0, profile.EffectiveOptions.AllowUpload ? profile.EffectiveOptions.MaxUploadSlots : 0, profile.EffectiveOptions.Priority));
+        var job = new Job { File = new(System.IO.Path.GetFileName(file.SourcePath), file.SourcePath, false, file.Size), Source = file.Source, Target = file.Target, Destination = file.DestinationPath, ApiTransfer = true };
+        _jobs.Add(job);
+        _engine.Enqueue([new(job.Id, job.Id, job.File.Name, file.Source.Id, file.Target.Id, file.SourcePath, file.DestinationPath, file.Size,
+            FilePriorityRank: job.File.Name.EndsWith(".sfv", StringComparison.OrdinalIgnoreCase) ? 0 : job.File.Name.EndsWith(".nfo", StringComparison.OrdinalIgnoreCase) ? 2 : 1)]);
+        return job.Id;
+    }
+    private List<LinuxApiJob> ApiJobs(IEnumerable<Guid> ids)
+    {
+        var snapshot = _engine.Snapshot().ToDictionary(status => status.Item.Id);
+        return ids.Select(id => snapshot.TryGetValue(id, out var status) ? new LinuxApiJob(id, status.State == TransferWorkState.Running ? "Transferring" : status.State.ToString(), _jobs.FirstOrDefault(job => job.Id == id)?.Bytes ?? 0, status.Error ?? "") : new(id, "Missing", 0, "Job removed")).ToList();
     }
     private void ApplyOptions()
     {
@@ -104,6 +168,7 @@ public sealed class MainWindow : Window
     }
     private void Log(string message) => Dispatcher.UIThread.Post(() =>
     {
+        if (Environment.GetEnvironmentVariable("FLUXFTP_API_TEST_LOG") == "1") Console.WriteLine(message);
         _log.Text = (_log.Text ?? "") + $"{DateTime.Now:yyyy.MM.dd-HH:mm:ss} {message}\n";
         if (_log.Text.Length > 60000) _log.Text = _log.Text[^40000..];
         _log.CaretIndex = _log.Text.Length;
