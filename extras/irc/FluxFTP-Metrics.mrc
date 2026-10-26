@@ -23,20 +23,22 @@ alias fluxbridge.metrics {
   }
   if ($1 == on) {
     unset %fluxbridge.metrics.disabled
-    fluxbridge.metrics.start
+    var %wasRunning = $timer(FluxBridgeMetrics).name
+    timerFluxBridgeMetrics -io 0 2 fluxbridge.metrics.tick
+    if (!%wasRunning) {
+      if ($titlebar != $null) set -e %fluxbridge.metrics.saved $titlebar
+      else unset %fluxbridge.metrics.saved
+    }
+    fluxbridge.metrics.tick
     echo -ag FluxFTP: metrics enabled - timer: $iif($timer(FluxBridgeMetrics).name,on,off)
     return
   }
   echo -ag Usage: /fluxbridge metrics on|off|status or /fluxbridge metrics path <FluxFTP folder>|auto
 }
 
-alias -l fluxbridge.metrics.start {
-  if (%fluxbridge.metrics.disabled) return
-  if (!$timer(FluxBridgeMetrics).name) set -e %fluxbridge.metrics.saved $titlebar
-  if ($pos(%fluxbridge.metrics.saved,FluxFTP - ,1) || $pos(%fluxbridge.metrics.saved,FluxFTP offline,1)) unset %fluxbridge.metrics.saved
-  .timerFluxBridgeMetrics off
-  .timerFluxBridgeMetrics -io 0 2 fluxbridge.metrics.tick
-  fluxbridge.metrics.tick
+alias fluxbridge.metrics.start {
+  if (%fluxbridge.metrics.disabled == 1) return
+  fluxbridge.metrics on
 }
 
 alias -l fluxbridge.metrics.stop {
@@ -110,7 +112,7 @@ alias -l fluxbridge.metrics.fresh {
 }
 
 alias -l fluxbridge.metrics.status {
-  echo -ag FluxFTP metrics reader 3 - Client: $version - Script: $script
+  echo -ag FluxFTP metrics reader 4 - Client: $version - Script: $script
   echo -ag FluxFTP metrics timer: $iif($timer(FluxBridgeMetrics).name,on,off) - Automatic path: $iif(%fluxbridge.metrics.file == $null,yes,no)
   if (%fluxbridge.metrics.file != $null) { fluxbridge.metrics.inspect %fluxbridge.metrics.file | return }
   var %pointer = $+($envvar(LOCALAPPDATA),\FluxFTP\irc-metrics.path)
