@@ -46,7 +46,11 @@ internal sealed class ProfileStore
         var text = new StringBuilder();
         text.AppendLine("; FluxFTP saved sites");
         text.AppendLine(FormatHeader);
+#if LINUX
+        text.AppendLine("; Passwords are protected for this Linux installation.");
+#else
         text.AppendLine("; Passwords are protected for the current Windows user.");
+#endif
 
         foreach (var profile in profiles)
         {
@@ -254,12 +258,19 @@ internal sealed class ProfileStore
     private static string Protect(string password)
     {
         if (string.IsNullOrEmpty(password)) return "";
+#if LINUX
+        return IoFtp.Linux.SecretStore.Protect(password);
+#else
         var encrypted = ProtectedData.Protect(Encoding.UTF8.GetBytes(password), null, DataProtectionScope.CurrentUser);
         return "dpapi:" + Convert.ToBase64String(encrypted);
+#endif
     }
 
     private static string Unprotect(string value)
     {
+#if LINUX
+        return IoFtp.Linux.SecretStore.Unprotect(value);
+#else
         if (!value.StartsWith("dpapi:", StringComparison.OrdinalIgnoreCase)) return value;
         try
         {
@@ -268,5 +279,6 @@ internal sealed class ProfileStore
         }
         catch (CryptographicException) { return ""; }
         catch (FormatException) { return ""; }
+#endif
     }
 }

@@ -850,6 +850,12 @@ public sealed class FtpRemoteSession : IRemoteSession
             {
                 await using var stream = await ProtectDataStreamAsync(dataClient.GetStream(), dataClient.Client, cancellationToken);
                 await transfer(stream);
+                if (OperatingSystem.IsLinux() && command.StartsWith("STOR ", StringComparison.Ordinal))
+                {
+                    // Linux TLS peers need close_notify before EOF to drain the final upload records.
+                    if (stream is SslStream tls) await tls.ShutdownAsync().WaitAsync(cancellationToken);
+                    await stream.DisposeAsync();
+                }
             }
             catch (IOException exception) { dataError = exception; }
         }
@@ -916,6 +922,12 @@ public sealed class FtpRemoteSession : IRemoteSession
             using var client = await listener.AcceptTcpClientAsync(cancellationToken);
             await using var stream = await ProtectDataStreamAsync(client.GetStream(), client.Client, cancellationToken);
             await transfer(stream);
+                if (OperatingSystem.IsLinux() && command.StartsWith("STOR ", StringComparison.Ordinal))
+                {
+                    // Linux TLS peers need close_notify before EOF to drain the final upload records.
+                    if (stream is SslStream tls) await tls.ShutdownAsync().WaitAsync(cancellationToken);
+                    await stream.DisposeAsync();
+                }
             var completion = await ReadResponseAsync(cancellationToken);
             LastTransferCompletion = completion.Message;
             EnsureSuccess(completion, 226, 250);
@@ -1165,7 +1177,7 @@ public sealed class FtpRemoteSession : IRemoteSession
         }
         var ssl = new SslStream(_controlStream!, false, ValidateCertificate);
         ProtocolMessage?.Invoke(
-            $"< TLS control handshake: Windows Schannel; protocols {(_tls12Only ? "TLS 1.2 only" : "TLS 1.2 + TLS 1.3")}; SNI {targetHost}");
+            $"< TLS control handshake: {(OperatingSystem.IsWindows() ? "Windows Schannel" : "platform TLS")}; protocols {(_tls12Only ? "TLS 1.2 only" : "TLS 1.2 + TLS 1.3")}; SNI {targetHost}");
         await ssl.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
         {
             TargetHost = targetHost,

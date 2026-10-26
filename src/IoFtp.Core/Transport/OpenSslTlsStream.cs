@@ -170,7 +170,7 @@ internal sealed class OpenSslTlsStream : Stream
 
     private static AuthenticationException CreateException(string operation, int? sslError = null)
     {
-        var socketError = sslError == 5 ? Native.WSAGetLastError() : 0;
+        var socketError = sslError == 5 ? (OperatingSystem.IsWindows() ? Native.WSAGetLastError() : Marshal.GetLastPInvokeError()) : 0;
         var error = Native.ERR_get_error();
         var buffer = new byte[512];
         if (error != 0) Native.ERR_error_string_n(error, buffer, (nuint)buffer.Length);
@@ -314,10 +314,10 @@ internal sealed class OpenSslTlsStream : Stream
         [DllImport(LibSsl, CallingConvention = CallingConvention.Cdecl)] internal static extern void SSL_free(IntPtr ssl);
         [DllImport(LibSsl, CallingConvention = CallingConvention.Cdecl)] internal static extern long SSL_ctrl(IntPtr ssl, int command, long argument, IntPtr pointer);
         [DllImport(LibSsl, CallingConvention = CallingConvention.Cdecl)] internal static extern int SSL_set_fd(IntPtr ssl, int socket);
-        [DllImport(LibSsl, CallingConvention = CallingConvention.Cdecl)] internal static extern int SSL_connect(IntPtr ssl);
+        [DllImport(LibSsl, CallingConvention = CallingConvention.Cdecl, SetLastError = true)] internal static extern int SSL_connect(IntPtr ssl);
         [DllImport(LibSsl, CallingConvention = CallingConvention.Cdecl)] internal static extern int SSL_shutdown(IntPtr ssl);
-        [DllImport(LibSsl, CallingConvention = CallingConvention.Cdecl)] internal static extern int SSL_read_ex(IntPtr ssl, IntPtr buffer, nuint count, out nuint read);
-        [DllImport(LibSsl, CallingConvention = CallingConvention.Cdecl)] internal static extern int SSL_write_ex(IntPtr ssl, IntPtr buffer, nuint count, out nuint written);
+        [DllImport(LibSsl, CallingConvention = CallingConvention.Cdecl, SetLastError = true)] internal static extern int SSL_read_ex(IntPtr ssl, IntPtr buffer, nuint count, out nuint read);
+        [DllImport(LibSsl, CallingConvention = CallingConvention.Cdecl, SetLastError = true)] internal static extern int SSL_write_ex(IntPtr ssl, IntPtr buffer, nuint count, out nuint written);
         [DllImport(LibSsl, CallingConvention = CallingConvention.Cdecl)] internal static extern int SSL_get_error(IntPtr ssl, int result);
         [DllImport(LibSsl, CallingConvention = CallingConvention.Cdecl)] internal static extern IntPtr SSL_get_version(IntPtr ssl);
         [DllImport(LibSsl, CallingConvention = CallingConvention.Cdecl)] internal static extern IntPtr SSL_get_current_cipher(IntPtr ssl);

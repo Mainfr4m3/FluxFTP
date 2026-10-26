@@ -2,6 +2,14 @@
 
 All notable FluxFTP changes are documented here.
 
+## Linux 0.1.0-preview.2 — 2026-10-26
+
+- Adds a separate Linux x64 Avalonia desktop preview with two local/remote panes and the shared FTP/FTPS/SFTP transport and transfer engine. File download/upload, local copy, direct FXP, pause/resume, protocol logging and progress are available; full Windows parity and Visi integration are not included.
+- Imports password-protected Windows .fluxbackup exports, including portable site/proxy credentials, per-site connection options, section navigation paths and compatible local slot/timeout/proxy settings. Sites are merged by ID, sections by name; local Windows paths are replaced with a chosen Linux directory. Unsupported settings, scripts and Visi are not activated.
+- Saved Linux configuration is AES-GCM encrypted with owner-only state/key files. Import rejects wrong passwords, tampering, duplicate/unsafe paths and direct Windows DPAPI data. Portable credentials are converted to Linux encryption before temporary INI parsing.
+- Linux native OpenSSL loading and TLS upload shutdown are adapted for Linux; Windows behavior is preserved. Packages include a self-contained .deb and tar.gz, an import guide and separate Linux checksums.
+- Validation on Debian 13/WSL: 18 Windows-export-to-Linux import checks, GUI rendering, local copy/resume and FTP/FTPS/OpenSSL upload/download/resume plus plain FTP FXP payload verification. Windows build, 26 backup checks and OpenSSL regression checks passed. Ubuntu and SFTP integration still need real-environment verification.
+
 ## 2.1.50 — 2026-10-26
 
 - Transfer Queue context menu adds Move up, Move down, Move to top and Move to bottom, supporting multiple selected files while preserving their relative order.
