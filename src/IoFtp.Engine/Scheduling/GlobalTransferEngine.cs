@@ -13,9 +13,21 @@ public sealed class GlobalTransferEngine : IAsyncDisposable
     private bool _pumpScheduled;
     private bool _serializeLocalTransfers = true;
     private int _maxLocalDownloads = 1, _maxLocalUploads = 1, _activeLocalDownloads, _activeLocalUploads;
+    private readonly HashSet<Guid> _unavailableSites = [];
 
     public GlobalTransferEngine(ITransferExecutor executor) => _executor = executor;
     public event EventHandler? StateChanged;
+
+    // Health suspension blocks new reservations without cancelling running work or
+    // changing explicit user pauses and disconnected-site state.
+    public void SetSiteAvailable(Guid siteId, bool available)
+    {
+        bool changed;
+        lock (_gate) changed = available ? _unavailableSites.Remove(siteId) : _unavailableSites.Add(siteId);
+        if (!changed) return;
+        RaiseStateChanged();
+        if (available) RequestPump();
+    }
 
     public void ConfigureLocalSlots(int maxDownloads, int maxUploads, bool serialize = true)
     {
@@ -208,6 +220,8 @@ public sealed class GlobalTransferEngine : IAsyncDisposable
 
     private bool IsAllowed(TransferWorkItem item)
     {
+        if (item.SourceSiteId is { } sourceId && _unavailableSites.Contains(sourceId) ||
+            item.DestinationSiteId is { } targetId && _unavailableSites.Contains(targetId)) return false;
         if (item.SourceSiteId is { } source && (!_sites.TryGetValue(source, out var sourceRuntime) || !sourceRuntime.Enabled)) return false;
         if (item.DestinationSiteId is { } destination && (!_sites.TryGetValue(destination, out var destinationRuntime) || !destinationRuntime.Enabled)) return false;
         if (item.SourceSiteId is { } a && item.DestinationSiteId is { } b)

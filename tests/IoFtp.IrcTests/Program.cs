@@ -8,6 +8,7 @@ using IoFtp.Desktop.Models;
 using IoFtp.Desktop.Services;
 
 var assertions = 0;
+if (args.FirstOrDefault() == "--site-health-checks") { await SiteHealthChecks.Run(); return; }
 if (args.FirstOrDefault() == "--linux-backup-fixture") { WindowsLinuxBackupFixture.Write(args[1]); return; }
 if (args.FirstOrDefault() == "--visi-slot-checks") { await VisionaryLiveSlotChecks.Run(); return; }
 if (args.FirstOrDefault() == "--race-route-checks")
@@ -65,6 +66,8 @@ if (args.FirstOrDefault() == "--irc-metrics-checks")
     try
     {
         var metrics = new IrcMetricsFile(directory);
+        if (new IrcMetricsFile().MetricsPath != Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "irc-metrics.txt")))
+            throw new Exception("Default metrics file must be beside the FluxFTP executable");
         var path = Path.Combine(directory, "irc-metrics.txt");
         metrics.Publish("FluxFTP - Session 1 GB - Total 2 GB");
         var parts = File.ReadAllText(path).TrimEnd('\n').Split('\t');
@@ -78,7 +81,34 @@ if (args.FirstOrDefault() == "--irc-metrics-checks")
         var blocked = Path.Combine(directory, "not-a-directory");
         File.WriteAllText(blocked, "blocked");
         new IrcMetricsFile(blocked).Publish("Unwritable directory must not throw");
-        Console.WriteLine("PASS: metrics heartbeat, replacement, locked/missing directory handling and recovery.");
+        var app = Path.Combine(directory, "FluxFTP portable å, test");
+        var discovery = Path.Combine(directory, "discovery");
+        var portable = new IrcMetricsFile(app, discovery);
+        portable.Publish("FluxFTP - Session 5 GB - Total 6 GB");
+        var pointer = Path.Combine(discovery, "irc-metrics.path");
+        if (!File.ReadAllText(portable.MetricsPath).Contains("Session 5 GB") || File.ReadAllText(pointer).TrimEnd('\r', '\n') != portable.MetricsPath || File.Exists(Path.Combine(discovery, "irc-metrics.txt")))
+            throw new Exception("Portable metrics path/discovery pointer invalid or heartbeat still saved in discovery directory");
+        var noPointer = Path.Combine(directory, "after-recovery");
+        var recover = new IrcMetricsFile(app, noPointer);
+        using (var locked = new FileStream(portable.MetricsPath, FileMode.Open, FileAccess.Read, FileShare.None))
+            recover.Publish("Locked portable heartbeat must not publish a pointer");
+        if (File.Exists(Path.Combine(noPointer, "irc-metrics.path"))) throw new Exception("Discovery published before a successful heartbeat write");
+        recover.Publish("FluxFTP - Session 7 GB - Total 8 GB");
+        if (File.ReadAllText(Path.Combine(noPointer, "irc-metrics.path")).TrimEnd('\r', '\n') != portable.MetricsPath)
+            throw new Exception("Portable discovery did not recover after a locked heartbeat");
+        var writer = new IrcMetricsFile(app, discovery);
+        using (var locked = new FileStream(pointer, FileMode.Open, FileAccess.Read, FileShare.None))
+            writer.Publish("FluxFTP - Session 9 GB - Total 10 GB");
+        if (!File.ReadAllText(writer.MetricsPath).Contains("Session 9 GB")) throw new Exception("Locked discovery pointer prevented metrics update");
+        writer.Publish("FluxFTP - Session 11 GB - Total 12 GB");
+        var moved = new IrcMetricsFile(Path.Combine(directory, "New FluxFTP folder"), discovery);
+        moved.Publish("FluxFTP - Session 13 GB - Total 14 GB");
+        if (File.ReadAllText(pointer).TrimEnd('\r', '\n') != moved.MetricsPath) throw new Exception("Discovery did not follow relocated FluxFTP folder");
+        File.Delete(pointer);
+        moved.Publish("FluxFTP - Session 15 GB - Total 16 GB");
+        if (!File.Exists(pointer)) throw new Exception("Deleted discovery pointer did not recover");
+        if (Directory.EnumerateFiles(directory, "*.tmp", SearchOption.AllDirectories).Any()) throw new Exception("Heartbeat replacement left temporary files after lock recovery");
+        Console.WriteLine("PASS: EXE-local heartbeat, portable paths with spaces/Unicode, folder discovery/relocation, atomic replacement, locked heartbeat/pointer handling and recovery.");
     }
     finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
     return;

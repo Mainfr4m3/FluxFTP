@@ -7,6 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../src/IoFtp.Desktop/Services/QueueOrder.cs" Link="QueueOrder.cs" />
+    <Compile Include="../../src/IoFtp.Desktop/Services/SiteHealthMonitor.cs" Link="SiteHealthMonitor.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/FtpLogTimestamp.cs" Link="FtpLogTimestamp.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/SiteCommandLogRouter.cs" Link="SiteCommandLogRouter.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/StartupMessage.cs" Link="StartupMessage.cs" />

@@ -64,6 +64,13 @@ and started timestamps, live speed information, and an aggregate activity bar in
 the main status area. FluxFTP can also check GitHub Releases for updates at startup
 or manually from Global Settings.
 
+Optional **Global Settings > Site monitor** checks FTP/FTPS availability, pauses new
+trade after repeated connection failures and resumes scheduling after recovery.
+Healthy/offline check intervals and the failure threshold are configurable. Existing
+transfers and manual pauses are preserved. See [the site monitor guide](docs/site-monitor-sv.md).
+The mIRC heartbeat `irc-metrics.txt` is stored beside FluxFTP.exe; the updated bridge
+discovers that folder automatically and handles unavailable files without read errors.
+
 Remote folders can be downloaded recursively to either Local pane. FluxFTP creates
 the local directory tree and queues each file through the configured reusable
 download slots while applying the Skiplist and Priority List.

@@ -7,11 +7,17 @@ namespace IoFtp.Desktop;
 internal sealed class SiteStatusPanel : UserControl
 {
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
-    internal SiteStatusPanel(Func<IReadOnlyList<(Guid Id, string Name)>> sites, Func<Guid, string> details)
+    internal SiteStatusPanel(Func<IReadOnlyList<(Guid Id, string Name)>> sites, Func<Guid, string> details, Func<Task>? checkHealth = null)
     {
         SetResourceReference(BackgroundProperty, "WindowBrush");
         SetResourceReference(ForegroundProperty, "TextBrush");
         var panel = new DockPanel { Margin = new Thickness(12) };
+        if (checkHealth is not null)
+        {
+            var check = new Button { Content = "Check all sites now", HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 0, 0, 8) };
+            check.Click += async (_, _) => { check.IsEnabled = false; try { await checkHealth(); } finally { check.IsEnabled = true; } };
+            DockPanel.SetDock(check, Dock.Top); panel.Children.Add(check);
+        }
         var select = new ComboBox { DisplayMemberPath = "Name", Margin = new Thickness(0, 0, 0, 10) };
         var choices = sites().Select(site => new SiteChoice(site.Id, site.Name)).ToArray();
         select.ItemsSource = choices;

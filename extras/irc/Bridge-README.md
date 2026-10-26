@@ -30,8 +30,17 @@ session peak measured speed, completed files and uptime; total messages include
 the saved all-time peak speed and completed files. Speed records start with 2.1.10,
 use measured aggregate throughput (and direct FXP completion averages), and exclude
 display-only estimates. Session records reset when FluxFTP restarts; total records persist.
-This requires the updated FluxFTP application on the same Windows account. It reads
-%LOCALAPPDATA%\FluxFTP\irc-metrics.txt every two seconds, without API or DLL calls.
+The heartbeat file `irc-metrics.txt` is saved beside `FluxFTP.exe` and read every two seconds, without API or DLL calls.
+The bridge discovers that folder through the small `%LOCALAPPDATA%\FluxFTP\irc-metrics.path` pointer written by FluxFTP.
+It also checks beside the bridge script and its parent folder, and supports the older AppData heartbeat during upgrades.
+Missing, locked or replaced files are handled without `$read` error messages. Update/reload the bridge script for this reader fix; no DLL rebuild is needed.
+If FluxFTP runs under another Windows account, or automatic discovery is unavailable, set the folder explicitly:
+
+```text
+/fluxbridge metrics path "C:\My apps\FluxFTP"
+/fluxbridge metrics path auto
+```
+
 Missing or stale data (over six seconds) shows FluxFTP offline; it recovers automatically
 when FluxFTP starts. Closing or crashing FluxFTP does not block mIRC.
 Enable the Visionary bridge in FluxFTP. FluxFTP and mIRC must run on the same Windows machine and user account for the local pipe.

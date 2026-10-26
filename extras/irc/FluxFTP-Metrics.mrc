@@ -1,5 +1,20 @@
 ; Local metrics heartbeat. No API password or DLL required.
 alias fluxbridge.metrics {
+  if ($1 == path) {
+    if ($2 == auto) {
+      unset %fluxbridge.metrics.file
+      echo -ag FluxFTP: metrics folder detection is automatic.
+    }
+    else {
+      var %folder = $replace($noqt($2-),$chr(47),$chr(92))
+      if (!$isdir(%folder)) { echo -ag Usage: /fluxbridge metrics path <FluxFTP folder> or auto | return }
+      if ($right(%folder,1) == $chr(92)) %folder = $left(%folder,-1)
+      set %fluxbridge.metrics.file $+(%folder,\irc-metrics.txt)
+      echo -ag FluxFTP: metrics file is %fluxbridge.metrics.file
+    }
+    if (!%fluxbridge.metrics.disabled) fluxbridge.metrics.tick
+    return
+  }
   if ($1 == off) {
     set %fluxbridge.metrics.disabled 1
     fluxbridge.metrics.stop
@@ -10,7 +25,7 @@ alias fluxbridge.metrics {
     fluxbridge.metrics.start
     return
   }
-  echo -ag Usage: /fluxbridge metrics on|off
+  echo -ag Usage: /fluxbridge metrics on|off or /fluxbridge metrics path <FluxFTP folder>|auto
 }
 
 alias -l fluxbridge.metrics.start {
@@ -37,13 +52,35 @@ alias -l fluxbridge.metrics.tick {
 }
 
 alias -l fluxbridge.metrics.read {
-  var %path = $envvar(LOCALAPPDATA) $+ \FluxFTP\irc-metrics.txt
-  if ($isfile(%path)) {
-    var %line = $read(%path,nt,1)
-    var %stamp = $gettok(%line,1,9)
-    if (%stamp isnum && $calc($ctime - %stamp) isnum 0-6 && $gettok(%line,2,9) != $null) {
-      return $gettok(%line,2-,9)
-    }
+  if (%fluxbridge.metrics.file != $null) return $fluxbridge.metrics.fresh(%fluxbridge.metrics.file)
+  var %pointer = $+($envvar(LOCALAPPDATA),\FluxFTP\irc-metrics.path)
+  var %path = $fluxbridge.metrics.line(%pointer)
+  var %text = $fluxbridge.metrics.fresh(%path)
+  if (%text != $null) return %text
+  %text = $fluxbridge.metrics.fresh($+($scriptdir,irc-metrics.txt))
+  if (%text != $null) return %text
+  %text = $fluxbridge.metrics.fresh($+($scriptdir,..\irc-metrics.txt))
+  if (%text != $null) return %text
+  ; Compatibility with older FluxFTP EXEs during upgrade.
+  return $fluxbridge.metrics.fresh($+($envvar(LOCALAPPDATA),\FluxFTP\irc-metrics.txt))
+}
+
+alias -l fluxbridge.metrics.line {
+  if ($1- == $null || !$isfile($1-)) return $null
+  var %line = $read($qt($1-),nt,1)
+  return %line
+  :error
+  ; A file can be replaced/locked between $isfile and $read. Do not flood IRC.
+  reseterror
+  return $null
+}
+
+alias -l fluxbridge.metrics.fresh {
+  var %line = $fluxbridge.metrics.line($1-)
+  if (%line == $null) return $null
+  var %stamp = $gettok(%line,1,9)
+  if (%stamp isnum && $calc($ctime - %stamp) isnum 0-6 && $gettok(%line,2,9) != $null) {
+    return $gettok(%line,2-,9)
   }
   return $null
 }

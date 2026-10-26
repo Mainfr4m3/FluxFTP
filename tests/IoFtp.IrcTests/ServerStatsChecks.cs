@@ -18,23 +18,28 @@ internal static class ServerStatsChecks
         var logins = 0;
         await using var listings = new RaceListingService((_, _) => { logins++; return Task.FromResult<IRemoteSession>(session); });
         if (await listings.TryReadStatsAsync(profile, default) is not null || logins != 0) throw new Exception("Statistics opened a new login");
+        if (await listings.TryCheckHealthAsync(profile, default) is not null || logins != 0) throw new Exception("Shared health check opened a new login");
         if (await listings.TryReadTransferSizeAsync(profile, "/release/file.rar", default) is not null || logins != 0) throw new Exception("Progress sampling opened a new login");
         await listings.ListAsync(profile, "/release", default);
         if (await listings.TryReadTransferSizeAsync(profile, "/release/file.rar", default) != 500 || session.Lists != 1) throw new Exception("Progress sampling did not share cached directory listing");
         if ((await listings.TryReadStatsAsync(profile, default))?.StatusCode != 200 || session.Commands != 1 || logins != 1) throw new Exception("SITE STATS did not reuse existing control session");
-        if ((await listings.TryReadStatsAsync(profile, default, userDetails: true))?.StatusCode != 200 || session.Commands != 2 || session.LastCommand != "SITE user" || logins != 1)
-            throw new Exception("Weekly statistics must reuse the logged-in session and explicitly request that user");
+        if (await listings.TryReadStatsAsync(profile, default, userDetails: true) is not null || session.Commands != 1 || session.LastCommand != "SITE STATS user" || logins != 1)
+            throw new Exception("Disabled SITE USER diagnostics must not issue a command or open a login");
         session.Block = true;
         var busy = listings.ListAsync(profile, "/other", default);
         await session.Started.Task.WaitAsync(TimeSpan.FromSeconds(3));
         if (await listings.TryReadTransferSizeAsync(profile, "/other/file.rar", default) is not null) throw new Exception("Progress sampling interrupted a busy listing");
-        if (await listings.TryReadStatsAsync(profile, default) is not null || session.Commands != 2) throw new Exception("Statistics interrupted an active listing");
+        if (await listings.TryReadStatsAsync(profile, default) is not null || session.Commands != 1) throw new Exception("Statistics interrupted an active listing");
+        if (await listings.TryCheckHealthAsync(profile, default) is not null || session.Commands != 1) throw new Exception("Health check interrupted an active listing");
         session.Release.TrySetResult(); await busy;
         session.Unsupported = true;
         session.Commands = 0;
-        await listings.TryReadStatsAsync(profile, default, userDetails: true);
-        if (session.Commands != 2 || session.LastCommand != "SITE USER user") throw new Exception("Unsupported custom SITE user must try standard user-info syntax");
-        if ((await listings.TryReadStatsAsync(profile, default))?.StatusCode != 502 || !session.IsConnected) throw new Exception("Unsupported optional statistics closed a healthy session");
+        if (await listings.TryReadStatsAsync(profile, default, userDetails: true) is not null || session.Commands != 0) throw new Exception("Disabled SITE USER must not attempt fallback commands");
+        if ((await listings.TryReadStatsAsync(profile, default))?.StatusCode != 502 || session.Commands != 1 || !session.IsConnected) throw new Exception("Unsupported optional statistics closed a healthy session");
+        session.Unsupported = false;
+        if (await listings.TryCheckHealthAsync(profile, default) != true || session.LastCommand != "NOOP" || logins != 1 || !listings.HasSession(profile.Id)) throw new Exception("Health check did not reuse shared control login with NOOP");
+        session.Unsupported = true;
+        if (await listings.TryCheckHealthAsync(profile, default) != false || listings.HasSession(profile.Id)) throw new Exception("Failed NOOP did not retire the stale shared connection");
         Console.WriteLine("PASS: server report formatting, bounded output, Debug visibility, existing-login reuse, busy-session skip and unsupported SITE STATS.");
     }
     private sealed class FakeSession : IRemoteSession
@@ -56,7 +61,7 @@ internal static class ServerStatsChecks
         }
         public Task<RemoteCommandResult> ExecuteCommandAsync(string command, CancellationToken token)
         {
-            if (command is not ("SITE STATS user" or "SITE user" or "SITE USER user")) throw new Exception("Statistics must explicitly query the session's logged-in user");
+            if (command is not ("SITE STATS user" or "NOOP")) throw new Exception("Only enabled SITE STATS and NOOP commands may be sent");
             LastCommand = command;
             Commands++; return Task.FromResult(new RemoteCommandResult(Unsupported ? 502 : 200, "UserTop: TestUser"));
         }

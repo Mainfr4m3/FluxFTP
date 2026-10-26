@@ -4,7 +4,7 @@ using System.Text;
 
 namespace IoFtp.Desktop.Services;
 
-internal sealed class RaceLogStore(string? directory = null, Func<DateTimeOffset>? clock = null, string name = "RACE")
+internal sealed class RaceLogStore(string? directory = null, Func<DateTimeOffset>? clock = null, string name = "RACE", bool preserveLineBreaks = false)
 {
     private readonly object _gate = new();
     private readonly string _directory = directory ?? AppContext.BaseDirectory;
@@ -19,7 +19,7 @@ internal sealed class RaceLogStore(string? directory = null, Func<DateTimeOffset
     {
         var now = _clock();
         Rotate(now);
-        var line = $"{now:O} [{Clean(category)}] {Clean(message)}{Environment.NewLine}";
+        var line = $"{now:O} [{Clean(category)}] {CleanMessage(message)}{Environment.NewLine}";
         if (new FileInfo(ActivePath).Length + Encoding.UTF8.GetByteCount(line) > MaxBytes)
             File.WriteAllText(ActivePath, Header + now.ToString("O", CultureInfo.InvariantCulture) + Environment.NewLine, new UTF8Encoding(false));
         File.AppendAllText(ActivePath, line, new UTF8Encoding(false));
@@ -59,6 +59,14 @@ internal sealed class RaceLogStore(string? directory = null, Func<DateTimeOffset
         File.WriteAllText(ActivePath, Header + now.ToString("O", CultureInfo.InvariantCulture) + Environment.NewLine, new UTF8Encoding(false));
     }
     private static string Clean(string text) => new(text.Where(c => !char.IsControl(c)).ToArray());
+    private string CleanMessage(string text)
+    {
+        if (!preserveLineBreaks) return Clean(text);
+        // Keep server tables intact in COMMANDS, including their spacing and tab alignment.
+        var normalized = text.Replace("\r\n", "\n").Replace('\r', '\n');
+        return new string(normalized.Where(c => !char.IsControl(c) || c is '\n' or '\t').ToArray())
+            .Replace("\n", Environment.NewLine);
+    }
     public async Task ExportAsync(string path, string destination)
     {
         if (Path.GetFullPath(path).Equals(Path.GetFullPath(destination), StringComparison.OrdinalIgnoreCase))

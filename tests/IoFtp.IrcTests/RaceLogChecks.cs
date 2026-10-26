@@ -49,6 +49,35 @@ internal static class RaceLogChecks
             catcher.Match(routing, "Net", "#c", "Bot", "PRE Release-GROUP", true);
             catcher.Match(routing, "Net", "#c", "Bot", "PRE Release-GROUP", true);
             Check(callbacks == 1, "announcement logged once");
+            var commands = new RaceLogStore(directory, () => now, name: "Commands", preserveLineBreaks: true);
+            var response = "226-.----== ioNiNJA ==----.\r\n226-| CRC-Check: oK!       |\r\n226-+-=[UserTop]=---------+\r\n226-|  1. TestUser 15.4GB  |\r\n226-`---------------------'\r\n226 [ UL: 474 GB ] [ DL: 0 MB ]";
+            var report = ServerTransferReport.Statistics(response)!;
+            commands.Write("COMMAND", "SERVER STATS [destination] release.r55\r\n" + report);
+            var text = commands.ReadTail(commands.ActivePath);
+            var table = report.Replace("\r\n", Environment.NewLine);
+            Check(text.Contains("release.r55" + Environment.NewLine + table, StringComparison.Ordinal), "COMMANDS retains full transfer stats table after heading");
+            Check(text.Split(Environment.NewLine).Contains("|  1. TestUser 15.4GB  |"), "COMMANDS preserves table spaces, borders and column alignment");
+            Check(!text.Contains("226-") && !text.Contains("r55.----"), "cleaned server reply stays on separate lines");
+            commands.Write("COMMAND", "[TEST] > SITE WKUP");
+            commands.Write("COMMAND", "[TEST] < 200 Command successful.");
+            var stamp = now.ToString("O");
+            Check(commands.ReadTail(commands.ActivePath).EndsWith($"{stamp} [COMMAND] [TEST] > SITE WKUP{Environment.NewLine}{stamp} [COMMAND] [TEST] < 200 Command successful.{Environment.NewLine}"), "manual SITE command/reply formatting stays unchanged");
+            commands.Write("COMMAND\0", "mixed\r\n  row one\n\trow two\rrow three\0\u0007");
+            text = commands.ReadTail(commands.ActivePath);
+            Check(text.Contains("mixed" + Environment.NewLine + "  row one" + Environment.NewLine + "\trow two" + Environment.NewLine + "row three"), "COMMANDS normalizes CRLF/LF/CR while retaining indentation");
+            Check(!text.Contains('\0') && !text.Contains('\u0007'), "COMMANDS removes unrelated control characters");
+            Parallel.For(0, 50, i => commands.Write("COMMAND", $"block-{i}\n  middle-{i}\nend-{i}"));
+            text = commands.ReadTail(commands.ActivePath);
+            Check(Enumerable.Range(0, 50).All(i => text.Contains($"block-{i}{Environment.NewLine}  middle-{i}{Environment.NewLine}end-{i}{Environment.NewLine}")), "concurrent multiline reports remain contiguous");
+            var commandExport = Path.Combine(directory, "commands-export.txt");
+            commands.ExportAsync(commands.ActivePath, commandExport).GetAwaiter().GetResult();
+            Check(File.ReadAllBytes(commandExport).SequenceEqual(File.ReadAllBytes(commands.ActivePath)), "COMMANDS export preserves multiline table bytes");
+            now = now.AddHours(24); commands.Maintain();
+            var commandArchive = Directory.GetFiles(commands.ArchiveDirectory, commands.ArchivePattern).Single();
+            Check(File.ReadAllText(commandArchive).Contains(table), "COMMANDS rotation preserves multiline reports in its own archive");
+            using (var large = new FileStream(commands.ActivePath, FileMode.Open, FileAccess.Write)) large.SetLength(RaceLogStore.MaxBytes);
+            commands.Write("COMMAND", "SERVER STATS\n" + report);
+            Check(new FileInfo(commands.ActivePath).Length < 1024 && commands.ReadTail(commands.ActivePath).Contains(table), "COMMANDS size cap resets without flattening next report");
             Console.WriteLine($"PASS: {count} RACE log checks.");
         }
         finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }

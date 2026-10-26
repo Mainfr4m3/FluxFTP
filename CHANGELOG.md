@@ -2,6 +2,15 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.51 — 2026-10-26 (Windows)
+
+- Saves irc-metrics.txt beside FluxFTP.exe and publishes an automatic folder-discovery pointer for the mIRC/AdiIRC bridge. The reader supports explicit folder selection, script/parent-folder discovery and legacy AppData metrics during upgrades, and handles missing/locked/replaced files without flooding IRC with $read errors. Update/reload FluxFTP-Bridge.mrc with the EXE update; DLLs are unchanged.
+
+- Adds optional FTP/FTPS site health monitoring in Global Settings > Site monitor: reuse idle control sessions for NOOP, pause new trade after repeated connection failures, recheck and restore scheduling after recovery. Default intervals are 300 seconds healthy / 60 seconds offline, with two failures before pausing; login/TLS rejections wait at least 10 minutes. Busy/full logins and file errors do not mark a server offline.
+- Health suspension is independent of saved site permissions and manual job pauses, preserves running transfers and survives site policy refreshes. Tools > Site status shows health, last/next check and a manual check action. Monitoring is off by default; enabled checks are limited to two concurrent probes and available local login capacity.
+
+- COMMANDS preserves line breaks, indentation and ASCII table borders in automatic SERVER STATS/DETAILS reports, including transfer completion replies and sample/media information. Manually issued SITE command/reply entries keep their existing format. New reports retain their layout in the live view, TXT export and archives.
+
 ## Linux 0.1.0-preview.4 — 2026-10-26
 
 - Adds the familiar Sites, Tools, Metrics, Manager, Queue, Log, Global Settings and About toolbar with fixed-size wrapping buttons and saved panel visibility.

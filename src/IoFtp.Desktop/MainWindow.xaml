@@ -67,6 +67,7 @@
                                 <MenuItem Header="IRC ADD-ONS" Click="Visionary_Click"/>
                                 <MenuItem Header="SCRIPTS" Click="Scripts_Click"/>
                                 <MenuItem Header="SECTIONS" Click="Sections_Click"/>
+                                <MenuItem Header="SITE STATUS" Click="OpenSiteHealth_Click"/>
                             </ContextMenu>
                         </Button.ContextMenu>
                     </Button>

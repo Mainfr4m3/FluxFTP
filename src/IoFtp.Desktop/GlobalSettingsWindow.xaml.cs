@@ -93,6 +93,8 @@ public partial class GlobalSettingsWindow : Window
         BindBox.Text=s.BindAddress; PortFromBox.Text=$"{s.ActivePortFrom}"; PortToBox.Text=$"{s.ActivePortTo}"; ApiEnabledBox.IsChecked=s.EnableHttpsApi; ApiPortBox.Text=$"{s.HttpsApiPort}"; ApiLocalBox.IsChecked=s.ApiLocalhostOnly;
         ExpirationBox.Text=$"{s.PreparedJobExpirationSeconds}"; StarterBox.Text=$"{s.StarterTimeoutSeconds}"; RuntimeBox.Text=$"{s.MaxTransferRuntimeMinutes}"; JobHistoryBox.Text=$"{s.TransferJobHistory}"; TransferHistoryBox.Text=$"{s.TransferHistory}"; LogHistoryBox.Text=$"{s.LogBufferHistory}";
         AutoHardResetBox.IsChecked = s.AutoHardReset;
+        SiteHealthEnabledBox.IsChecked = s.EnableSiteHealthMonitor;
+        SiteHealthCheckBox.Text = s.SiteHealthCheckSeconds.ToString(); SiteHealthRetryBox.Text = s.SiteHealthRetrySeconds.ToString(); SiteHealthFailuresBox.Text = s.SiteHealthFailures.ToString();
         MaxSpreadJobsBox.Text = s.MaxActiveSpreadJobs.ToString();
         VisionarySchedulingBox.Text = s.VisionaryConcurrentScheduling.ToString();
         VisionaryRecheckBox.Text = (s.VisionaryRecheckSeconds ?? VisionaryRaceOptions.Load().EffectiveRecheckSeconds).ToString();
@@ -149,9 +151,11 @@ public partial class GlobalSettingsWindow : Window
         Dictionary<string, ViewLayoutSettings> layout;
         try { layout = _layoutEditor.Read(); }
         catch (ArgumentException exception) { ErrorText.Text = exception.Message; return; }
-        var boxes = new[] { PortFromBox, PortToBox, ApiPortBox, ExpirationBox, StarterBox, RuntimeBox, JobHistoryBox, TransferHistoryBox, LogHistoryBox, SlotsBox, UploadsBox, DownloadsBox, DefaultIdleBox, LocalDownloadsBox, LocalUploadsBox, ProxyPortBox, HardResetCooldownBox, HardResetRetriesBox, HardResetLookbackBox };
+        var boxes = new[] { PortFromBox, PortToBox, ApiPortBox, ExpirationBox, StarterBox, RuntimeBox, JobHistoryBox, TransferHistoryBox, LogHistoryBox, SlotsBox, UploadsBox, DownloadsBox, DefaultIdleBox, LocalDownloadsBox, LocalUploadsBox, ProxyPortBox, HardResetCooldownBox, HardResetRetriesBox, HardResetLookbackBox, SiteHealthCheckBox, SiteHealthRetryBox, SiteHealthFailuresBox };
         if (boxes.Any(box => !int.TryParse(box.Text, out _))) { ErrorText.Text="All numeric settings must be whole numbers."; return; }
         int N(System.Windows.Controls.TextBox b)=>int.Parse(b.Text);
+        try { new SiteHealthPolicy(SiteHealthEnabledBox.IsChecked == true, N(SiteHealthCheckBox), N(SiteHealthRetryBox), N(SiteHealthFailuresBox)).Validate(); }
+        catch (ArgumentException error) { ErrorText.Text = error.Message; return; }
         if (N(PortFromBox) is <1 or >65535 || N(PortToBox)<N(PortFromBox) || N(PortToBox)>65535 || N(SlotsBox)<1 || N(UploadsBox)<0 || N(DownloadsBox)<0 || N(UploadsBox)>N(SlotsBox) || N(DownloadsBox)>N(SlotsBox)) { ErrorText.Text="Port range or slot limits are invalid."; return; }
         if (ApiEnabledBox.IsChecked == true && string.IsNullOrWhiteSpace(ApiPasswordBox.Password)) { ErrorText.Text="API password is required when the API is enabled."; return; }
         if ((ProxyType)(ProxyTypeBox.SelectedItem ?? ProxyType.None) != ProxyType.None && (string.IsNullOrWhiteSpace(ProxyHostBox.Text) || N(ProxyPortBox) is < 1 or > 65535)) { ErrorText.Text="Proxy host or port is invalid."; return; }
@@ -185,6 +189,7 @@ public partial class GlobalSettingsWindow : Window
         if (!int.TryParse(VisionaryRecheckBox.Text, out var recheckSeconds) || recheckSeconds is < 1 or > 60)
         { ErrorText.Text = "Race recheck interval must be between 1 and 60 seconds."; return; }
         Settings = Settings with { DownloadTempPath = DownloadTempBox.Text.Trim(), VisionaryRecheckSeconds = recheckSeconds, VisionaryConcurrentScheduling = visionaryScheduling, MaxActiveSpreadJobs = maxSpreadJobs, AutoHardReset = AutoHardResetBox.IsChecked == true, HardResetCooldownSeconds = N(HardResetCooldownBox), HardResetRetries = N(HardResetRetriesBox), HardResetLookbackMinutes = N(HardResetLookbackBox), EnableVisionaryBridge = _visionaryBridge, SerializeLocalTransfers = SerializeLocalBox.IsChecked == true,
+            EnableSiteHealthMonitor = SiteHealthEnabledBox.IsChecked == true, SiteHealthCheckSeconds = N(SiteHealthCheckBox), SiteHealthRetrySeconds = N(SiteHealthRetryBox), SiteHealthFailures = N(SiteHealthFailuresBox),
             SmartResume = SmartResumeBox.IsChecked == true, SmartResumeAttempts = (int)(SmartResumeAttemptsBox.SelectedItem ?? 2),
             StatusBarFontSize = (int)(StatusFontBox.SelectedItem ?? 12), StatusBarScrollSpeed = (int)(ScrollSpeedBox.SelectedItem ?? 60),
             TransferCategoryOrder = string.Join("\n", PriorityCategoriesList.Items.Cast<string>()),

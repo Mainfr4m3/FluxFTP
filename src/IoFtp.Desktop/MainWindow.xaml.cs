@@ -60,10 +60,10 @@ public partial class MainWindow : Window
     private IrcManager? _ircService;
     private readonly SemaphoreSlim _ircRestartGate = new(1, 1);
     private readonly RaceLogStore _raceLog = new();
-    private readonly RaceListingService _raceListings = new(async (profile, token) => await CreateWorkerAsync(profile, token));
+    private readonly RaceListingService _raceListings;
     private readonly ConcurrentDictionary<Guid, string> _raceSiteNames = new();
     private readonly RaceLogStore _bridgeInfo = new(name: "Bridge-Info");
-    private readonly RaceLogStore _commandsInfo = new(name: "Commands");
+    private readonly RaceLogStore _commandsInfo = new(name: "Commands", preserveLineBreaks: true);
     private readonly System.Windows.Threading.DispatcherTimer _raceLogTimer = new() { Interval = TimeSpan.FromMinutes(1) };
     private GlobalSettings _settings;
     private readonly string _queuePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FluxFTP", "queue.json");
@@ -143,6 +143,8 @@ public partial class MainWindow : Window
         _engine = new GlobalTransferEngine(new DesktopTransferExecutor(this));
         _engine.ConfigureLocalSlots(_settings.MaxLocalDownloadSlots, _settings.MaxLocalUploadSlots, _settings.SerializeLocalTransfers);
         _engine.StateChanged += Engine_StateChanged;
+        InitializeSiteHealth();
+        _raceListings = new(async (profile, token) => await CreateObservedWorkerAsync(profile, token));
         var visibleQueue = new ListCollectionView(_queue) { Filter = item => item is QueueEntryView entry && !entry.VisionaryRace };
         QueueList.ItemsSource = visibleQueue;
         _racePoolTimer.Tick += async (_, _) =>
@@ -271,6 +273,7 @@ public partial class MainWindow : Window
                 BlockedTargets: ResolveSiteNames(options.BlockTransfersTo)));
             using (var connectTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(20)))
             {
+                await _siteHealth.WaitForProbeAsync(profile.Id, connectTimeout.Token);
                 try { await session.ConnectAsync(profile, connectTimeout.Token); }
                 catch (SshHostKeyException hostKey)
                 {
@@ -284,6 +287,7 @@ public partial class MainWindow : Window
                     if (left) _leftProfile = profile; else _rightProfile = profile;
                 }
             }
+            _siteHealth.ObserveSuccess(profile);
             new ProfileStore().PromoteAddress(profile.Id, session.ConnectedHost, session.ConnectedPort);
             ConnectionStatus.Text = $"Connected: {session.ConnectedHost}:{session.ConnectedPort}; loading files…";
             AppendFtpLog(profile.Protocol == TransferProtocol.Sftp
@@ -303,6 +307,7 @@ public partial class MainWindow : Window
         catch (Exception exception)
         {
             ConnectionStatus.Text = "Connection failed";
+            if ((left ? _leftRemoteSession : _remoteSession)?.IsConnected != true && exception is not OperationCanceledException) _siteHealth.ObserveFailure(profile, exception);
             if (left) LocalList.ItemsSource = null; else RemoteList.ItemsSource = null;
             AppendFtpLog($"{Environment.NewLine}Connection failed: {FriendlyMessage(exception)}");
         }
@@ -2477,7 +2482,7 @@ public partial class MainWindow : Window
 
     private async Task<FtpRemoteSession> CreateTransferWorkerAsync(ConnectionProfile profile, CancellationToken token)
     {
-        var worker = await CreateWorkerAsync(profile, token);
+        var worker = await CreateObservedWorkerAsync(profile, token);
         if (_sessionWorkers.TryAdd(worker, profile)) _sessionStatistics.WorkerCreated();
         return worker;
     }
@@ -2517,6 +2522,7 @@ public partial class MainWindow : Window
             var currentProfiles = new ProfileStore().Load().ToDictionary(profile => profile.Id);
             foreach (var previous in _raceReadySites.Values.ToArray())
             {
+                if (!_siteHealth.IsAvailable(previous.Id)) continue;
                 var siteGate = _sitePoolGates.For(previous.Id);
                 if (!await siteGate.WaitAsync(0, token)) continue; // Transfers take precedence over pool maintenance.
                 try
@@ -2601,6 +2607,7 @@ public partial class MainWindow : Window
     {
         foreach (var (role, session) in sessions)
         {
+            if (_sessionWorkers.TryGetValue(session, out var profile)) _siteHealth.ObserveSuccess(profile);
             if (ServerTransferReport.Statistics(session.LastTransferCompletion) is not { } report) continue;
             var message = $"SERVER STATS [{role}] {entry.RuleRelease ?? entry.Name}{Environment.NewLine}{report}";
             if (_raceJobOwners.TryGetValue(entry.Id, out var owner)) owner.ServerReports[role] = message;
@@ -3109,8 +3116,10 @@ public partial class MainWindow : Window
     {
         SaveWindowLayout();
         _racePoolTimer.Stop();
+        _siteHealthTimer.Stop();
         _workerPoolShuttingDown = true;
         _racePoolStop.Cancel();
+        await _siteHealth.DisposeAsync();
         await _racePoolGate.WaitAsync();
         _racePoolGate.Release();
         _legendTimer.Stop();
@@ -3509,6 +3518,7 @@ public partial class MainWindow : Window
                 (_rightProfile?.Id == id && _remoteSession?.IsConnected == true ? 1 : 0);
             var text = new System.Text.StringBuilder();
             text.AppendLine($"DETAILED STATUS: {profile.Name}");
+            text.AppendLine(SiteHealthDetails(id));
             text.AppendLine($"Login connections: {workers.Count(p => p.Key.IsConnected) + browsing} / {profile.EffectiveOptions.MaxSlots}");
             text.AppendLine($"Upload jobs: {uploads} / {profile.EffectiveOptions.MaxUploadSlots}");
             text.AppendLine($"Download jobs: {downloads} / {profile.EffectiveOptions.MaxDownloadSlots}");
@@ -3525,7 +3535,7 @@ public partial class MainWindow : Window
                 text.AppendLine($"{job.State}: {job.Name} | {FormatSize(job.BytesTransferred)} / {FormatSize(job.TotalBytes)}");
             text.AppendLine("\nLocal FluxFTP status; job counts are not server-reported slot usage.");
             return text.ToString();
-        });
+        }, () => CheckSiteHealthAsync(force: true));
         PanelShown("Status");
         StatusHost.Visibility = StatusSplitter.Visibility = Visibility.Visible;
         StatusSplitterRow.Height = new GridLength(6);
@@ -3805,6 +3815,7 @@ public partial class MainWindow : Window
         if (dialog.ShowDialog() == true && dialog.Settings is not null)
         {
             _settings = dialog.Settings;
+            ConfigureSiteHealth();
             _loggedSkipMatches.Clear();
             ConfigureSkippedItemColors();
             var priorityProfiles = new ProfileStore().Load().ToDictionary(profile => profile.Id);
@@ -4079,6 +4090,7 @@ public partial class MainWindow : Window
 
     private async Task<bool> RunVisionaryStepAsync(ApiTransferRequest request, VisionaryRaceState race, CancellationToken token)
     {
+        if (!token.IsCancellationRequested && (!_siteHealth.IsAvailable(request.SrcSite ?? "") || !_siteHealth.IsAvailable(request.DstSite ?? ""))) return false;
         try
         {
             token.ThrowIfCancellationRequested();
@@ -4264,6 +4276,8 @@ public partial class MainWindow : Window
             ?? throw new KeyNotFoundException($"Site {request.SrcSite} was not found.");
         var destinationProfile = profiles.FirstOrDefault(profile => profile.Name.Equals(request.DstSite, StringComparison.OrdinalIgnoreCase))
             ?? throw new KeyNotFoundException($"Site {request.DstSite} was not found.");
+        if (race is null && (!_siteHealth.IsAvailable(sourceProfile.Id) || !_siteHealth.IsAvailable(destinationProfile.Id)))
+            throw new IOException("Connection waiting: source or destination trade is automatically paused; see Tools > Site status.");
         if (race is not null && sourceProfile.Id == destinationProfile.Id)
             throw new ArgumentException("A VISIONARY race needs different source and destination sites.");
         if (race is not null && _settings.EnableVisionaryBridge)

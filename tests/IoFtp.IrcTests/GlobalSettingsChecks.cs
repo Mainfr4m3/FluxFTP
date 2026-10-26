@@ -15,10 +15,14 @@ internal static class GlobalSettingsChecks
                 Nick: "FluxTest", Password: "dpapi:literal-password %20", UseZnc: true, ZncUsername: "user",
                 ZncNetwork: "network", Channel: "#test", NetworkName: "Example", AccountLinks: [new("account", "admin")], AllowInvalidCertificate: false);
             var settings = new GlobalSettings(Theme: new ThemeSettings(ResumeProgress: "#DDAA22"), DownloadTempPath: @"R:\FluxTemp", UseAdvancedSkipFilters: true, LogSkipListMatches: true, OverwriteIfResumeFails: true, ActivePortFrom: 49000, ActivePortTo: 49100, PassivePortMin: 50000, PassivePortMax: 51000, FxpSmallerAction: IoFtp.Core.Models.ExistingTargetAction.Resume, FxpSameAction: IoFtp.Core.Models.ExistingTargetAction.Overwrite, AsciiRules: "*.TXT\nregex:^README$", NoAsciiResume: false, Irc: irc, TransferCategoryOrder: "NFO\nSFV\nMain files\nProof\nSample");
+            settings = settings with { EnableSiteHealthMonitor = true, SiteHealthCheckSeconds = 180, SiteHealthRetrySeconds = 45, SiteHealthFailures = 3 };
             new GlobalSettingsStore(directory).Save(settings);
             var path = Path.Combine(directory, "settings.json");
             Check(!File.ReadAllText(path).Contains(irc.Password), "secret protected on disk");
             var restored = new GlobalSettingsStore(directory).Load();
+            Check(restored.EnableSiteHealthMonitor && restored.SiteHealthCheckSeconds == 180 && restored.SiteHealthRetrySeconds == 45 && restored.SiteHealthFailures == 3, "site monitor settings survive restart");
+            Check(!new GlobalSettings().EnableSiteHealthMonitor && new GlobalSettings().SiteHealthCheckSeconds == 300 && new GlobalSettings().SiteHealthRetrySeconds == 60 && new GlobalSettings().SiteHealthFailures == 2, "site monitoring is opt-in with bounded default intervals");
+            Check(System.Text.Json.JsonSerializer.Deserialize<GlobalSettings>("{}") is { EnableSiteHealthMonitor: false, SiteHealthCheckSeconds: 300, SiteHealthRetrySeconds: 60, SiteHealthFailures: 2 }, "old settings receive site monitor defaults");
             Check(restored.DownloadTempPath == @"R:\FluxTemp" && new GlobalSettings().DownloadTempPath == "", "optional download temp folder survives restart");
             Check(restored.Theme?.ResumeProgress == "#DDAA22", "resume progress theme color survives restart");
             Check(System.Text.Json.JsonSerializer.Deserialize<ThemeSettings>("{\"Name\":\"Old theme\"}")?.ResumeProgress == "#E6B450", "old themes receive default resume color");

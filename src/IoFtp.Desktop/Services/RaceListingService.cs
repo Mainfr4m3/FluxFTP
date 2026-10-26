@@ -39,6 +39,23 @@ internal sealed class RaceListingService : IAsyncDisposable
     {
         if (_sources.TryGetValue(site, out var source)) Interlocked.Exchange(ref source.Invalidated, 1);
     }
+    public bool HasSession(Guid site) => _sources.TryGetValue(site, out var source) && source.Session?.IsConnected == true;
+    public async Task<bool?> TryCheckHealthAsync(ConnectionProfile profile, CancellationToken token)
+    {
+        if (!_sources.TryGetValue(profile.Id, out var source) || !await source.Gate.WaitAsync(0, token).ConfigureAwait(false)) return null;
+        try
+        {
+            if (source.Profile != profile || source.Session?.IsConnected != true) return null;
+            try
+            {
+                var reply = await source.Session.ExecuteCommandAsync("NOOP", token).ConfigureAwait(false);
+                if (reply.StatusCode is >= 200 and < 300) { source.LastUsed = Stopwatch.GetTimestamp(); return true; }
+                await CloseAsync(source).ConfigureAwait(false); return false;
+            }
+            catch { await CloseAsync(source).ConfigureAwait(false); throw; }
+        }
+        finally { source.Gate.Release(); }
+    }
     public async Task<IReadOnlyList<RemoteEntry>> ListAsync(ConnectionProfile profile, string path, CancellationToken token)
     {
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token, _shutdown.Token);
