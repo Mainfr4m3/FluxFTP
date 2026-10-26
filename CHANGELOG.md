@@ -2,6 +2,10 @@
 
 All notable FluxFTP changes are documented here.
 
+## Bridge metrics reader 3 — 2026-10-27 (VM test)
+
+- Replaces compound heartbeat acceptance conditions with individual checks for mIRC 7.52 compatibility and reports the precise rejection reason in local metrics status. The timer callback is public and the offline timer follows the active IRC connection; enabling metrics reports timer state. This follows a VM report showing an existing two-field, one-second-old heartbeat being rejected by reader 2.
+
 ## Bridge metrics reader 2 — 2026-10-26 (VM test)
 
 - Reads the metrics heartbeat directly before parsing timestamp/TAB fields, avoids quoting identifier filenames, and handles file errors within that reader. Adds local `/fluxbridge metrics status` diagnostics and a 15-second freshness window for VM scheduling delays. Restarting metrics clears a previously saved "FluxFTP offline" title prefix. No EXE or DLL change is required for this script fix.

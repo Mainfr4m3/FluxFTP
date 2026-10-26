@@ -24,6 +24,7 @@ alias fluxbridge.metrics {
   if ($1 == on) {
     unset %fluxbridge.metrics.disabled
     fluxbridge.metrics.start
+    echo -ag FluxFTP: metrics enabled - timer: $iif($timer(FluxBridgeMetrics).name,on,off)
     return
   }
   echo -ag Usage: /fluxbridge metrics on|off|status or /fluxbridge metrics path <FluxFTP folder>|auto
@@ -31,9 +32,10 @@ alias fluxbridge.metrics {
 
 alias -l fluxbridge.metrics.start {
   if (%fluxbridge.metrics.disabled) return
-  if (!$timer(FluxBridgeMetrics)) set -e %fluxbridge.metrics.saved $titlebar
+  if (!$timer(FluxBridgeMetrics).name) set -e %fluxbridge.metrics.saved $titlebar
   if ($pos(%fluxbridge.metrics.saved,FluxFTP - ,1) || $pos(%fluxbridge.metrics.saved,FluxFTP offline,1)) unset %fluxbridge.metrics.saved
-  .timerFluxBridgeMetrics -o 0 2 fluxbridge.metrics.tick
+  .timerFluxBridgeMetrics off
+  .timerFluxBridgeMetrics -io 0 2 fluxbridge.metrics.tick
   fluxbridge.metrics.tick
 }
 
@@ -43,7 +45,7 @@ alias -l fluxbridge.metrics.stop {
   unset %fluxbridge.metrics.saved %fluxbridge.metrics.last
 }
 
-alias -l fluxbridge.metrics.tick {
+alias fluxbridge.metrics.tick {
   if ($pos(%fluxbridge.metrics.saved,FluxFTP - ,1) || $pos(%fluxbridge.metrics.saved,FluxFTP offline,1)) unset %fluxbridge.metrics.saved
   var %text = $fluxbridge.metrics.read
   if (%text == $null) %text = FluxFTP offline
@@ -67,7 +69,8 @@ alias -l fluxbridge.metrics.read {
 }
 
 alias -l fluxbridge.metrics.line {
-  if ($1- == $null || !$isfile($1-)) return $null
+  if ($1- == $null) return $null
+  if (!$isfile($1-)) return $null
   var %line = $read($1-,nt,1)
   return %line
   :error
@@ -77,24 +80,38 @@ alias -l fluxbridge.metrics.line {
 }
 
 alias -l fluxbridge.metrics.fresh {
-  if ($1- == $null || !$isfile($1-)) return $null
-  ; Parse the heartbeat in the same alias that reads it. Do not forward the
-  ; timestamp/TAB record through another alias or add quotes to identifier paths.
-  var %line = $read($1-,nt,1)
+  set -e %fluxbridge.metrics.reason no-path
+  if ($1- == $null) return $null
+  var %path = $noqt($1-)
+  set -e %fluxbridge.metrics.reason file-missing
+  if (!$isfile(%path)) return $null
+  ; Keep each comparison separate: optional isnum ranges in compound conditions
+  ; are ambiguous in older mIRC parsers. Read and parse in this same alias.
+  var %line = $read(%path,nt,1)
+  set -e %fluxbridge.metrics.reason empty-file
   if (%line == $null) return $null
   var %stamp = $gettok(%line,1,9)
-  if (%stamp isnum && $calc($ctime - %stamp) isnum 0-15 && $gettok(%line,2,9) != $null) {
-    return $gettok(%line,2-,9)
-  }
-  return $null
+  set -e %fluxbridge.metrics.reason invalid-timestamp
+  if (%stamp !isnum) return $null
+  var %age = $calc($ctime - %stamp)
+  set -e %fluxbridge.metrics.reason future-timestamp
+  if (%age < -2) return $null
+  set -e %fluxbridge.metrics.reason stale-heartbeat
+  if (%age > 15) return $null
+  var %text = $gettok(%line,2-,9)
+  set -e %fluxbridge.metrics.reason missing-title
+  if (%text == $null) return $null
+  set -e %fluxbridge.metrics.reason accepted
+  return %text
   :error
+  set -e %fluxbridge.metrics.reason $error
   reseterror
   return $null
 }
 
 alias -l fluxbridge.metrics.status {
-  echo -ag FluxFTP metrics reader 2 - Client: $version - Script: $script
-  echo -ag FluxFTP metrics timer: $iif($timer(FluxBridgeMetrics),on,off) - Automatic path: $iif(%fluxbridge.metrics.file == $null,yes,no)
+  echo -ag FluxFTP metrics reader 3 - Client: $version - Script: $script
+  echo -ag FluxFTP metrics timer: $iif($timer(FluxBridgeMetrics).name,on,off) - Automatic path: $iif(%fluxbridge.metrics.file == $null,yes,no)
   if (%fluxbridge.metrics.file != $null) { fluxbridge.metrics.inspect %fluxbridge.metrics.file | return }
   var %pointer = $+($envvar(LOCALAPPDATA),\FluxFTP\irc-metrics.path)
   var %path = $fluxbridge.metrics.line(%pointer)
@@ -112,7 +129,11 @@ alias -l fluxbridge.metrics.inspect {
   var %line = $read(%path,nt,1)
   var %stamp = $gettok(%line,1,9)
   echo -ag FluxFTP metrics fields: $numtok(%line,9) - File stamp: %stamp - IRC clock: $ctime
-  if (%stamp isnum) echo -ag FluxFTP metrics age: $calc($ctime - %stamp) seconds - Accepted: $iif($fluxbridge.metrics.fresh(%path) != $null,yes,no)
+  var %text = $fluxbridge.metrics.fresh(%path)
+  var %accepted = no
+  if (%text != $null) %accepted = yes
+  echo -ag FluxFTP metrics accepted: %accepted - Reason: %fluxbridge.metrics.reason
+  if (%stamp isnum) echo -ag FluxFTP metrics age: $calc($ctime - %stamp) seconds
   return
   :error
   echo -ag FluxFTP metrics read failed: $error
