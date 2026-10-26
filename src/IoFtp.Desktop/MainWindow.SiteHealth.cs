@@ -112,6 +112,6 @@ public partial class MainWindow
     }
     private void OpenSiteHealth_Click(object sender, RoutedEventArgs e)
     {
-        if (StatusHost.Visibility != Visibility.Visible) SiteStatus_Click(this, e);
+        SiteStatus_Click(sender, e);
     }
 }

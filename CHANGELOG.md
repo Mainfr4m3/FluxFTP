@@ -2,6 +2,10 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.52 — 2026-10-26 (Windows)
+
+- Tools > SITE STATUS now toggles the status panel both open and closed, using the same behavior as the Metrics status button.
+
 ## 2.1.51 — 2026-10-26 (Windows)
 
 - Saves irc-metrics.txt beside FluxFTP.exe and publishes an automatic folder-discovery pointer for the mIRC/AdiIRC bridge. The reader supports explicit folder selection, script/parent-folder discovery and legacy AppData metrics during upgrades, and handles missing/locked/replaced files without flooding IRC with $read errors. Update/reload FluxFTP-Bridge.mrc with the EXE update; DLLs are unchanged.
