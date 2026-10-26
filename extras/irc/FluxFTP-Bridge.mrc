@@ -419,12 +419,17 @@ alias fluxbridge.metrics.start {
 
 alias -l fluxbridge.metrics.stop {
   .timerFluxBridgeMetrics off
-  if (%fluxbridge.metrics.last != $null && $titlebar == %fluxbridge.metrics.last) titlebar %fluxbridge.metrics.saved
+  if (%fluxbridge.metrics.last != $null) {
+    if ($titlebar == %fluxbridge.metrics.last) titlebar %fluxbridge.metrics.saved
+  }
   unset %fluxbridge.metrics.saved %fluxbridge.metrics.last
 }
 
 alias fluxbridge.metrics.tick {
-  if ($pos(%fluxbridge.metrics.saved,FluxFTP - ,1) || $pos(%fluxbridge.metrics.saved,FluxFTP offline,1)) unset %fluxbridge.metrics.saved
+  var %savedMetrics = $pos(%fluxbridge.metrics.saved,FluxFTP - ,1)
+  var %savedOffline = $pos(%fluxbridge.metrics.saved,FluxFTP offline,1)
+  if (%savedMetrics > 0) unset %fluxbridge.metrics.saved
+  if (%savedOffline > 0) unset %fluxbridge.metrics.saved
   var %text = $fluxbridge.metrics.read
   if (%text == $null) %text = FluxFTP offline
   if (%fluxbridge.metrics.saved != $null) %text = %fluxbridge.metrics.saved $chr(124) %text
@@ -488,7 +493,7 @@ alias -l fluxbridge.metrics.fresh {
 }
 
 alias -l fluxbridge.metrics.status {
-  echo -ag FluxFTP metrics reader 4 - Client: $version - Script: $script
+  echo -ag FluxFTP metrics reader 5 - Client: $version - Script: $script
   echo -ag FluxFTP metrics timer: $iif($timer(FluxBridgeMetrics).name,on,off) - Automatic path: $iif(%fluxbridge.metrics.file == $null,yes,no)
   if (%fluxbridge.metrics.file != $null) { fluxbridge.metrics.inspect %fluxbridge.metrics.file | return }
   var %pointer = $+($envvar(LOCALAPPDATA),\FluxFTP\irc-metrics.path)
@@ -519,8 +524,8 @@ alias -l fluxbridge.metrics.inspect {
 }
 
 alias -l fluxbridge.metrics.share {
-  if ($1 != session && $1 != total) return
-  if ($status != connected || !$2 || $me !ison $2) {
+  if (($1 != session) && ($1 != total)) return
+  if (($status != connected) || (!$2) || ($me !ison $2)) {
     echo -ag FluxFTP: join a channel before sharing metrics.
     return
   }
@@ -555,7 +560,7 @@ on *:START:{ fluxbridge.metrics.start }
 alias fluxbridge {
   if ($1 == metrics) { fluxbridge.metrics $2- | return }
   if ($1 == version || $1 == $null) {
-    echo -ag FluxFTP Bridge v2.0 - metrics reader 4, live Visionary slots, batch chains and UDP commands; Visionary DLL v2.0 expected
+    echo -ag FluxFTP Bridge v2.0 - metrics reader 5, live Visionary slots, batch chains and UDP commands; Visionary DLL v2.0 expected
     return
   }
   echo -ag Usage: /fluxbridge version or /fluxbridge metrics on|off|status or /fluxbridge metrics path <FluxFTP folder>|auto
