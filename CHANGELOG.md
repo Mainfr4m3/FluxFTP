@@ -2,6 +2,10 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.55 — 2026-10-27 (Windows)
+
+- Enforces the saved per-site Max slots as a hard total instead of expanding it for Visionary limits. Shared listing and browsing connections fit within that total; pending panel connections reserve space. Manual per-job limits cannot bypass current site totals or directional limits. Pool warmup and checkout count existing workers and wait for capacity; surplus idle sessions are trimmed even when work is queued. Lower limits allow already running transfers to finish.
+
 ## 2.1.54 — 2026-10-27 (Windows)
 
 - Saving Global Settings preserves active transfers, API spread jobs and Visionary watches instead of restarting the bridge/API. Scheduling capacity, race polling and spread limits update live; lowering capacity lets active steps finish. Changes to API/bridge listener enablement, port, bind address or credentials are saved for the next FluxFTP start, with a message in COMMANDS. IRC only reconnects if its own settings changed.

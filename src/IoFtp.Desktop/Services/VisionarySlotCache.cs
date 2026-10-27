@@ -49,6 +49,8 @@ internal sealed class VisionarySlotCache(string? directory = null)
         var uploads = live.Uploads ?? (options.AllowUpload ? options.MaxUploadSlots : 0);
         return options with { MaxDownloadSlots = downloads, MaxUploadSlots = uploads,
             AllowDownload = downloads > 0, AllowUpload = uploads > 0,
-            MaxSlots = Math.Max(options.MaxSlots, downloads + uploads + auxiliary) };
+            // Visi controls transfer directions, but never expands the site's
+            // saved total login ceiling to make room for auxiliary sessions.
+            MaxSlots = options.MaxSlots };
     }
 }

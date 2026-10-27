@@ -8,6 +8,7 @@ using IoFtp.Desktop.Models;
 using IoFtp.Desktop.Services;
 
 var assertions = 0;
+if (args.FirstOrDefault() == "--hard-slot-checks") { await HardSlotLimitChecks.Run(); return; }
 if (args.FirstOrDefault() == "--live-settings-checks") { await LiveSettingsChecks.Run(); return; }
 if (args.FirstOrDefault() == "--upload-timestamp-checks") { await UploadTimestampChecks.Run(); return; }
 if (args.FirstOrDefault() == "--site-health-checks") { await SiteHealthChecks.Run(); return; }

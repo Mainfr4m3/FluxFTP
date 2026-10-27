@@ -19,8 +19,18 @@ internal static class VisionaryLiveSlotChecks
             Check(cache.Apply(profile, 2) == profile.EffectiveOptions, "Unknown sites must retain Flux limits");
             cache.Update("JBG", 5, 3);
             var effective = cache.Apply(profile, 2);
-            Check(RaceSlotBudget.Transfers(effective.MaxSlots, effective.MaxUploadSlots, effective.MaxDownloadSlots, 2) == 8,
-                "Imported total cap must not suppress Visi capacity or consume auxiliary slots");
+            Check(effective.MaxSlots == 1 && RaceSlotBudget.Transfers(effective.MaxSlots, effective.MaxUploadSlots, effective.MaxDownloadSlots, 2) == 0,
+                "Visi must never expand the saved total login limit");
+            var vm = profile with { Options = new SiteOptions(MaxSlots: 8, MaxDownloadSlots: 3, MaxUploadSlots: 3) };
+            cache.Update("JBG", 3, 3);
+            foreach (var auxiliary in new[] { 1, 2, 3 })
+            {
+                var limits = cache.Apply(vm, auxiliary);
+                var transfers = RaceSlotBudget.Transfers(limits.MaxSlots, limits.MaxUploadSlots, limits.MaxDownloadSlots, auxiliary);
+                Check(limits.MaxSlots == 8 && transfers <= 6 && transfers + auxiliary <= 8,
+                    "3 up / 3 down plus shared listing and browsing must fit inside 8 logins");
+            }
+            cache.Update("JBG", 5, 3);
             cache.Update("jbg", null, null);
             cache = new VisionarySlotCache(folder).Load();
             Check(cache.Get("JBG") == new VisionarySlotCache.Slots(5, 3), "Timeout and restart must preserve last values");
@@ -50,7 +60,7 @@ internal static class VisionaryLiveSlotChecks
                 Check(DateTime.UtcNow < deadline, "Manual queue must drain after race slots release");
                 await Task.Delay(10);
             }
-            Console.WriteLine("PASS: Visi capacity, auxiliary headroom, timeout/restart cache, zero, corrupt cache and manual/race isolation.");
+            Console.WriteLine("PASS: Visi directional limits, hard total including auxiliary sessions, timeout/restart cache, zero, corrupt cache and manual/race isolation.");
         }
         finally { Directory.Delete(folder, true); }
     }

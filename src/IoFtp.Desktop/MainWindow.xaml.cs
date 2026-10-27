@@ -275,6 +275,7 @@ public partial class MainWindow : Window
                 BlockedTargets: ResolveSiteNames(options.BlockTransfersTo)));
             using (var connectTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(20)))
             {
+                await WaitForPaneSlotAsync(profile, connectTimeout.Token);
                 await _siteHealth.WaitForProbeAsync(profile.Id, connectTimeout.Token);
                 try { await session.ConnectAsync(profile, connectTimeout.Token); }
                 catch (SshHostKeyException hostKey)
@@ -2501,21 +2502,42 @@ public partial class MainWindow : Window
     }
 
     private readonly VisionarySlotCache _visionarySlots = new VisionarySlotCache().Load();
-    private int RaceAuxiliarySlots(ConnectionProfile profile) => 1
-        + (_leftProfile?.Id == profile.Id && _leftRemoteSession?.IsConnected == true ? 1 : 0)
-        + (_rightProfile?.Id == profile.Id && _remoteSession?.IsConnected == true ? 1 : 0);
+    private int BrowsingSlots(ConnectionProfile profile) =>
+        (_leftProfile?.Id == profile.Id && (_leftRemoteSession?.IsConnected == true || _leftConnectionBusy) ? 1 : 0)
+        + (_rightProfile?.Id == profile.Id && (_remoteSession?.IsConnected == true || _rightConnectionBusy) ? 1 : 0);
+    private int RaceAuxiliarySlots(ConnectionProfile profile) => 1 + BrowsingSlots(profile);
     private SiteOptions RaceSlotOptions(ConnectionProfile profile) => _settings.EnableVisionaryBridge
         ? _visionarySlots.Apply(profile, RaceAuxiliarySlots(profile)) : profile.EffectiveOptions;
+
+    private async Task WaitForPaneSlotAsync(ConnectionProfile profile, CancellationToken token)
+    {
+        var gate = _sitePoolGates.For(profile.Id);
+        while (true)
+        {
+            await gate.WaitAsync(token);
+            try
+            {
+                // Pending panel logins are already included in BrowsingSlots.
+                // Let existing transfers finish before using their login space.
+                var auxiliary = _settings.EnableVisionaryBridge ? RaceAuxiliarySlots(profile) : BrowsingSlots(profile);
+                var pool = _workerPool.GetOrAdd(profile, _ => new ConcurrentBag<PooledWorker>());
+                while (_sessionWorkers.Count(pair => pair.Value.Id == profile.Id) > TransferSlotLimit(profile) && pool.TryTake(out var idle))
+                    await DisposeTransferWorkerAsync(idle.Session);
+                if (auxiliary <= profile.EffectiveOptions.MaxSlots &&
+                    _sessionWorkers.Count(pair => pair.Value.Id == profile.Id) <= TransferSlotLimit(profile)) return;
+            }
+            finally { gate.Release(); }
+            await Task.Delay(100, token);
+        }
+    }
 
     private int TransferSlotLimit(ConnectionProfile profile)
     {
         var options = RaceSlotOptions(profile);
-        if (!_settings.EnableVisionaryBridge || !_raceReadySites.ContainsKey(profile.Id)) return options.MaxSlots;
+        if (!_settings.EnableVisionaryBridge) return Math.Max(0, options.MaxSlots - BrowsingSlots(profile));
         // One shared listing/verifier connection plus open panes.
         // Passive file averages require no auxiliary connections.
-        var auxiliary = 1 + (_leftProfile?.Id == profile.Id && _leftRemoteSession?.IsConnected == true ? 1 : 0)
-            + (_rightProfile?.Id == profile.Id && _remoteSession?.IsConnected == true ? 1 : 0)
-            ; // Passive averages need no monitor connections or reserved slots.
+        var auxiliary = RaceAuxiliarySlots(profile);
         return RaceSlotBudget.Transfers(options.MaxSlots,
             options.AllowUpload ? options.MaxUploadSlots : 0,
             options.AllowDownload ? options.MaxDownloadSlots : 0, auxiliary);
@@ -2550,13 +2572,13 @@ public partial class MainWindow : Window
                 _engine.RegisterOrUpdateSite(new SitePolicy(profile.Id, profile.Name, limit,
                     options.AllowDownload ? Math.Min(limit, options.MaxDownloadSlots) : 0,
                     options.AllowUpload ? Math.Min(limit, options.MaxUploadSlots) : 0, options.Priority));
+                var pool = _workerPool.GetOrAdd(profile, _ => new ConcurrentBag<PooledWorker>());
+                while (_sessionWorkers.Count(pair => pair.Value.Id == profile.Id) > limit && pool.TryTake(out var excess))
+                    await DisposeTransferWorkerAsync(excess.Session);
                 // Do not reserve every idle session for NOOP/prefill while this
                 // site's executor is waiting for a worker or has queued work.
                 if (_engine.Snapshot().Any(work => work.State is TransferWorkState.Queued or TransferWorkState.Running &&
                     (work.Item.SourceSiteId == profile.Id || work.Item.DestinationSiteId == profile.Id))) continue;
-                var pool = _workerPool.GetOrAdd(profile, _ => new ConcurrentBag<PooledWorker>());
-                while (_sessionWorkers.Count(pair => pair.Value.Id == profile.Id) > limit && pool.TryTake(out var excess))
-                    await DisposeTransferWorkerAsync(excess.Session);
                 var idle = pool.Count;
                 var leases = new List<PooledWorker>();
                 for (var i = 0; i < idle && pool.TryTake(out var pooled); i++) leases.Add(pooled);
@@ -2797,50 +2819,62 @@ public partial class MainWindow : Window
     private async Task<FtpRemoteSession> RentWorkerAsync(ConnectionProfile profile, CancellationToken cancellationToken, bool forceFresh = false)
     {
         var siteGate = _sitePoolGates.For(profile.Id);
-        // Maintenance temporarily owns idle sessions. Wait for their return
-        // rather than opening extra connections while the bag is drained.
         while (true)
         {
             await siteGate.WaitAsync(cancellationToken);
-            var retry = _raceSlotRetryAt.GetValueOrDefault(profile.Id);
-            var hasIdle = _workerPool.TryGetValue(profile, out var available) && !available.IsEmpty;
-            if (hasIdle && !forceFresh || retry <= DateTimeOffset.UtcNow) break;
-            siteGate.Release();
-            await Task.Delay(retry - DateTimeOffset.UtcNow > TimeSpan.Zero ? retry - DateTimeOffset.UtcNow : TimeSpan.Zero, cancellationToken);
-        }
-        try
-        {
-        await DisposeStalePooledWorkersAsync(profile);
-        var pool = _workerPool.GetOrAdd(profile, _ => new ConcurrentBag<PooledWorker>());
-        while (pool.TryTake(out var pooled))
-        {
-            var session = pooled.Session;
-            if (forceFresh) { await DisposeTransferWorkerAsync(session); break; }
-            if (!session.IsConnected) { await DisposeTransferWorkerAsync(session); continue; }
-            if (DateTimeOffset.UtcNow - pooled.ReturnedAt < WorkerHealthCheckInterval) { _sessionStatistics.PoolHit(); return session; }
             try
             {
-                using var healthTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                healthTimeout.CancelAfter(TimeSpan.FromSeconds(5));
-                var response = await session.ExecuteCommandAsync("NOOP", healthTimeout.Token);
-                if (response.StatusCode is >= 200 and < 300) { _sessionStatistics.PoolHit(); return session; }
+                var retry = _raceSlotRetryAt.GetValueOrDefault(profile.Id);
+                var hasIdle = _workerPool.TryGetValue(profile, out var available) && !available.IsEmpty;
+                if ((hasIdle && !forceFresh) || retry <= DateTimeOffset.UtcNow)
+                {
+                    var limit = TransferSlotLimit(profile);
+                    await DisposeStalePooledWorkersAsync(profile);
+                    var trimPool = _workerPool.GetOrAdd(profile, _ => new ConcurrentBag<PooledWorker>());
+                    while (_sessionWorkers.Count(pair => pair.Value.Id == profile.Id) > limit && trimPool.TryTake(out var excess))
+                        await DisposeTransferWorkerAsync(excess.Session);
+                    if (limit > 0)
+                    {
+                        var pool = _workerPool.GetOrAdd(profile, _ => new ConcurrentBag<PooledWorker>());
+                        while (pool.TryTake(out var pooled))
+                        {
+                            var session = pooled.Session;
+                            if (forceFresh) { await DisposeTransferWorkerAsync(session); break; }
+                            if (!session.IsConnected) { await DisposeTransferWorkerAsync(session); continue; }
+                            if (DateTimeOffset.UtcNow - pooled.ReturnedAt < WorkerHealthCheckInterval) { _sessionStatistics.PoolHit(); return session; }
+                            try
+                            {
+                                using var healthTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                                healthTimeout.CancelAfter(TimeSpan.FromSeconds(5));
+                                var response = await session.ExecuteCommandAsync("NOOP", healthTimeout.Token);
+                                if (response.StatusCode is >= 200 and < 300) { _sessionStatistics.PoolHit(); return session; }
+                            }
+                            catch (Exception) when (!cancellationToken.IsCancellationRequested) { }
+                            catch
+                            {
+                                await DisposeTransferWorkerAsync(session);
+                                throw;
+                            }
+                            await DisposeTransferWorkerAsync(session);
+                        }
+
+                        // Idle logins count too. Never open an extra worker just
+                        // because all existing connections are checked out.
+                        if (_sessionWorkers.Count(pair => pair.Value.Id == profile.Id) < limit)
+                        {
+                            try { return await CreateTransferWorkerAsync(profile, cancellationToken); }
+                            catch (Exception) when (!cancellationToken.IsCancellationRequested && _raceReadySites.ContainsKey(profile.Id))
+                            {
+                                _raceSlotRetryAt[profile.Id] = DateTimeOffset.UtcNow.AddMinutes(1);
+                                throw;
+                            }
+                        }
+                    }
+                }
             }
-            catch (Exception) when (!cancellationToken.IsCancellationRequested) { }
-            catch
-            {
-                await DisposeTransferWorkerAsync(session);
-                throw;
-            }
-            await DisposeTransferWorkerAsync(session);
+            finally { siteGate.Release(); }
+            await Task.Delay(100, cancellationToken);
         }
-        try { return await CreateTransferWorkerAsync(profile, cancellationToken); }
-        catch (Exception) when (!cancellationToken.IsCancellationRequested && _raceReadySites.ContainsKey(profile.Id))
-        {
-            _raceSlotRetryAt[profile.Id] = DateTimeOffset.UtcNow.AddMinutes(1);
-            throw;
-        }
-        }
-        finally { siteGate.Release(); }
     }
 
     private async Task WarmWorkersForDirectionAsync(TransferDirection direction, int fileCount, CancellationToken cancellationToken)
@@ -2869,22 +2903,30 @@ public partial class MainWindow : Window
         var started = DateTime.UtcNow;
         await Task.WhenAll(requested.Select(async pair =>
         {
-            await DisposeStalePooledWorkersAsync(pair.Key);
-            var pool = _workerPool.GetOrAdd(pair.Key, _ => new ConcurrentBag<PooledWorker>());
-            var missing = Math.Max(0, pair.Value - pool.Count);
-            if (missing == 0) return;
-            var sessions = await Task.WhenAll(Enumerable.Range(0, missing).Select(async _ =>
+            var gate = _sitePoolGates.For(pair.Key.Id);
+            await gate.WaitAsync(cancellationToken);
+            try
             {
-                try { return await CreateTransferWorkerAsync(pair.Key, cancellationToken); }
-                catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+                await DisposeStalePooledWorkersAsync(pair.Key);
+                var pool = _workerPool.GetOrAdd(pair.Key, _ => new ConcurrentBag<PooledWorker>());
+                var live = _sessionWorkers.Count(worker => worker.Value.Id == pair.Key.Id);
+                var missing = Math.Max(0, Math.Min(pair.Value - pool.Count, TransferSlotLimit(pair.Key) - live));
+                for (var i = 0; i < missing; i++)
                 {
-                    LogText.Dispatcher.Invoke(() => AppendFtpLog(
-                        $"{Environment.NewLine}Could not prewarm a slot for {pair.Key.Name}: {FriendlyMessage(exception)}"));
-                    return null;
+                    try
+                    {
+                        var session = await CreateTransferWorkerAsync(pair.Key, cancellationToken);
+                        await ReleaseWorkerAsync(pair.Key, session, true);
+                    }
+                    catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+                    {
+                        LogText.Dispatcher.Invoke(() => AppendFtpLog(
+                            $"{Environment.NewLine}Could not prewarm a slot for {pair.Key.Name}: {FriendlyMessage(exception)}"));
+                        break;
+                    }
                 }
-            }));
-            foreach (var session in sessions)
-                if (session is not null) pool.Add(new PooledWorker(session, DateTimeOffset.UtcNow));
+            }
+            finally { gate.Release(); }
         }));
         var elapsed = DateTime.UtcNow - started;
         AppendFtpLog($"{Environment.NewLine}Transfer slots ready in {elapsed.TotalSeconds:0.00}s.");
@@ -4244,7 +4286,7 @@ public partial class MainWindow : Window
             if (site is null || (downloads is null && uploads is null)) return;
             if (!_visionarySlots.Update(site, downloads, uploads)) return;
             var next = _visionarySlots.Get(site)!;
-            var message = $"VISIONARY slots {site}: downloads={next.Downloads?.ToString() ?? "Flux"}, uploads={next.Uploads?.ToString() ?? "Flux"}; Visi controls race capacity; saved values retained if helper is unavailable";
+            var message = $"VISIONARY slots {site}: downloads={next.Downloads?.ToString() ?? "Flux"}, uploads={next.Uploads?.ToString() ?? "Flux"}; Visi controls transfer directions within the saved Flux total login limit; last values retained if helper is unavailable";
             if (_visionarySlots.LastError is { } error) message += "; cache save failed: " + error;
             _raceLog.Write("VISIONARY", message);
             AppendConnectionLog(Environment.NewLine + message);

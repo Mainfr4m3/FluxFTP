@@ -272,8 +272,9 @@ public sealed class GlobalTransferEngine : IAsyncDisposable
         public bool CanTransfer(SitePolicy? limits, bool download)
         {
             var policy = limits ?? Policy;
-            return Enabled && ActiveSlots < policy.MaxSlots &&
-                (download ? ActiveDownloads < policy.MaxDownloads : ActiveUploads < policy.MaxUploads);
+            return Enabled && ActiveSlots < Math.Min(Policy.MaxSlots, policy.MaxSlots) &&
+                (download ? ActiveDownloads < Math.Min(Policy.MaxDownloads, policy.MaxDownloads)
+                    : ActiveUploads < Math.Min(Policy.MaxUploads, policy.MaxUploads));
         }
         public bool CanDownload => Enabled && ActiveSlots < Policy.MaxSlots && ActiveDownloads < Policy.MaxDownloads;
         public bool CanUpload => Enabled && ActiveSlots < Policy.MaxSlots && ActiveUploads < Policy.MaxUploads;
