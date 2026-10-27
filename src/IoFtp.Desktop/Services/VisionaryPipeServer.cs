@@ -25,7 +25,7 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
                 try { pair.Value.Release(); } catch (SemaphoreFullException) { }
     }
     private readonly RaceWatchSlots _watchSlots;
-    private readonly int? _recheckSeconds;
+    private int _recheckSeconds;
     private readonly Func<string, int> _sourcePriority;
     private readonly Action<ApiTransferRequest>? _raceObserved;
     private readonly Action<string, string, string>? _raceResult;
@@ -38,13 +38,18 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
     {
         _startTransfer = startTransfer; _log = log; _raceStep = raceStep; _liveSlots = liveSlots;
         _watchSlots = new RaceWatchSlots(Math.Clamp(concurrentScheduling, 1, 2048));
-        _recheckSeconds = recheckSeconds;
+        _recheckSeconds = recheckSeconds ?? 0;
         _sourcePriority = sourcePriority ?? (_ => 0);
         _raceObserved = raceObserved;
         _raceResult = raceResult;
     }
 
     public void Start() => _listener = ListenAsync(_cancellation.Token);
+    public void UpdateScheduling(int concurrentScheduling, int? recheckSeconds)
+    {
+        _watchSlots.Configure(concurrentScheduling);
+        Volatile.Write(ref _recheckSeconds, recheckSeconds is { } value ? Math.Clamp(value, 1, 60) : 0);
+    }
 
     public async Task<string> SubmitChainsAsync(string section, string release, string pairs)
     {
@@ -165,7 +170,7 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
                 foreach (var completed in _races.Where(pair => pair.Value.IsCompleted).Select(pair => pair.Key).ToArray()) _races.Remove(completed);
                 if (_races.Count >= 2048) throw new InvalidOperationException("VISIONARY backlog is full (2048 active/waiting watches). Try again after watches finish.");
                 var options = VisionaryRaceOptions.Load();
-                if (_recheckSeconds is { } seconds) options = options with { RecheckSeconds = Math.Clamp(seconds, 1, 60) };
+                if (Volatile.Read(ref _recheckSeconds) is > 0 and var seconds) options = options with { RecheckSeconds = Math.Clamp(seconds, 1, 60) };
                 long chain = 0, dll = 0;
                 if (fields.Length >= 7) { long.TryParse(fields[5], out chain); long.TryParse(fields[6], out dll); }
                 var state = new VisionaryRaceState(options) { StartTrace = new RaceStartTrace($"{fields[1]} {fields[2]}: {fields[3]} -> {fields[4]}", received, chain, dll, _log) };
@@ -265,7 +270,8 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
                 if (completed) break;
                 // Incoming Visi updates wake immediately; periodic checks also recover
                 // locks and growing sources when the bots send no further announcement.
-                await notification.WaitAsync(TimeSpan.FromSeconds(options.EffectiveRecheckSeconds), lifetime.Token);
+                var currentRecheck = Volatile.Read(ref _recheckSeconds);
+                await notification.WaitAsync(TimeSpan.FromSeconds(currentRecheck > 0 ? currentRecheck : options.EffectiveRecheckSeconds), lifetime.Token);
             }
             _log?.Invoke($"VISIONARY {request.Name}: {request.SrcSite} -> {request.DstSite} COMPLETE: final transfers finished");
         }

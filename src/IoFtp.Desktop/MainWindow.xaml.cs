@@ -155,6 +155,8 @@ public partial class MainWindow : Window
             catch (Exception exception) { AppendFtpLog(Environment.NewLine + "RACE idle slots: " + FriendlyMessage(exception)); }
         };
         _racePoolTimer.Start();
+        _serverStatsTimer.Tick += async (_, _) => await RefreshServerStatsAsync();
+        _serverStatsTimer.Start();
         _hardResetTimer.Tick += (_, _) => MaintainHardResetCandidates();
         _hardResetTimer.Start();
         ReloadQuickSites(LeftQuickSites);
@@ -330,7 +332,7 @@ public partial class MainWindow : Window
         var commands = new SiteCommandLogRouter();
         session.ProtocolMessage += message => Dispatcher.BeginInvoke(() =>
         {
-            if (commands.Route(message)) { AppendCommands($"[{siteName}] {message}"); return; }
+            if (commands.Route(message, _settings.StatusCommand)) { AppendCommands($"[{siteName}] {message}"); return; }
             if (VisionaryLogVisibility.Is550(message)) { Append550(message, "FTP", siteName); return; }
             AppendFtpLog($"{Environment.NewLine}{DateTime.Now:HH:mm:ss} [{siteName}] {message}");
             LogText.ScrollToEnd();
@@ -2428,6 +2430,9 @@ public partial class MainWindow : Window
         }
     }
     private readonly Dictionary<(Guid Site, string Command), MetricServerStats> _serverStats = [];
+    // Check for a free shared session each minute; per-site requests use the configured interval.
+    private readonly System.Windows.Threading.DispatcherTimer _serverStatsTimer = new() { Interval = TimeSpan.FromMinutes(1) };
+    private bool _refreshingServerStats;
     private bool _visionaryDebugEnabled = MetricsPanel.ReadDebugPreference();
 
     private void AppendFtpLog(string message) => LogText.AppendText(FtpLogTimestamp.Format(message, DateTime.Now));
@@ -3140,6 +3145,7 @@ public partial class MainWindow : Window
     {
         SaveWindowLayout();
         _racePoolTimer.Stop();
+        _serverStatsTimer.Stop();
         _siteHealthTimer.Stop();
         _workerPoolShuttingDown = true;
         _racePoolStop.Cancel();
@@ -3838,6 +3844,7 @@ public partial class MainWindow : Window
         var dialog = new GlobalSettingsWindow(_settings) { Owner = this };
         if (dialog.ShowDialog() == true && dialog.Settings is not null)
         {
+            var previousSettings = _settings;
             _settings = dialog.Settings;
             ConfigureSiteHealth();
             _loggedSkipMatches.Clear();
@@ -3853,9 +3860,16 @@ public partial class MainWindow : Window
             ConfigureTrayIcon();
             UpdateLegendBar();
             _engine.ConfigureLocalSlots(_settings.MaxLocalDownloadSlots, _settings.MaxLocalUploadSlots, _settings.SerializeLocalTransfers);
-            AppendFtpLog($"{Environment.NewLine}Global settings updated.");
-            await RestartApiServerAsync();
-            await RestartIrcAsync();
+            AppendFtpLog($"{Environment.NewLine}Global settings updated. Transfers continue.");
+            if (_apiServer is not null)
+            {
+                if (_apiServer.UpdateRuntimeSettings(_settings))
+                    AppendCommands("API/bridge connection changes saved. Restart FluxFTP to apply them; current transfers and race watches continue.");
+            }
+            else if (_settings.EnableHttpsApi || _settings.EnableVisionaryBridge)
+                await RestartApiServerAsync();
+            // Reconnecting IRC is only necessary when its own settings changed.
+            if (previousSettings.Irc != _settings.Irc) await RestartIrcAsync();
         }
     }
 
@@ -4142,7 +4156,6 @@ public partial class MainWindow : Window
                     ForgetRaceJobs(race);
                     ReleaseRaceDestinationIfIdle(race);
                 });
-                if (finished) await ReadRaceServerStatsAsync(request, token);
             }
             return finished;
         }
@@ -4187,69 +4200,40 @@ public partial class MainWindow : Window
 
     private async Task RefreshServerStatsAsync()
     {
-        var profiles = new ProfileStore().Load();
-        foreach (var profile in profiles)
-        {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            try
-            {
-                const string kind = "STATS";
-                var reply = await _raceListings.TryReadStatsAsync(ApplyGlobalProxy(profile), timeout.Token);
-                if (reply is { StatusCode: >= 200 and < 300 })
-                {
-                    if (kind == "STATS") _serverStats.Remove((profile.Id, "USER"));
-                    _serverStats[(profile.Id, kind)] = new(profile.Name, profile.Username, DateTimeOffset.UtcNow, ServerTransferReport.Clean(reply.Message), kind);
-                }
-                else if (!_serverStats.Keys.Any(key => key.Site == profile.Id))
-                    _serverStats[(profile.Id, "STATUS")] = new(profile.Name, profile.Username, DateTimeOffset.UtcNow,
-                        reply is null ? "No idle shared session. Use/connect this site and retry." : $"Server returned {reply.StatusCode}: {ServerTransferReport.Clean(reply.Message)}", "STATUS");
-            }
-            catch (Exception ex)
-            {
-                _serverStats[(profile.Id, "STATUS")] = new(profile.Name, profile.Username, DateTimeOffset.UtcNow, "Statistics unavailable: " + FriendlyMessage(ex), "STATUS");
-            }
-        }
-    }
-
-    private async Task ReadRaceServerStatsAsync(ApiTransferRequest request, CancellationToken token)
-    {
+        if (_refreshingServerStats || _workerPoolShuttingDown) return;
+        _refreshingServerStats = true;
         try
         {
-            var profiles = await Dispatcher.InvokeAsync(() => new ProfileStore().Load()
-                .Where(profile => profile.Name.Equals(request.SrcSite, StringComparison.OrdinalIgnoreCase) ||
-                    profile.Name.Equals(request.DstSite, StringComparison.OrdinalIgnoreCase)).Select(ApplyGlobalProxy).ToArray());
-            foreach (var profile in profiles)
-            foreach (var command in new[] { "STATS" })
+            foreach (var profile in new ProfileStore().Load())
             {
-                string message;
-                MetricServerStats? stats = null;
+                if (_workerPoolShuttingDown) break;
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_racePoolStop.Token);
+                timeout.CancelAfter(TimeSpan.FromSeconds(5));
+                var command = _settings.StatusCommand.Trim();
                 try
                 {
-                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
-                    timeout.CancelAfter(TimeSpan.FromSeconds(5));
-                    var reply = await _raceListings.TryReadStatsAsync(profile, timeout.Token, userDetails: command == "USER");
-                    if (reply is { StatusCode: >= 200 and < 300 } && ServerTransferReport.Clean(reply.Message) is { Length: > 0 } report)
+                    var reply = await _raceListings.TryReadStatsAsync(ApplyGlobalProxy(profile), timeout.Token,
+                        command: command, intervalMinutes: _settings.StatusCommandIntervalMinutes);
+                    // No idle login or not due yet: keep the cached report, without log noise.
+                    if (reply is null) continue;
+                    var report = ServerTransferReport.Clean(reply.Message);
+                    // AttachProtocolLog routes the command and complete multiline reply
+                    // directly to COMMANDS. Do not append a second copy here.
+                    if (reply.StatusCode is >= 200 and < 300)
                     {
-                        stats = new(profile.Name, profile.Username, DateTimeOffset.UtcNow, report, command);
-                        message = $"SERVER STATS [{profile.Name}] {request.Name} · SITE { (command == "USER" ? profile.Username : "STATS " + profile.Username) }{Environment.NewLine}{report}";
+                        foreach (var key in _serverStats.Keys.Where(key => key.Site == profile.Id).ToArray())
+                            _serverStats.Remove(key);
+                        _serverStats[(profile.Id, command)] = new(profile.Name, profile.Username, DateTimeOffset.UtcNow, report, command);
                     }
-                    else message = $"SERVER DETAILS [{profile.Name}] SITE { (command == "USER" ? profile.Username : "STATS " + profile.Username) }: " +
-                        (reply is null ? "Skipped: no idle shared control session available." : $"{reply.StatusCode} {reply.Message}");
                 }
-                catch (Exception exception) { message = $"SERVER DETAILS [{profile.Name}] {request.Name}: SITE {command} unavailable ({FriendlyMessage(exception)}). Race result unchanged."; }
-                await Dispatcher.InvokeAsync(() =>
+                catch (OperationCanceledException) when (_racePoolStop.IsCancellationRequested) { break; }
+                catch (Exception error)
                 {
-                    if (stats is not null) _serverStats[(profile.Id, command)] = stats;
-                    _raceLog.Write("SERVER-STATS", message);
-                    AppendConnectionLog(Environment.NewLine + message);
-                    LogText.ScrollToEnd();
-                });
+                    AppendCommands($"[{profile.Name}] {command} unavailable: {FriendlyMessage(error)}");
+                }
             }
         }
-        catch (Exception exception)
-        {
-            await Dispatcher.InvokeAsync(() => _raceLog.Write("SERVER-STATS", "Optional SITE STATS unavailable: " + FriendlyMessage(exception)));
-        }
+        finally { _refreshingServerStats = false; }
     }
 
     private async Task UpdateVisionarySlotsAsync(ApiTransferRequest request) => await Dispatcher.InvokeAsync(() =>

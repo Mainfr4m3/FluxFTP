@@ -2,6 +2,12 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.54 — 2026-10-27 (Windows)
+
+- Saving Global Settings preserves active transfers, API spread jobs and Visionary watches instead of restarting the bridge/API. Scheduling capacity, race polling and spread limits update live; lowering capacity lets active steps finish. Changes to API/bridge listener enablement, port, bind address or credentials are saved for the next FluxFTP start, with a message in COMMANDS. IRC only reconnects if its own settings changed.
+
+- Adds Global Settings > Status commands with an editable command and interval in minutes. Defaults to SITE WKUP 50 once per hour per site, replacing automatic SITE STATS user requests after races. Uses idle shared sessions, defers busy/offline sites and preserves complete replies in COMMANDS without duplicate summary output. Changes to the command or interval apply after saving.
+
 ## 2.1.53 — 2026-10-27 (Windows test build)
 
 - Ordinary local-to-server uploads restore the source file's modification date and time after successful transfer, including resumed uploads, through FTP/FTPS MFMT or SFTP metadata. A rejected metadata update produces a short warning without re-uploading the completed file. Creation times and FXP transfers are unchanged.

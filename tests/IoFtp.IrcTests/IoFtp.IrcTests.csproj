@@ -6,6 +6,8 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../../src/IoFtp.Desktop/Services/SiteStatusCommand.cs" Link="SiteStatusCommand.cs" />
+    <Compile Include="../../src/IoFtp.Desktop/Services/SettingsLiveUpdate.cs" Link="SettingsLiveUpdate.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/QueueOrder.cs" Link="QueueOrder.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/SiteHealthMonitor.cs" Link="SiteHealthMonitor.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/FtpLogTimestamp.cs" Link="FtpLogTimestamp.cs" />

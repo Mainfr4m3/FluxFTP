@@ -28,6 +28,15 @@ internal sealed class ApiServer : IAsyncDisposable
     private int _nextSpreadJobId;
     private readonly CancellationTokenSource _spreadLifetime = new();
     private readonly List<Task> _spreadTasks = new();
+    private GlobalSettings _runtimeSettings = new();
+    private GlobalSettings _listenerSettings = new();
+
+    public bool UpdateRuntimeSettings(GlobalSettings settings)
+    {
+        Volatile.Write(ref _runtimeSettings, settings);
+        _visionaryPipe?.UpdateScheduling(settings.VisionaryConcurrentScheduling, settings.VisionaryRecheckSeconds);
+        return SettingsLiveUpdate.ApiListenerChanged(_listenerSettings, settings);
+    }
 
     public async Task StartAsync(GlobalSettings settings, Func<IReadOnlyList<TransferJobInfo>> getJobs,
         Func<ApiTransferRequest, Task<object>> startTransfer, Func<ApiDownloadRequest, Task<object>> startDownload,
@@ -37,6 +46,8 @@ internal sealed class ApiServer : IAsyncDisposable
         Func<ApiTransferRequest, Task>? visionarySlots = null, Func<string, int>? sourcePriority = null,
         Action<ApiTransferRequest>? raceObserved = null, Action<string, string, string>? raceResult = null)
     {
+        _listenerSettings = settings;
+        Volatile.Write(ref _runtimeSettings, settings);
         if (settings.EnableVisionaryBridge || settings.EnableHttpsApi)
         {
             _visionaryPipe = new VisionaryPipeServer(startTransfer, diagnosticLog, visionaryStep, visionarySlots,
@@ -278,13 +289,13 @@ internal sealed class ApiServer : IAsyncDisposable
                 var sites = request.Sites.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
                 var coordinator = new SpreadRaceCoordinator(sites, request.SitesDlonly ?? []);
                 var options = VisionaryRaceOptions.Load();
-                if (settings.VisionaryRecheckSeconds is { } seconds) options = options with { RecheckSeconds = Math.Clamp(seconds, 1, 60) };
+                if (Volatile.Read(ref _runtimeSettings).VisionaryRecheckSeconds is { } seconds) options = options with { RecheckSeconds = Math.Clamp(seconds, 1, 60) };
                 options.Validate();
                 lock (_spreadJobsLock)
                 {
                     if (_spreadJobs.TryGetValue(request.Name, out var active) && active.Coordinator.Status == "RUNNING")
                         return Results.Conflict(new { error = "Release already has an active spread job" });
-                    var spreadLimit = Math.Clamp(settings.MaxActiveSpreadJobs, 1, 2048);
+                    var spreadLimit = Math.Clamp(Volatile.Read(ref _runtimeSettings).MaxActiveSpreadJobs, 1, 2048);
                     if (_spreadJobs.Values.Count(job => job.Coordinator.Status == "RUNNING") >= spreadLimit)
                     {
                         diagnosticLog?.Invoke($"Spread job rejected: maximum active spread jobs ({spreadLimit}) reached; {request.Name}");

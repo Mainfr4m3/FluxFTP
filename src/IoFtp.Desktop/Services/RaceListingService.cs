@@ -15,6 +15,7 @@ internal sealed class RaceListingService : IAsyncDisposable
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Task _cleanup;
     private readonly TimeSpan _freshness;
+    private readonly Func<DateTimeOffset> _utcNow;
     private sealed class Source
     {
         public int Invalidated;
@@ -25,13 +26,17 @@ internal sealed class RaceListingService : IAsyncDisposable
         public long LastUsed = Stopwatch.GetTimestamp();
         public DateTimeOffset LoginRetryAfter;
         public string? LoginFailure;
+        public DateTimeOffset? LastStatistics;
+        public string? LastStatisticsCommand;
     }
     private sealed record Snapshot(long At, IReadOnlyList<RemoteEntry> Entries);
 
-    public RaceListingService(Func<ConnectionProfile, CancellationToken, Task<IRemoteSession>> connect, TimeSpan? freshness = null)
+    public RaceListingService(Func<ConnectionProfile, CancellationToken, Task<IRemoteSession>> connect, TimeSpan? freshness = null,
+        Func<DateTimeOffset>? utcNow = null)
     {
         _connect = connect;
         _freshness = freshness ?? TimeSpan.FromSeconds(1);
+        _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _cleanup = CleanupAsync();
     }
 
@@ -185,10 +190,13 @@ internal sealed class RaceListingService : IAsyncDisposable
         finally { source.LastUsed = Stopwatch.GetTimestamp(); source.Gate.Release(); }
     }
 
-    public async Task<RemoteCommandResult?> TryReadStatsAsync(ConnectionProfile profile, CancellationToken token, bool userDetails = false)
+    public async Task<RemoteCommandResult?> TryReadStatsAsync(ConnectionProfile profile, CancellationToken token, bool userDetails = false,
+        string command = SiteStatusCommand.DefaultCommand, int intervalMinutes = SiteStatusCommand.DefaultIntervalMinutes)
     {
-        // SITE <username> and SITE USER queries are disabled; retain STATS only.
+        // Use the configured status command. Legacy automatic SITE USER queries stay disabled.
         if (userDetails) return null;
+        SiteStatusCommand.Validate(command, intervalMinutes);
+        command = command.Trim();
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token, _shutdown.Token);
         token = lifetime.Token;
         // Diagnostics must not open additional logins or queue ahead of active race listings.
@@ -196,11 +204,16 @@ internal sealed class RaceListingService : IAsyncDisposable
         try
         {
             if (source.Profile != profile || source.Session?.IsConnected != true) return null;
-            var username = source.Profile.Username;
-            if (string.IsNullOrWhiteSpace(username) || username.Any(char.IsControl)) return null;
+            var now = _utcNow();
+            if (source.LastStatisticsCommand == command && source.LastStatistics is { } last && now < last.AddMinutes(intervalMinutes)) return null;
+            token.ThrowIfCancellationRequested();
+            // Keep the per-site deadline through idle disconnects/reconnections.
+            // Rejections also wait for the configured interval instead of repeating every minute.
+            source.LastStatistics = now;
+            source.LastStatisticsCommand = command;
             try
             {
-                return await source.Session.ExecuteCommandAsync("SITE STATS " + username, token).ConfigureAwait(false);
+                return await source.Session.ExecuteCommandAsync(command, token).ConfigureAwait(false);
             }
             catch { await CloseAsync(source).ConfigureAwait(false); throw; }
         }

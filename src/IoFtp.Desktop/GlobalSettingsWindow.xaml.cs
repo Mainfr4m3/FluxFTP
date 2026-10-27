@@ -94,6 +94,8 @@ public partial class GlobalSettingsWindow : Window
         ExpirationBox.Text=$"{s.PreparedJobExpirationSeconds}"; StarterBox.Text=$"{s.StarterTimeoutSeconds}"; RuntimeBox.Text=$"{s.MaxTransferRuntimeMinutes}"; JobHistoryBox.Text=$"{s.TransferJobHistory}"; TransferHistoryBox.Text=$"{s.TransferHistory}"; LogHistoryBox.Text=$"{s.LogBufferHistory}";
         AutoHardResetBox.IsChecked = s.AutoHardReset;
         SiteHealthEnabledBox.IsChecked = s.EnableSiteHealthMonitor;
+        StatusCommandBox.Text = s.StatusCommand;
+        StatusCommandIntervalBox.Text = s.StatusCommandIntervalMinutes.ToString();
         SiteHealthCheckBox.Text = s.SiteHealthCheckSeconds.ToString(); SiteHealthRetryBox.Text = s.SiteHealthRetrySeconds.ToString(); SiteHealthFailuresBox.Text = s.SiteHealthFailures.ToString();
         MaxSpreadJobsBox.Text = s.MaxActiveSpreadJobs.ToString();
         VisionarySchedulingBox.Text = s.VisionaryConcurrentScheduling.ToString();
@@ -144,6 +146,10 @@ public partial class GlobalSettingsWindow : Window
     }
     private void Save_Click(object sender, RoutedEventArgs e)
     {
+        if (!int.TryParse(StatusCommandIntervalBox.Text, out var statusInterval))
+        { MessageBox.Show(this, "Enter a whole number of minutes for the status command interval."); return; }
+        try { SiteStatusCommand.Validate(StatusCommandBox.Text, statusInterval); }
+        catch (ArgumentException error) { MessageBox.Show(this, error.Message); return; }
         if (_backupBusy) return;
         ErrorText.Text = "";
         try { _ = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(SkippedColorBox.Text); }
@@ -190,6 +196,7 @@ public partial class GlobalSettingsWindow : Window
         { ErrorText.Text = "Race recheck interval must be between 1 and 60 seconds."; return; }
         Settings = Settings with { DownloadTempPath = DownloadTempBox.Text.Trim(), VisionaryRecheckSeconds = recheckSeconds, VisionaryConcurrentScheduling = visionaryScheduling, MaxActiveSpreadJobs = maxSpreadJobs, AutoHardReset = AutoHardResetBox.IsChecked == true, HardResetCooldownSeconds = N(HardResetCooldownBox), HardResetRetries = N(HardResetRetriesBox), HardResetLookbackMinutes = N(HardResetLookbackBox), EnableVisionaryBridge = _visionaryBridge, SerializeLocalTransfers = SerializeLocalBox.IsChecked == true,
             EnableSiteHealthMonitor = SiteHealthEnabledBox.IsChecked == true, SiteHealthCheckSeconds = N(SiteHealthCheckBox), SiteHealthRetrySeconds = N(SiteHealthRetryBox), SiteHealthFailures = N(SiteHealthFailuresBox),
+            StatusCommand = StatusCommandBox.Text.Trim(), StatusCommandIntervalMinutes = statusInterval,
             SmartResume = SmartResumeBox.IsChecked == true, SmartResumeAttempts = (int)(SmartResumeAttemptsBox.SelectedItem ?? 2),
             StatusBarFontSize = (int)(StatusFontBox.SelectedItem ?? 12), StatusBarScrollSpeed = (int)(ScrollSpeedBox.SelectedItem ?? 60),
             TransferCategoryOrder = string.Join("\n", PriorityCategoriesList.Items.Cast<string>()),

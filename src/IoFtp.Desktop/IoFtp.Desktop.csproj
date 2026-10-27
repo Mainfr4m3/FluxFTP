@@ -8,9 +8,9 @@
     <AssemblyName>FluxFTP</AssemblyName>
     <Product>FluxFTP</Product>
     <Title>FluxFTP</Title>
-    <Version>2.1.53</Version>
-    <AssemblyVersion>2.1.53.0</AssemblyVersion>
-    <FileVersion>2.1.53.0</FileVersion>
+    <Version>2.1.54</Version>
+    <AssemblyVersion>2.1.54.0</AssemblyVersion>
+    <FileVersion>2.1.54.0</FileVersion>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <RootNamespace>IoFtp.Desktop</RootNamespace>
     <ApplicationIcon>Assets\fluxftp-server.ico</ApplicationIcon>
