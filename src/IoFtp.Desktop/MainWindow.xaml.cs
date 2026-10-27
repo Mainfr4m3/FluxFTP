@@ -2072,6 +2072,7 @@ public partial class MainWindow : Window
                 var session = entry.Direction == TransferDirection.Upload ? rightWorker! : leftWorker!;
                 await EnsureRemoteDirectoryAsync(session, RemoteParent(entry.Destination), cancellationToken);
                 await using var input = new FileStream(entry.Source, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, true);
+                var sourceModifiedAt = new DateTimeOffset(File.GetLastWriteTimeUtc(entry.Source));
                 var offset = FtpTransferMode.CanResume(entry.Destination, (entry.Direction == TransferDirection.Upload ? rightProfile! : leftProfile!).EffectiveOptions) ? Math.Min(entry.BytesTransferred, input.Length) : 0; input.Seek(offset, SeekOrigin.Begin);
                 sessionNewBytes = input.Length - offset;
                 await ResumeRecovery.RunAsync(offset, _settings.OverwriteIfResumeFails, async attemptOffset =>
@@ -2083,6 +2084,7 @@ public partial class MainWindow : Window
                     await session.UploadAsync(entry.Destination, input, attemptOffset, progress, cancellationToken);
                 }, async () => { await session.ReconnectForRetryAsync(cancellationToken); entry.BytesTransferred = 0; }, message => { AppendFtpLog(Environment.NewLine + entry.Name + ": " + message); _raceLog.Write("RESUME", entry.Id + " " + message); }, cancellationToken);
                 AppendTransferIntegrityNotices(entry, ("destination", session));
+                await PreserveUploadTimestampAsync(session, entry, sourceModifiedAt, cancellationToken);
             }
             else
             {
@@ -2600,6 +2602,28 @@ public partial class MainWindow : Window
             }
         }
         finally { _racePoolGate.Release(); }
+    }
+
+    private async Task PreserveUploadTimestampAsync(FtpRemoteSession session, QueueEntryView entry,
+        DateTimeOffset sourceModifiedAt, CancellationToken cancellationToken)
+    {
+        string? warning = null;
+        try
+        {
+            var result = await session.SetModifiedTimeAsync(entry.Destination, sourceModifiedAt, cancellationToken);
+            if (result.StatusCode is < 200 or >= 300)
+                warning = $"{result.StatusCode}: {result.Message}";
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException or TimeoutException or Renci.SshNet.Common.SshException)
+        {
+            // File data has already arrived. Do not upload it again for a metadata failure.
+            warning = FriendlyMessage(exception);
+        }
+        if (warning is not null)
+        {
+            AppendFtpLog(Environment.NewLine + $"TIMESTAMP NOT PRESERVED: {entry.Name}");
+            _raceLog.Write("TIMESTAMP", $"{entry.Id} {entry.Destination}: {warning}");
+        }
     }
 
     private void AppendTransferIntegrityNotices(QueueEntryView entry,

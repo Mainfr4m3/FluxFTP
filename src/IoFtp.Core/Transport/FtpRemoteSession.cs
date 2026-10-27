@@ -764,6 +764,15 @@ public sealed class FtpRemoteSession : IRemoteSession
             await data.FlushAsync(cancellationToken);
         }, cancellationToken);
 
+    /// <summary>Restores the source modification time after a completed upload.</summary>
+    public async Task<RemoteCommandResult> SetModifiedTimeAsync(string remotePath, DateTimeOffset modifiedAt, CancellationToken cancellationToken)
+    {
+        if (_sftpSession is not null)
+            return await _sftpSession.SetModifiedTimeAsync(remotePath, modifiedAt, cancellationToken);
+        var timestamp = modifiedAt.UtcDateTime.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture);
+        return await ExecuteCommandAsync($"MFMT {timestamp} {remotePath}", cancellationToken);
+    }
+
     public Task<RemoteCommandResult> ExecuteCommandAsync(string command, CancellationToken cancellationToken)
         => ExecuteCommandCoreAsync(command, cancellationToken, false);
 

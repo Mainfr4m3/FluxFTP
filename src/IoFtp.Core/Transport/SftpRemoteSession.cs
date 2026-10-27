@@ -108,6 +108,13 @@ public sealed class SftpRemoteSession : IRemoteSession
         await CopyWithProgressAsync(source, destination, offset, progress, cancellationToken);
     }
 
+    public async Task<RemoteCommandResult> SetModifiedTimeAsync(
+        string remotePath, DateTimeOffset modifiedAt, CancellationToken cancellationToken)
+    {
+        await Task.Run(() => Client().SetLastWriteTimeUtc(remotePath, modifiedAt.UtcDateTime), cancellationToken);
+        return new RemoteCommandResult(200, "Modification time preserved");
+    }
+
     public Task<RemoteCommandResult> ExecuteCommandAsync(
         string command, CancellationToken cancellationToken)
     {

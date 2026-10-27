@@ -2,6 +2,11 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.53 — 2026-10-27 (Windows test build)
+
+- Ordinary local-to-server uploads restore the source file's modification date and time after successful transfer, including resumed uploads, through FTP/FTPS MFMT or SFTP metadata. A rejected metadata update produces a short warning without re-uploading the completed file. Creation times and FXP transfers are unchanged.
+- Includes bridge metrics reader 5: direct two-second timer startup and simplified titlebar cleanup conditions. The metrics titlebar update is confirmed working on the user's mIRC 7.52 VM.
+
 ## Bridge metrics reader 3 — 2026-10-27 (VM test)
 
 - Replaces compound heartbeat acceptance conditions with individual checks for mIRC 7.52 compatibility and reports the precise rejection reason in local metrics status. The timer callback is public and the offline timer follows the active IRC connection; enabling metrics reports timer state. This follows a VM report showing an existing two-field, one-second-old heartbeat being rejected by reader 2.

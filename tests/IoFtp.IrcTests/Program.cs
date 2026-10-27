@@ -8,6 +8,7 @@ using IoFtp.Desktop.Models;
 using IoFtp.Desktop.Services;
 
 var assertions = 0;
+if (args.FirstOrDefault() == "--upload-timestamp-checks") { await UploadTimestampChecks.Run(); return; }
 if (args.FirstOrDefault() == "--site-health-checks") { await SiteHealthChecks.Run(); return; }
 if (args.FirstOrDefault() == "--linux-backup-fixture") { WindowsLinuxBackupFixture.Write(args[1]); return; }
 if (args.FirstOrDefault() == "--visi-slot-checks") { await VisionaryLiveSlotChecks.Run(); return; }
