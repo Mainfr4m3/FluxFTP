@@ -8,6 +8,8 @@ using IoFtp.Desktop.Models;
 using IoFtp.Desktop.Services;
 
 var assertions = 0;
+if (args.FirstOrDefault() == "--section-chain-checks") { await SectionChainPolicyChecks.Run(); return; }
+if (args.FirstOrDefault() == "--site-tools-checks") { await SiteToolsChecks.Run(); return; }
 if (args.FirstOrDefault() == "--hard-slot-checks") { await HardSlotLimitChecks.Run(); return; }
 if (args.FirstOrDefault() == "--live-settings-checks") { await LiveSettingsChecks.Run(); return; }
 if (args.FirstOrDefault() == "--upload-timestamp-checks") { await UploadTimestampChecks.Run(); return; }
@@ -331,7 +333,9 @@ if (args.FirstOrDefault() == "--rush-migration-checks")
 if (args.FirstOrDefault() == "--visionary-checks")
 {
     VisionaryConfigurationChecks.Run();
-    VisionaryRaceChecks.Run();
+    await SectionChainPolicyChecks.Run();
+await SiteToolsChecks.Run();
+VisionaryRaceChecks.Run();
     VisionaryPayloadChecks.Run();
     foreach (var path in args.Skip(1))
     {
@@ -361,6 +365,8 @@ if (projectLines.Length != 1 || !projectLines[0].Contains("2026-09-29 12:00 UTC"
 ProfileStoreChecks.Run();
 GlobalSettingsChecks.Run();
 VisionaryConfigurationChecks.Run();
+await SectionChainPolicyChecks.Run();
+await SiteToolsChecks.Run();
 VisionaryRaceChecks.Run();
 VisionaryPayloadChecks.Run();
 FtpRushMigrationChecks.Run();

@@ -20,6 +20,7 @@ public partial class SiteOptionsWindow : Window
         InitializeComponent();
         SiteSummary.Text = $"{profile.Name}   {TransferProtocolNames.Display(profile.Protocol)}   {profile.Host}:{profile.Port}";
         var options = profile.EffectiveOptions;
+        LinkSpeedBox.SelectedIndex = options.LinkSpeedGbps switch { 1 => 1, 10 => 2, _ => 0 };
         MaxSlotsBox.Text = options.MaxSlots.ToString(); UploadSlotsBox.Text = options.MaxUploadSlots.ToString(); DownloadSlotsBox.Text = options.MaxDownloadSlots.ToString();
         PriorityBox.Text = options.Priority.ToString(); AllowUploadBox.IsChecked = options.AllowUpload; AllowDownloadBox.IsChecked = options.AllowDownload;
         UseCpsvBox.IsChecked = options.UseCpsv;
@@ -110,7 +111,7 @@ public partial class SiteOptionsWindow : Window
             OpenSslTlsBox.IsChecked == true, ImportedSkipBox.Text, ImportedPriorityBox.Text, VisionaryRulesBox.Text,
             (FtpTextEncoding)Math.Max(0, TextEncodingBox.SelectedIndex), Utf8LoginBox.IsChecked == true,
             (FtpAuthCommand)Math.Max(0, AuthCommandBox.SelectedIndex), EarlyPbszBox.IsChecked == true, Tls12OnlyBox.IsChecked == true);
-        Options = Options with { UseCpsv = UseCpsvBox.IsChecked == true };
+        Options = Options with { UseCpsv = UseCpsvBox.IsChecked == true, LinkSpeedGbps = LinkSpeedBox.SelectedIndex switch { 1 => 1, 2 => 10, _ => 0 } };
         SiteProxy = proxyType switch
         {
             null => null,

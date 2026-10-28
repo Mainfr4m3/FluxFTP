@@ -99,6 +99,7 @@ public partial class GlobalSettingsWindow : Window
         SiteHealthCheckBox.Text = s.SiteHealthCheckSeconds.ToString(); SiteHealthRetryBox.Text = s.SiteHealthRetrySeconds.ToString(); SiteHealthFailuresBox.Text = s.SiteHealthFailures.ToString();
         MaxSpreadJobsBox.Text = s.MaxActiveSpreadJobs.ToString();
         VisionarySchedulingBox.Text = s.VisionaryConcurrentScheduling.ToString();
+        VisionarySectionChainsBox.IsChecked = s.VisionarySectionChains;
         VisionaryRecheckBox.Text = (s.VisionaryRecheckSeconds ?? VisionaryRaceOptions.Load().EffectiveRecheckSeconds).ToString();
         HardResetCooldownBox.Text = s.HardResetCooldownSeconds.ToString(); HardResetRetriesBox.Text = s.HardResetRetries.ToString(); HardResetLookbackBox.Text = s.HardResetLookbackMinutes.ToString();
         UsernameBox.Text=s.DefaultUsername; ProtocolBox.SelectedItem=((ProtocolChoice[])ProtocolBox.ItemsSource).First(choice => choice.Protocol == s.DefaultProtocol); SlotsBox.Text=$"{s.DefaultSlots}"; UploadsBox.Text=$"{s.DefaultUploadSlots}"; DownloadsBox.Text=$"{s.DefaultDownloadSlots}"; DefaultIdleBox.Text=$"{s.DefaultIdleSeconds}";
@@ -190,6 +191,7 @@ public partial class GlobalSettingsWindow : Window
         Settings = new GlobalSettings(BindBox.Text.Trim(),N(PortFromBox),N(PortToBox),ApiEnabledBox.IsChecked==true,N(ApiPortBox),ApiLocalBox.IsChecked==true,N(ExpirationBox),N(StarterBox),N(RuntimeBox),N(JobHistoryBox),N(TransferHistoryBox),N(LogHistoryBox),UsernameBox.Text.Trim(),N(SlotsBox),N(UploadsBox),N(DownloadsBox),((ProtocolChoice)ProtocolBox.SelectedItem).Protocol,N(DefaultIdleBox),LocalPathBox.Text.Trim(),N(LocalDownloadsBox),N(LocalUploadsBox),PriorityPatternsBox.Text.Trim(),SkipPatternsBox.Text.Trim(),ApiPasswordBox.Password,MinimizeToTrayBox.IsChecked==true,LegendModeBox.SelectedItem?.ToString() ?? "Compact",(ProxyType)(ProxyTypeBox.SelectedItem ?? ProxyType.None),ProxyHostBox.Text.Trim(),N(ProxyPortBox),ProxyUsernameBox.Text.Trim(),ProxyPasswordBox.Password,ProxyDnsBox.IsChecked==true,ProxyDataBox.IsChecked==true,CheckUpdatesBox.IsChecked==true, _advancedSkipRules.ToArray(), theme, irc);
         if (!int.TryParse(MaxSpreadJobsBox.Text, out var maxSpreadJobs) || maxSpreadJobs is < 1 or > 2048)
         { ErrorText.Text = "Maximum active spread jobs must be between 1 and 2048."; return; }
+        Settings = Settings with { VisionarySectionChains = VisionarySectionChainsBox.IsChecked == true };
         if (!int.TryParse(VisionarySchedulingBox.Text, out var visionaryScheduling) || visionaryScheduling is < 1 or > 2048)
         { ErrorText.Text = "Visionary concurrent scheduling must be between 1 and 2048."; return; }
         if (!int.TryParse(VisionaryRecheckBox.Text, out var recheckSeconds) || recheckSeconds is < 1 or > 60)

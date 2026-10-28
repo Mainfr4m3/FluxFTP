@@ -43,6 +43,7 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Rules/_site/README.md') -Destin
 Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'Rules/_site') -Filter '*.example' | Copy-Item -Destination $guides
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'docs/releasing.md') -Destination $guides
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'docs/site-monitor-sv.md') -Destination $guides
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'docs/site-tools-and-section-chains.md') -Destination $guides
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README.md') -Destination (Join-Path $guides 'FluxFTP-README.md')
 Compress-Archive -LiteralPath $guides -DestinationPath (Join-Path $output "FluxFTP-v$Version-rules-and-guides.zip")
 Get-ChildItem -LiteralPath $output -File | Where-Object Name -ne 'SHA256SUMS.txt' | Sort-Object Name | ForEach-Object {

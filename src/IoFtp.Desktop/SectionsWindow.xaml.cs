@@ -16,7 +16,7 @@ public partial class SectionsWindow : Window
         ValidationModeColumn.ItemsSource = Enum.GetValues<SectionValidationMode>();
         foreach (var section in _store.Load())
             foreach (var site in section.SitePaths.DefaultIfEmpty(new KeyValuePair<string, string>("ioFTPD", "/")))
-                _rows.Add(new(section.Name, site.Key, site.Value, section.Hotkey, section.AllowPatterns, section.DenyPatterns, section.ValidationMode));
+                _rows.Add(new(section.Name, site.Key, site.Value, section.Hotkey, section.AllowPatterns, section.DenyPatterns, section.ValidationMode, section.TradingSites?.Contains(site.Key, StringComparer.OrdinalIgnoreCase) == true));
         SectionsGrid.ItemsSource = _rows;
     }
 
@@ -40,7 +40,7 @@ public partial class SectionsWindow : Window
             foreach (var section in imported)
             foreach (var site in section.SitePaths.DefaultIfEmpty(new KeyValuePair<string, string>("ioFTPD", "/")))
                 _rows.Add(new(section.Name, site.Key, site.Value, section.Hotkey, section.AllowPatterns,
-                    section.DenyPatterns, section.ValidationMode));
+                    section.DenyPatterns, section.ValidationMode, section.TradingSites?.Contains(site.Key, StringComparer.OrdinalIgnoreCase) == true));
             MessageBox.Show($"Imported {imported.Count} sections. Review them and press Save to apply the changes.",
                 "Import Sections", MessageBoxButton.OK, MessageBoxImage.Information);
         }
@@ -58,7 +58,7 @@ public partial class SectionsWindow : Window
             .GroupBy(item => item.Name.Trim(), StringComparer.OrdinalIgnoreCase)
             .Select(group => new SectionDefinition(group.Key,
                 group.GroupBy(item => item.Site.Trim(), StringComparer.OrdinalIgnoreCase).ToDictionary(site => site.Key, site => site.Last().Path.Trim(), StringComparer.OrdinalIgnoreCase),
-                group.First().Hotkey, group.First().AllowPatterns.Trim(), group.First().DenyPatterns.Trim(), group.First().ValidationMode)));
+                group.First().Hotkey, group.First().AllowPatterns.Trim(), group.First().DenyPatterns.Trim(), group.First().ValidationMode, group.Where(item => item.TradingActive).Select(item => item.Site.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray())));
         var prompt = new CommandParameterWindow("Release name to validate") { Owner = this };
         if (prompt.ShowDialog() != true) return;
         var result = SectionReleaseValidator.Validate(row.Name, prompt.Value.Trim());
@@ -74,16 +74,17 @@ public partial class SectionsWindow : Window
             .GroupBy(row => row.Name.Trim(), StringComparer.OrdinalIgnoreCase)
             .Select(group => new SectionDefinition(group.Key,
                 group.GroupBy(row => row.Site.Trim(), StringComparer.OrdinalIgnoreCase).ToDictionary(site => site.Key, site => site.Last().Path.Trim(), StringComparer.OrdinalIgnoreCase),
-                group.First().Hotkey, group.First().AllowPatterns.Trim(), group.First().DenyPatterns.Trim(), group.First().ValidationMode)).ToList();
+                group.First().Hotkey, group.First().AllowPatterns.Trim(), group.First().DenyPatterns.Trim(), group.First().ValidationMode, group.Where(item => item.TradingActive).Select(item => item.Site.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray())).ToList();
         _store.Save(sections);
         MessageBox.Show("Sections saved.", "Sections", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
-    private sealed class SectionRow(string name, string site, string path, int hotkey, string allowPatterns, string denyPatterns, SectionValidationMode validationMode)
+    private sealed class SectionRow(string name, string site, string path, int hotkey, string allowPatterns, string denyPatterns, SectionValidationMode validationMode, bool tradingActive = false)
     {
         public string Name { get; set; } = name; public string Site { get; set; } = site;
         public string Path { get; set; } = path; public int Hotkey { get; set; } = hotkey;
         public string AllowPatterns { get; set; } = allowPatterns; public string DenyPatterns { get; set; } = denyPatterns;
         public SectionValidationMode ValidationMode { get; set; } = validationMode;
+        public bool TradingActive { get; set; } = tradingActive;
     }
 }

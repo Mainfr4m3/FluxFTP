@@ -11,7 +11,8 @@ internal sealed record SectionDefinition(
     int Hotkey = 0,
     string AllowPatterns = "",
     string DenyPatterns = "",
-    SectionValidationMode ValidationMode = SectionValidationMode.Disabled);
+    SectionValidationMode ValidationMode = SectionValidationMode.Disabled,
+    string[]? TradingSites = null);
 
 internal sealed class SectionStore
 {

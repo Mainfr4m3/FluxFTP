@@ -25,7 +25,7 @@ internal static class VisionaryRaceChecks
         var skippedRace = new VisionaryRaceState(new());
         var skippedJob = Guid.NewGuid();
         skippedRace.Track("/release/started.rar", 10, null, skippedJob);
-        Check(!skippedRace.NeedsTransfer("/release/started.rar", 20, null, _ => "Skipped"), "skipped job is not retried after growth");
+        Check(skippedRace.NeedsTransfer("/release/started.rar", 20, null, _ => "Skipped"), "skipped job rechecks the current destination after growth; skip is not completion");
         Check(skippedRace.IsSkipped("/release/started.rar", _ => "Skipped"), "skipped destination is excluded from verification");
         RemoteEntry Marker(string name) => new(name, "/release/" + name, false, 0, null);
         Check(VisionaryRaceState.IsVerificationMetadata(Marker("release.r00-MISSING")), "hyphen missing marker is not payload");
@@ -66,9 +66,8 @@ internal static class VisionaryRaceChecks
             Check(retry.NeedsTransfer("x", 10, null, Status), "bounded retry");
             var id = Guid.NewGuid(); states[id] = "Failed"; retry.Track("x", 10, null, id);
         }
-        var exhausted = false;
-        try { retry.NeedsTransfer("x", 10, null, Status); } catch (IOException) { exhausted = true; }
-        Check(exhausted, "failed file does not retry forever");
+        Check(!retry.NeedsTransfer("x", 10, null, Status), "exhausted file does not retry forever or throw away healthy files");
+        Check(retry.NeedsTransfer("healthy.rar", 10, null, Status), "another file remains eligible after retry exhaustion");
         Console.WriteLine($"PASS: {checks} VISIONARY growing-release race checks.");
     }
 }

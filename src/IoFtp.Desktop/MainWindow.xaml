@@ -76,6 +76,7 @@
                     <Button x:Name="ToggleQueueButton" Content="Queue" Click="ToggleQueue_Click" />
                     <Button x:Name="ToggleLogButton" Content="Log" Click="ToggleLog_Click" />
                     <Button Content="Global Settings" Click="GlobalSettings_Click" />
+                    <Button Content="Disconnect ▾" Click="DisconnectSites_Click" ToolTip="Disconnect all sites or choose one site; pauses its queued work." />
                     <Button Content="About" Click="About_Click" />
                     <TextBlock x:Name="ConnectionStatus" Text="Offline workspace" Foreground="{DynamicResource MutedTextBrush}"
                                VerticalAlignment="Center" MaxWidth="240" TextTrimming="CharacterEllipsis" Margin="8,0,0,0" />

@@ -71,6 +71,7 @@ internal sealed class ProfileStore
             Write(text, "MaxUploadSlots", options.MaxUploadSlots);
             Write(text, "MaxDownloadSlots", options.MaxDownloadSlots);
             Write(text, "Priority", options.Priority);
+            Write(text, "LinkSpeedGbps", options.LinkSpeedGbps);
             Write(text, "AllowUpload", options.AllowUpload);
             Write(text, "AllowDownload", options.AllowDownload);
             Write(text, "StayLoggedIn", options.StayLoggedIn);
@@ -139,7 +140,7 @@ internal sealed class ProfileStore
                 EnumValue(values, "FxpDataRole", FxpDataRole.Auto),
                 Bool(values, "UseOpenSslTls"), Get(values, "ImportedSkipRules"), Get(values, "ImportedPriorityRules"), Get(values, "VisionaryRules"),
                 EnumValue(values, "TextEncoding", FtpTextEncoding.Auto), Bool(values, "Utf8Login"),
-                EnumValue(values, "AuthCommand", FtpAuthCommand.Auto), Bool(values, "PbszBeforeLogin"), Bool(values, "Tls12Only"), PassivePortMin: Int(values, "PassivePortMin"), PassivePortMax: Int(values, "PassivePortMax"), UseCpsv: Bool(values, "UseCpsv", true));
+                EnumValue(values, "AuthCommand", FtpAuthCommand.Auto), Bool(values, "PbszBeforeLogin"), Bool(values, "Tls12Only"), PassivePortMin: Int(values, "PassivePortMin"), PassivePortMax: Int(values, "PassivePortMax"), UseCpsv: Bool(values, "UseCpsv", true), LinkSpeedGbps: Int(values, "LinkSpeedGbps"));
             var proxyMode = Get(values, "ProxyMode", "Inherit");
             ProxyConfiguration? proxy = proxyMode.Equals("Inherit", StringComparison.OrdinalIgnoreCase) ? null
                 : proxyMode.Equals("None", StringComparison.OrdinalIgnoreCase) ? new ProxyConfiguration(ProxyType.None)

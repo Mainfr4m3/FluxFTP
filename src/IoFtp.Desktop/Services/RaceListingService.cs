@@ -45,6 +45,13 @@ internal sealed class RaceListingService : IAsyncDisposable
         if (_sources.TryGetValue(site, out var source)) Interlocked.Exchange(ref source.Invalidated, 1);
     }
     public bool HasSession(Guid site) => _sources.TryGetValue(site, out var source) && source.Session?.IsConnected == true;
+    public async Task DisconnectAsync(Guid site, CancellationToken token = default)
+    {
+        if (!_sources.TryGetValue(site, out var source)) return;
+        await source.Gate.WaitAsync(token).ConfigureAwait(false);
+        try { await CloseAsync(source).ConfigureAwait(false); }
+        finally { source.Gate.Release(); }
+    }
     public async Task<bool?> TryCheckHealthAsync(ConnectionProfile profile, CancellationToken token)
     {
         if (!_sources.TryGetValue(profile.Id, out var source) || !await source.Gate.WaitAsync(0, token).ConfigureAwait(false)) return null;

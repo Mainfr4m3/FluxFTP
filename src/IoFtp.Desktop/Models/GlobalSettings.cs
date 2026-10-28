@@ -72,7 +72,8 @@ public sealed record GlobalSettings(
     bool AutoHardReset = false, int HardResetCooldownSeconds = 120, int HardResetRetries = 2, int HardResetLookbackMinutes = 5,
     int MaxActiveSpreadJobs = 150, int VisionaryConcurrentScheduling = 150, int? VisionaryRecheckSeconds = 1, string DownloadTempPath = "",
     bool EnableSiteHealthMonitor = false, int SiteHealthCheckSeconds = 300, int SiteHealthRetrySeconds = 60, int SiteHealthFailures = 2,
-    string StatusCommand = "SITE WKUP 50", int StatusCommandIntervalMinutes = 60);
+    string StatusCommand = "SITE WKUP 50", int StatusCommandIntervalMinutes = 60,
+    bool VisionarySectionChains = false);
 
 public sealed record ViewLayoutSettings(string[]? HiddenColumns = null, string SortBy = "Name",
     bool Descending = false, string FontFamily = "", double FontSize = 0, bool Bold = false);

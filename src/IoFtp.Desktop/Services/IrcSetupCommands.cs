@@ -44,7 +44,7 @@ internal sealed class IrcSetupCommands(Func<IReadOnlyList<ConnectionProfile>> lo
         if (command == "!addsite")
         {
             if (args.Count is not (5 or 6)) throw new SetupException("Syntax: !addsite SITE USER PASSWORD HOST:PORT [explicit|implicit|off]. Quote values containing spaces.");
-            if (index >= 0 || profiles.Any(p => p.Description.Equals(name, StringComparison.OrdinalIgnoreCase))) throw new SetupException("Site already exists; it was not overwritten.");
+            if (index >= 0) throw new SetupException("Site already exists; it was not overwritten.");
             if (!IrcProtocol.FtpUser(args[2]) || args[3].Length == 0) throw new SetupException("Invalid FTP username or empty password.");
             if (!SiteEndpoint.TryParse(args[4], 21, out var endpoint) || Uri.CheckHostName(endpoint.Host) == UriHostNameType.Unknown)
                 throw new SetupException("Invalid FTP host/port.");

@@ -249,6 +249,7 @@ public partial class MainWindow : Window
 
     private async Task ConnectPaneAsync(ConnectionProfile profile, bool left)
     {
+        _manuallyDisconnectedSites.TryRemove(profile.Id, out _);
         if (left ? _leftConnectionBusy : _rightConnectionBusy) return;
         SetConnectionBusy(left, true);
         profile = ApplyGlobalProxy(profile);
@@ -2816,11 +2817,14 @@ public partial class MainWindow : Window
     private sealed record TelemetryActivitySession(string Direction, long SpeedBytesPerSecond, long TransferredBytes,
         string Action, string VirtualPath, string DataPath);
 
-    private async Task<FtpRemoteSession> RentWorkerAsync(ConnectionProfile profile, CancellationToken cancellationToken, bool forceFresh = false)
+    private async Task<FtpRemoteSession> RentWorkerAsync(ConnectionProfile profile, CancellationToken cancellationToken, bool forceFresh = false, bool controlCommand = false)
     {
         var siteGate = _sitePoolGates.For(profile.Id);
         while (true)
         {
+            if (_manuallyDisconnectedSites.ContainsKey(profile.Id)) throw new IOException($"Site {profile.Name} was manually disconnected; connect it again before starting work.");
+            if (!controlCommand && _commandWaiters.GetValueOrDefault(profile.Id) > 0)
+            { await Task.Delay(100, cancellationToken); continue; }
             await siteGate.WaitAsync(cancellationToken);
             try
             {
@@ -2828,7 +2832,9 @@ public partial class MainWindow : Window
                 var hasIdle = _workerPool.TryGetValue(profile, out var available) && !available.IsEmpty;
                 if ((hasIdle && !forceFresh) || retry <= DateTimeOffset.UtcNow)
                 {
-                    var limit = TransferSlotLimit(profile);
+                    var limit = controlCommand
+                        ? Math.Max(0, RaceSlotOptions(profile).MaxSlots - BrowsingSlots(profile) - (_raceListings.HasSession(profile.Id) ? 1 : 0))
+                        : TransferSlotLimit(profile);
                     await DisposeStalePooledWorkersAsync(profile);
                     var trimPool = _workerPool.GetOrAdd(profile, _ => new ConcurrentBag<PooledWorker>());
                     while (_sessionWorkers.Count(pair => pair.Value.Id == profile.Id) > limit && trimPool.TryTake(out var excess))
@@ -4119,6 +4125,8 @@ public partial class MainWindow : Window
         try
         {
             _apiServer = new ApiServer();
+            _apiServer.ConfigureCommandSessions((profile, token) => Dispatcher.InvokeAsync(() => RentCommandWorkerAsync(ApplyGlobalProxy(profile), token)).Task.Unwrap(),
+                worker => Dispatcher.InvokeAsync(() => DisposeTransferWorkerAsync(worker)).Task.Unwrap());
             foreach (var profile in new ProfileStore().Load()) _raceSitePriorities[profile.Name] = RaceSlotOptions(profile).Priority;
             await _apiServer.StartAsync(_settings, () => Dispatcher.Invoke(GetTransferJobs), StartApiTransferAsync, StartApiDownloadAsync,
                 id => Dispatcher.Invoke(() => RemoveTransferJob(id)), id => Dispatcher.Invoke(() => ResetTransferJob(id)),

@@ -53,6 +53,7 @@ public partial class MainWindow
     }
     private async Task<FtpRemoteSession> CreateObservedWorkerAsync(ConnectionProfile profile, CancellationToken token)
     {
+        if (_manuallyDisconnectedSites.ContainsKey(profile.Id)) throw new IOException($"Site {profile.Name} was manually disconnected.");
         _healthConnecting.AddOrUpdate(profile.Id, 1, (_, count) => count + 1);
         try
         {
@@ -69,6 +70,7 @@ public partial class MainWindow
     }
     private async Task<SiteProbeResult> ProbeSiteHealthAsync(ConnectionProfile profile, CancellationToken token)
     {
+        if (_manuallyDisconnectedSites.ContainsKey(profile.Id)) return SiteProbeResult.Deferred;
         if (_workerPoolShuttingDown || _leftConnectionBusy || _rightConnectionBusy || _healthConnecting.GetValueOrDefault(profile.Id) > 0) return SiteProbeResult.Deferred;
         try { if (await _raceListings.TryCheckHealthAsync(profile, token) == true) return SiteProbeResult.Online; }
         catch (Exception) when (!token.IsCancellationRequested) { }

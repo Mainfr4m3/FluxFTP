@@ -29,12 +29,19 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
     private readonly Func<string, int> _sourcePriority;
     private readonly Action<ApiTransferRequest>? _raceObserved;
     private readonly Action<string, string, string>? _raceResult;
+    private readonly Func<bool>? _sectionChainMode;
+    private readonly Func<string, string[][], string[][]>? _planChains;
+    private readonly Func<string, string, string, bool>? _routeAllowed;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _sourceOrder = new(StringComparer.OrdinalIgnoreCase);
+    private long _arrival;
+    private bool SectionChains => _sectionChainMode?.Invoke() == true;
 
     public VisionaryPipeServer(Func<ApiTransferRequest, Task<object>> startTransfer, Action<string>? log = null,
         Func<ApiTransferRequest, VisionaryRaceState, CancellationToken, Task<bool>>? raceStep = null,
         Func<ApiTransferRequest, Task>? liveSlots = null, int concurrentScheduling = 32, int? recheckSeconds = null,
         Func<string, int>? sourcePriority = null, Action<ApiTransferRequest>? raceObserved = null,
-        Action<string, string, string>? raceResult = null)
+        Action<string, string, string>? raceResult = null, Func<bool>? sectionChainMode = null,
+        Func<string, string[][], string[][]>? planChains = null, Func<string, string, string, bool>? routeAllowed = null)
     {
         _startTransfer = startTransfer; _log = log; _raceStep = raceStep; _liveSlots = liveSlots;
         _watchSlots = new RaceWatchSlots(Math.Clamp(concurrentScheduling, 1, 2048));
@@ -42,6 +49,7 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
         _sourcePriority = sourcePriority ?? (_ => 0);
         _raceObserved = raceObserved;
         _raceResult = raceResult;
+        _sectionChainMode = sectionChainMode; _planChains = planChains; _routeAllowed = routeAllowed;
     }
 
     public void Start() => _listener = ListenAsync(_cancellation.Token);
@@ -79,7 +87,10 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
         }
     }
 
-    private async Task HandleAsync(Stream stream, CancellationToken cancellationToken, long batchReceived = 0)
+    private Task HandleAsync(Stream stream, CancellationToken cancellationToken, long batchReceived = 0)
+        => HandlePlannedAsync(stream, cancellationToken, batchReceived, false);
+
+    private async Task HandlePlannedAsync(Stream stream, CancellationToken cancellationToken, long batchReceived, bool planned)
     {
         using var reader = new StreamReader(stream, new UTF8Encoding(false), false, 4096, true);
         using var writer = new StreamWriter(stream, new UTF8Encoding(false), 4096, true) { AutoFlush = true };
@@ -96,6 +107,11 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
                 var pairs = fields[3].Split(',', StringSplitOptions.RemoveEmptyEntries).Select(pair => pair.Split(';')).ToArray();
                 if (pairs.Length is < 1 or > 256 || pairs.Any(pair => pair.Length is not (2 or 4) || pair.Take(2).Any(site => string.IsNullOrWhiteSpace(site) || site.Any(char.IsWhiteSpace) || site.Contains('/') || site.Contains('\\')) || (pair.Length == 4 && pair.Skip(2).Any(value => !ValidSlots(value)))))
                     throw new ArgumentException("Invalid chain batch (maximum 256 pairs).");
+                if (!planned && SectionChains && _planChains is not null)
+                {
+                    pairs = _planChains(fields[1], pairs);
+                    _log?.Invoke($"VISIONARY section chains {fields[1]} / {fields[2]}: {pairs.Length} permitted routes; 1 Gbit -> 10 Gbit blocked");
+                }
                 await writer.WriteLineAsync($"OK RECEIVED {pairs.Length} chain pairs; per-pair results are in the FluxFTP log");
                 acknowledged = true;
                 foreach (var pair in pairs)
@@ -105,7 +121,7 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
                     var input = Encoding.UTF8.GetBytes(request);
                     using var local = new MemoryStream();
                     local.Write(input); local.Position = 0;
-                    await HandleAsync(local, cancellationToken, received);
+                    await HandlePlannedAsync(local, cancellationToken, received, planned: true);
                     var result = Encoding.UTF8.GetString(local.ToArray(), input.Length, (int)local.Length - input.Length).Trim();
                     _log?.Invoke($"VISIONARY batch {pair[0]} -> {pair[1]}: {result}");
                 }
@@ -119,6 +135,25 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
         }
         if ((fields.Length != 5 && fields.Length != 7 && fields.Length != 9) || !fields[0].Equals("TRANSFER", StringComparison.OrdinalIgnoreCase) || fields.Skip(1).Any(string.IsNullOrWhiteSpace) || (fields.Length == 9 && fields.Skip(7).Any(value => !ValidSlots(value))))
         { await writer.WriteLineAsync("ERROR Expected TRANSFER<TAB>section<TAB>release<TAB>source<TAB>target"); return; }
+        if (!planned && SectionChains && _planChains is not null && !fields[4].StartsWith('@'))
+        {
+            try
+            {
+                VisionaryTransferProfiles.ReleasePath(fields[2]);
+                var original = fields.Length == 9 ? new[] { fields[3], fields[4], fields[7], fields[8] } : new[] { fields[3], fields[4] };
+                var pairs = _planChains(fields[1], [original]);
+                foreach (var pair in pairs)
+                {
+                    var request = $"TRANSFER\t{fields[1]}\t{fields[2]}\t{pair[0]}\t{pair[1]}\t0\t0" + (pair.Length == 4 ? $"\t{pair[2]}\t{pair[3]}" : "") + "\n";
+                    var input = Encoding.UTF8.GetBytes(request); using var local = new MemoryStream(); local.Write(input); local.Position = 0;
+                    await HandlePlannedAsync(local, cancellationToken, received, planned: true);
+                    _log?.Invoke(Encoding.UTF8.GetString(local.ToArray(), input.Length, (int)local.Length - input.Length).Trim());
+                }
+                await writer.WriteLineAsync($"OK RECEIVED {pairs.Length} permitted section routes");
+            }
+            catch (Exception error) { await writer.WriteLineAsync("ERROR " + error.Message.Replace('\r', ' ').Replace('\n', ' ')); }
+            return;
+        }
         try
         {
             if (fields[4].StartsWith("@RESULT:", StringComparison.Ordinal))
@@ -155,6 +190,7 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
                 if (_liveSlots is not null) await _liveSlots(incoming);
                 _raceObserved?.Invoke(incoming);
                 var sources = _sources.GetOrAdd(key, _ => new(StringComparer.OrdinalIgnoreCase));
+                _sourceOrder.TryAdd(key + "\t" + incoming.SrcSite, Interlocked.Increment(ref _arrival));
                 sources.AddOrUpdate(incoming.SrcSite!, incoming, (_, previous) => incoming with {
                     SourceDownloadSlots = incoming.SourceDownloadSlots ?? previous.SourceDownloadSlots,
                     DestinationUploadSlots = incoming.DestinationUploadSlots ?? previous.DestinationUploadSlots });
@@ -224,7 +260,10 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
                 var available = _sources.TryGetValue(key, out var candidates)
                     ? candidates.Values.OrderBy(item => item.SrcSite, StringComparer.OrdinalIgnoreCase).ToArray()
                     : new[] { request };
-                available = available.Skip(sourceOffset).Concat(available.Take(sourceOffset))
+                if (SectionChains)
+                    available = available.Where(item => _routeAllowed?.Invoke(item.SrcSection!, item.SrcSite!, item.DstSite!) != false)
+                        .OrderBy(item => _sourceOrder.GetValueOrDefault(key + "\t" + item.SrcSite)).ToArray();
+                else available = available.Skip(sourceOffset).Concat(available.Take(sourceOffset))
                     .OrderByDescending(item => _sourcePriority(item.SrcSite!)).ToArray();
                 // Rotate admission order so one source cannot reserve every file
                 // before another source has had its next scheduling pass.
@@ -292,6 +331,7 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
             var key = string.Join('\t', request.SrcSection, request.Name, request.DstSite);
             _requests.TryRemove(key, out _);
             _sources.TryRemove(key, out _);
+            foreach (var sourceKey in _sourceOrder.Keys.Where(k => k.StartsWith(key + "\t", StringComparison.OrdinalIgnoreCase))) _sourceOrder.TryRemove(sourceKey, out _);
             // Let the UI cancel this race's pending jobs even when cancellation occurred during the delay.
             state.StartTrace?.Mark("watch-ended");
             lifetime.Cancel();

@@ -2,6 +2,15 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.56 — 2026-10-28 (Windows)
+
+- Adds Sites > Test All Sites with fresh login, configured status command, logout, progress and cancellation.
+- Adds Disconnect after Global Settings, with all-site and named-site actions, paused jobs and suppressed automatic reconnection until explicit Connect.
+- RAW commands borrow a tracked idle worker, take priority over new transfer rentals and close the worker after use while retaining hard total login limits. Busy transfers are not forcibly interrupted.
+- Adds optional Visionary section chains for all explicitly Trading active section sites, manual 1/10 Gbit classes, a 1→10 Gbit block, preserved incoming pair order/live slots and policy checks on alternative sources. Unknown classes are excluded; existing sites are not automatically activated.
+- Allows shared Description values across sites. Only Name must be unique in Site Manager, API and IRC setup.
+- Adds section-chain, persistence and disconnect regressions. Updates older growing-release expectations to the existing per-file skip/retry behavior without changing the race algorithm.
+
 ## 2.1.55 — 2026-10-27 (Windows)
 
 - Enforces the saved per-site Max slots as a hard total instead of expanding it for Visionary limits. Shared listing and browsing connections fit within that total; pending panel connections reserve space. Manual per-job limits cannot bypass current site totals or directional limits. Pool warmup and checkout count existing workers and wait for capacity; surplus idle sessions are trimmed even when work is queued. Lower limits allow already running transfers to finish.

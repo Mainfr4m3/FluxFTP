@@ -13,6 +13,7 @@
         </StackPanel>
         <DataGrid x:Name="SectionsGrid" AutoGenerateColumns="False" CanUserAddRows="False" SelectionMode="Single">
             <DataGrid.Columns>
+                <DataGridCheckBoxColumn Header="TRADING ACTIVE" Binding="{Binding TradingActive, UpdateSourceTrigger=PropertyChanged}" Width="120"/>
                 <DataGridTextColumn Header="NAME" Binding="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Width="2*"/>
                 <DataGridTextColumn Header="SITE" Binding="{Binding Site, UpdateSourceTrigger=PropertyChanged}" Width="2*"/>
                 <DataGridTextColumn Header="PATH" Binding="{Binding Path, UpdateSourceTrigger=PropertyChanged}" Width="3*"/>

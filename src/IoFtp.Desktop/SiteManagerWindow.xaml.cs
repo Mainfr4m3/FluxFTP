@@ -38,9 +38,32 @@ public partial class SiteManagerWindow : Window
         var dialog = new ConnectionDialog { Owner = this };
         if (dialog.ShowDialog() == true && dialog.Profile is not null)
         {
-            if (DescriptionConflict(dialog.Profile)) return;
+            if (NameConflict(dialog.Profile)) return;
             _profiles.Add(dialog.Profile); if (Save()) SitesList.SelectedItem = dialog.Profile;
         }
+    }
+
+    private async void TestAllSites_Click(object sender, RoutedEventArgs e)
+    {
+        if (Owner is not MainWindow main) return;
+        var output = new TextBox { IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Margin = new Thickness(12), MinHeight = 180 };
+        var cancel = new Button { Content = "Cancel", Margin = new Thickness(12), HorizontalAlignment = HorizontalAlignment.Right };
+        var panel = new DockPanel(); DockPanel.SetDock(cancel, Dock.Bottom); panel.Children.Add(cancel); panel.Children.Add(output);
+        var window = new Window { Title = "Test All Sites — login / status / logout", Owner = this, Width = 760, Height = 460,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner, Content = panel };
+        var cancellation = new CancellationTokenSource();
+        cancel.Click += (_, _) => { if (Equals(cancel.Content, "Cancel")) cancellation.Cancel(); };
+        window.Closing += (_, _) => cancellation.Cancel();
+        window.Closed += (_, _) => cancellation.Dispose();
+        var button = (Button)sender; button.IsEnabled = false; window.Show();
+        try
+        {
+            await main.TestSitesAsync(_profiles.ToArray(), line => { output.AppendText(line + Environment.NewLine); output.ScrollToEnd(); }, cancellation.Token);
+            output.AppendText("Finished. All test sessions closed." + Environment.NewLine);
+        }
+        catch (OperationCanceledException) { output.AppendText("Cancelled. Test session closed." + Environment.NewLine); }
+        finally { button.IsEnabled = true; cancel.Content = "Close"; cancel.Click += (_, _) => window.Close(); }
     }
 
     private void Edit_Click(object sender, RoutedEventArgs e)
@@ -49,20 +72,15 @@ public partial class SiteManagerWindow : Window
         var dialog = new ConnectionDialog(profile) { Owner = this };
         if (dialog.ShowDialog() == true && dialog.Profile is not null)
         {
-            if (DescriptionConflict(dialog.Profile, profile.Id)) return;
+            if (NameConflict(dialog.Profile, profile.Id)) return;
             var index = _profiles.IndexOf(profile); _profiles[index] = dialog.Profile; if (Save()) SitesList.SelectedIndex = index;
         }
     }
 
-    private bool DescriptionConflict(ConnectionProfile profile, Guid? exceptId = null)
+    private bool NameConflict(ConnectionProfile profile, Guid? exceptId = null)
     {
-        var others = _profiles.Where(item => item.Id != exceptId).ToList();
-        var conflict = !string.IsNullOrWhiteSpace(profile.Description) && others.Any(item =>
-            item.Description.Equals(profile.Description, StringComparison.OrdinalIgnoreCase) ||
-            item.Name.Equals(profile.Description, StringComparison.OrdinalIgnoreCase)) ||
-            others.Any(item => !string.IsNullOrWhiteSpace(item.Description) && item.Description.Equals(profile.Name, StringComparison.OrdinalIgnoreCase));
-        if (!conflict) return false;
-        MessageBox.Show("Site names and descriptions must be unique and cannot overlap.",
+        if (!_profiles.Any(item => item.Id != exceptId && item.Name.Equals(profile.Name, StringComparison.OrdinalIgnoreCase))) return false;
+        MessageBox.Show("Site names must be unique. Descriptions may be shared.",
             "Site Manager", MessageBoxButton.OK, MessageBoxImage.Warning);
         return true;
     }

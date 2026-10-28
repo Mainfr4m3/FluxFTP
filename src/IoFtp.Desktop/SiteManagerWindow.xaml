@@ -5,7 +5,7 @@
         WindowStartupLocation="CenterOwner" ShowInTaskbar="False" Background="{DynamicResource WindowBrush}" Foreground="{DynamicResource TextBrush}">
     <Grid Margin="16" Background="{DynamicResource WindowBrush}">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-        <TextBlock Text="Saved sites" FontSize="22" FontWeight="SemiBold" Margin="0,0,0,12"/>
+        <DockPanel Margin="0,0,0,12"><Button DockPanel.Dock="Right" Content="Test All Sites" Click="TestAllSites_Click" HorizontalAlignment="Right"/><TextBlock Text="Saved sites" FontSize="22" FontWeight="SemiBold"/></DockPanel>
         <ListView x:Name="SitesList" Grid.Row="1" MouseDoubleClick="Edit_Click" GridViewColumnHeader.Click="SortSites_Click">
             <ListView.View><GridView>
                 <GridViewColumn Header="Name" DisplayMemberBinding="{Binding Name}" Width="180"/>

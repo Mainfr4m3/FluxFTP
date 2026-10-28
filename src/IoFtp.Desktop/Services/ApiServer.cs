@@ -30,6 +30,11 @@ internal sealed class ApiServer : IAsyncDisposable
     private readonly List<Task> _spreadTasks = new();
     private GlobalSettings _runtimeSettings = new();
     private GlobalSettings _listenerSettings = new();
+    private Func<ConnectionProfile, CancellationToken, Task<FtpRemoteSession>>? _rentCommandSession;
+    private Func<FtpRemoteSession, Task>? _closeCommandSession;
+
+    public void ConfigureCommandSessions(Func<ConnectionProfile, CancellationToken, Task<FtpRemoteSession>> rent,
+        Func<FtpRemoteSession, Task> close) { _rentCommandSession = rent; _closeCommandSession = close; }
 
     public bool UpdateRuntimeSettings(GlobalSettings settings)
     {
@@ -51,7 +56,9 @@ internal sealed class ApiServer : IAsyncDisposable
         if (settings.EnableVisionaryBridge || settings.EnableHttpsApi)
         {
             _visionaryPipe = new VisionaryPipeServer(startTransfer, diagnosticLog, visionaryStep, visionarySlots,
-                settings.VisionaryConcurrentScheduling, settings.VisionaryRecheckSeconds, sourcePriority, raceObserved, raceResult);
+                settings.VisionaryConcurrentScheduling, settings.VisionaryRecheckSeconds, sourcePriority, raceObserved, raceResult,
+                sectionChainMode: () => Volatile.Read(ref _runtimeSettings).VisionarySectionChains,
+                planChains: SectionChainRuntime.LoadPlan, routeAllowed: SectionChainRuntime.LoadAllows);
             if (settings.EnableVisionaryBridge)
             {
             _visionaryPipe.Start();
@@ -116,13 +123,8 @@ internal sealed class ApiServer : IAsyncDisposable
             var request = await context.Request.ReadFromJsonAsync<SiteRequest>();
             if (request is null || string.IsNullOrWhiteSpace(request.Name) || request.Addresses is not { Count: > 0 }) return Results.BadRequest(new { error = "name and addresses are required" });
             var profiles = new ProfileStore().Load().ToList();
-            if (profiles.Any(item => item.Name.Equals(request.Name, StringComparison.OrdinalIgnoreCase) ||
-                !string.IsNullOrWhiteSpace(item.Description) && item.Description.Equals(request.Name, StringComparison.OrdinalIgnoreCase)))
-                return Results.Conflict(new { error = "Site name already exists or overlaps a description" });
-            if (!string.IsNullOrWhiteSpace(request.Description) && profiles.Any(item =>
-                item.Description.Equals(request.Description, StringComparison.OrdinalIgnoreCase) ||
-                item.Name.Equals(request.Description, StringComparison.OrdinalIgnoreCase)))
-                return Results.Conflict(new { error = "Site description already exists or overlaps a name" });
+            if (profiles.Any(item => item.Name.Equals(request.Name, StringComparison.OrdinalIgnoreCase)))
+                return Results.Conflict(new { error = "Site name already exists" });
             var profile = CreateProfile(request);
             profiles.Add(profile); new ProfileStore().Save(profiles);
             if (request.Sections is not null) SaveSiteSections(profile.Name, request.Sections);
@@ -136,13 +138,8 @@ internal sealed class ApiServer : IAsyncDisposable
             if (index < 0) return Results.NotFound(new { error = "Site not found" });
             var otherProfiles = profiles.Where((_, itemIndex) => itemIndex != index).ToList();
             var proposedName = request?.Name ?? profiles[index].Name;
-            var proposedDescription = request?.Description ?? profiles[index].Description;
-            if (otherProfiles.Any(item => item.Name.Equals(proposedName, StringComparison.OrdinalIgnoreCase) ||
-                !string.IsNullOrWhiteSpace(item.Description) && item.Description.Equals(proposedName, StringComparison.OrdinalIgnoreCase)) ||
-                !string.IsNullOrWhiteSpace(proposedDescription) && otherProfiles.Any(item =>
-                    item.Description.Equals(proposedDescription, StringComparison.OrdinalIgnoreCase) ||
-                    item.Name.Equals(proposedDescription, StringComparison.OrdinalIgnoreCase)))
-                return Results.Conflict(new { error = "Site name or description is not unique" });
+            if (otherProfiles.Any(item => item.Name.Equals(proposedName, StringComparison.OrdinalIgnoreCase)))
+                return Results.Conflict(new { error = "Site name already exists" });
             profiles[index] = PatchProfile(profiles[index], request ?? new());
             new ProfileStore().Save(profiles);
             if (request?.Sections is not null) SaveSiteSections(profiles[index].Name, request.Sections);
@@ -522,7 +519,7 @@ internal sealed class ApiServer : IAsyncDisposable
         store.Save(sections);
     }
 
-    private static async Task<IReadOnlyList<RawApiResult>> ExecuteRawAsync(RawRequest request)
+    private async Task<IReadOnlyList<RawApiResult>> ExecuteRawAsync(RawRequest request)
     {
         var names = request.SitesAll ? new ProfileStore().Load().Select(site => site.Name).ToArray() : request.Sites ?? [];
         var results = new List<RawApiResult>();
@@ -530,10 +527,12 @@ internal sealed class ApiServer : IAsyncDisposable
         {
             var profile = FindSite(name); if (profile is null) { results.Add(new(name, "", null, "Site not found", "failed")); continue; }
             using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Clamp(request.Timeout ?? 10, 1, 300)));
-            await using var session = new FtpRemoteSession();
+            FtpRemoteSession? session = null;
             try
             {
-                await session.ConnectAsync(profile, cancellation.Token);
+                ValidateRawPre(name, request.Command);
+                session = _rentCommandSession is null ? new FtpRemoteSession() : await _rentCommandSession(profile, cancellation.Token);
+                if (_rentCommandSession is null) await session.ConnectAsync(profile, cancellation.Token);
                 var rawPath = request.PathSection is not null ? ResolvePath(name, request.PathSection) : request.Path;
                 if (!string.IsNullOrWhiteSpace(rawPath)) await session.ExecuteCommandAsync($"CWD {rawPath}", cancellation.Token);
                 ValidateRawPre(name, request.Command);
@@ -544,6 +543,14 @@ internal sealed class ApiServer : IAsyncDisposable
                     response.StatusCode, null, outcome.ToString().ToLowerInvariant()));
             }
             catch (Exception exception) { results.Add(new(name, "", null, exception.Message, "failed")); }
+            finally
+            {
+                if (session is not null)
+                {
+                    if (_closeCommandSession is not null) await _closeCommandSession(session);
+                    else await session.DisposeAsync();
+                }
+            }
         }
         return results;
     }
