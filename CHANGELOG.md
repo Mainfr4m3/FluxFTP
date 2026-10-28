@@ -2,6 +2,11 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.57 — 2026-10-28 (Windows)
+
+- Site Manager shows configured total/upload/download slots, site priority and manual link speed directly after Name. Unknown speed classes display Not classified. Columns can be sorted with the existing header controls.
+- Widens the Site Manager overview and keeps it refreshed after saving Site Options, without changing saved site limits or trading rules.
+
 ## 2.1.56 — 2026-10-28 (Windows)
 
 - Adds Sites > Test All Sites with fresh login, configured status command, logout, progress and cancellation.

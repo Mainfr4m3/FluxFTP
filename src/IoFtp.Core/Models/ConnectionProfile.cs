@@ -93,6 +93,7 @@ public sealed record ConnectionProfile(
     string SshHostKeyFingerprint = "")
 {
     [JsonIgnore] public SiteOptions EffectiveOptions => Options ?? new SiteOptions();
+    [JsonIgnore] public string LinkSpeedDisplay => EffectiveOptions.LinkSpeedGbps switch { 1 => "1 Gbit/s", 10 => "10 Gbit/s", _ => "Not classified" };
     [JsonIgnore] public string ProtocolDisplay => TransferProtocolNames.Display(Protocol);
     [JsonIgnore] public IReadOnlyList<SiteEndpoint> EffectiveAddresses
     {
