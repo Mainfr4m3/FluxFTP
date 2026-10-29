@@ -100,11 +100,25 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
         public readonly SemaphoreSlim Gate = new(1, 1);
         public string? Failure;
         public bool Reported;
+        public LockedDirectorySkip? Skip;
     }
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<object, DirectoryState> DirectoryStates = new();
     private DirectoryState SharedDirectory => DirectoryStates.GetValue(DestinationOwner, _ => new());
     public bool DirectoryDenied => SharedDirectory.Failure is not null;
     public bool DirectoryDenialReported { get => SharedDirectory.Reported; set => SharedDirectory.Reported = value; }
+    private LockedDirectorySkip? _directorySkip;
+    private bool _directorySkipReported;
+    public LockedDirectorySkip? DirectorySkip => SharedDirectory.Skip ?? _directorySkip;
+    public bool DirectorySkipReported
+    {
+        get => DirectorySkip?.Destination == true ? SharedDirectory.Reported : _directorySkipReported;
+        set { if (DirectorySkip?.Destination == true) SharedDirectory.Reported = value; else _directorySkipReported = value; }
+    }
+    public void SkipDirectory(LockedDirectorySkip skip)
+    {
+        if (skip.Destination) SharedDirectory.Skip ??= skip;
+        else _directorySkip ??= skip;
+    }
     public async Task EnsureDestinationDirectoryAsync(Func<Task> ensure, CancellationToken token)
     {
         var shared = SharedDirectory;
@@ -125,6 +139,7 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
     public void Stop(string reason) => _stopReason ??= reason;
     public void ThrowIfStopped()
     {
+        if (DirectorySkip is { } skip) throw new RaceDirectorySkippedException(skip);
         if (SharedDirectory.Failure is { } failure) throw new IOException("RACE destination blocked: " + failure);
         if (_stopReason is not null) throw new IOException("RACE destination blocked: " + _stopReason);
     }

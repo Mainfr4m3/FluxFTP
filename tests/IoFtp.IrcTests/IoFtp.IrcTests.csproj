@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../../src/IoFtp.Desktop/Services/LockedDirectorySkip.cs" Link="LockedDirectorySkip.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/SectionChainPolicy.cs" Link="SectionChainPolicy.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/SiteStatusCommand.cs" Link="SiteStatusCommand.cs" />
     <Compile Include="../../src/IoFtp.Desktop/Services/SettingsLiveUpdate.cs" Link="SettingsLiveUpdate.cs" />

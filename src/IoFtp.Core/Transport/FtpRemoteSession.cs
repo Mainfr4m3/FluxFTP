@@ -38,6 +38,7 @@ public sealed class FtpRemoteSession : IRemoteSession
     public bool IsConnected { get; private set; }
     public string ConnectedHost { get; private set; } = "";
     public int ConnectedPort { get; private set; }
+    public string SiteName => _profile?.Name ?? "";
     public IReadOnlySet<string> Capabilities { get; private set; } = new HashSet<string>();
     public string LastFxpNegotiation { get; private set; } = "None";
     public IReadOnlyList<(string Name, TimeSpan Elapsed)> LastFxpStageTimings => _lastFxpStageTimings;

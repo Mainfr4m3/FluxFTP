@@ -1,4 +1,4 @@
-; Visionary -> FluxFTP named-pipe bridge v2.0 (live slots, batch chains and mapped IRC DONE notifications)
+; Visionary -> FluxFTP named-pipe bridge v2.1 (live slots, batch chains and mapped IRC DONE notifications)
 ; Load after Visionary.mrc. Keep both DLL files beside this script.
 
 alias -l fluxvisi.dll return $scriptdir $+ $iif($bits == 64,FluxFTPVisionary64.dll,FluxFTPVisionary32.dll)
@@ -6,6 +6,7 @@ alias -l fluxvisi.dll return $scriptdir $+ $iif($bits == 64,FluxFTPVisionary64.d
 alias fluxvisi {
   if ($1 == status) {
     echo -ag FluxFTP bridge: pending live-slot replies: $hget(FluxVisiPending,0).item $+ . Script: $script
+    echo -ag FluxFTP live-slot helper: timeouts: $iif(%fluxvisi.live.timeouts,%fluxvisi.live.timeouts,0) - last error: $iif(%fluxvisi.live.error != $null,%fluxvisi.live.error,none)
     return
   }
   if ($1 == winbot) {
@@ -108,12 +109,35 @@ alias -l fluxvisi.live.timeout {
   var %request = $hget(FluxVisiPending,$1)
   if (%request == $null) return
   hdel FluxVisiPending $1
-  echo @FluxFTP $timestamp WARNING live-slot helper did not reply within 1s. Forwarding chain using last known Visi limits in Flux (Flux fallback only where unknown). Check the Visionary console and custom/fluxftp_chains.pl.
+  inc -e %fluxvisi.live.timeouts
+  var %warn = 1
+  if (%fluxvisi.live.warned isnum) {
+    if ($calc($ctime - %fluxvisi.live.warned) < 60) %warn = 0
+  }
+  if (%warn == 1) {
+    set -e %fluxvisi.live.warned $ctime
+    echo @FluxFTP $timestamp WARNING live-slot helper did not reply within 1s. Forwarding with last known Visi limits. Total timeouts: %fluxvisi.live.timeouts $+ . Check Visionary/custom/fluxftp_chains.pl and /fluxvisi status. Repeated warnings limited to once per minute.
+  }
   fluxvisi.sendchains %request
 }
 
 on *:SIGNAL:FLUXFTP_LIVE_CHAINS:{
-  if ($1 == ERROR) { echo @FluxFTP $timestamp ERROR reading live Visionary slots: $2- | return }
+  if ($1 == ERROR) {
+    set -e %fluxvisi.live.error $2-
+    echo @FluxFTP $timestamp ERROR reading live Visionary slots: $2-
+    ; New helpers identify the request so a failed database read can fall
+    ; back immediately. Old helpers still use the existing timeout path.
+    if ($4 isnum) {
+      var %failed.id = $+($4,.,$crc($+($2,.,$3),0))
+      var %failed.request = $hget(FluxVisiPending,%failed.id)
+      if (%failed.request != $null) {
+        .timer $+ FluxVisiLive. $+ %failed.id off
+        hdel FluxVisiPending %failed.id
+        fluxvisi.sendchains %failed.request
+      }
+    }
+    return
+  }
   if ($0 < 4 || $3 !isnum) { echo @FluxFTP $timestamp ERROR invalid live-slot callback: $1- | return }
   var %request.id = $+($3,.,$crc($+($1,.,$2),0))
   .timer $+ FluxVisiLive. $+ %request.id off

@@ -258,6 +258,8 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
         var completed = false;
         var sourceOffset = 0;
         var retrySources = new Dictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
+        var skippedSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var skippedDestination = false;
         _log?.Invoke(label + " accepted; waiting for a watch slot");
         try
         {
@@ -274,10 +276,11 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
                     .OrderByDescending(item => _sourcePriority(item.SrcSite!)).ToArray();
                 // Rotate admission order so one source cannot reserve every file
                 // before another source has had its next scheduling pass.
-                for (var pass = 0; pass < 2 && !completed; pass++)
-                for (var i = 0; i < available.Length; i++)
+                for (var pass = 0; pass < 2 && !completed && !skippedDestination; pass++)
+                for (var i = 0; i < available.Length && !skippedDestination; i++)
                 {
                     var next = available[i];
+                    if (skippedSources.Contains(next.SrcSite!)) continue;
                     if (retrySources.TryGetValue(next.SrcSite!, out var retryAt) && DateTimeOffset.UtcNow < retryAt) continue;
                     if (!sourceStates.TryGetValue(next.SrcSite!, out var nextState))
                     {
@@ -302,6 +305,15 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
                     {
                         if (await _raceStep!(request, state, lifetime.Token)) { completed = true; break; }
                     }
+                    catch (Exception ex) when (!lifetime.IsCancellationRequested && ex is not OperationCanceledException &&
+                        (state.DirectorySkip ?? LockedDirectorySkip.Match(ex, request.SrcSite, request.DstSite)) is not null)
+                    {
+                        var skip = state.DirectorySkip ?? LockedDirectorySkip.Match(ex, request.SrcSite, request.DstSite)!;
+                        state.SkipDirectory(skip);
+                        if (skip.Destination) skippedDestination = true;
+                        else skippedSources.Add(request.SrcSite!);
+                        _log?.Invoke($"VISIONARY SKIP [{skip.Site}] {request.Name}: {request.SrcSite} -> {request.DstSite}; directory locked (550); no retry for this race route");
+                    }
                     catch (Exception ex) when (!lifetime.IsCancellationRequested && ex is not OperationCanceledException && !state.DirectoryDenied)
                     {
                         // RunVisionaryStep cleans this source's jobs before throwing.
@@ -313,13 +325,14 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
                     }
                 }
                 sourceOffset = available.Length == 0 ? 0 : (sourceOffset + 1) % available.Length;
-                if (completed) break;
+                if (completed || skippedDestination) break;
                 // Incoming Visi updates wake immediately; periodic checks also recover
                 // locks and growing sources when the bots send no further announcement.
                 var currentRecheck = Volatile.Read(ref _recheckSeconds);
                 await notification.WaitAsync(TimeSpan.FromSeconds(currentRecheck > 0 ? currentRecheck : options.EffectiveRecheckSeconds), lifetime.Token);
             }
-            _log?.Invoke($"VISIONARY {request.Name}: {request.SrcSite} -> {request.DstSite} COMPLETE: final transfers finished");
+            if (!skippedDestination)
+                _log?.Invoke($"VISIONARY {request.Name}: {request.SrcSite} -> {request.DstSite} COMPLETE: final transfers finished");
         }
         catch (OperationCanceledException)
         {

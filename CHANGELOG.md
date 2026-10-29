@@ -2,6 +2,12 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.59 — 2026-10-29 (Windows)
+
+- Preserves the server and CWD command through destination-directory failures, adds concise ACCESS DENIED / NOT FOUND reasons and uses an explicit source/destination route when the replying server is not identifiable instead of SITE UNKNOWN.
+- GBIT01/GBIT02 race directory permission denials (550 CWD or permanent destination setup denial) produce SKIP without per-file retries or a false COMPLETE result. Destination skips are shared across sources for that destination race; source skips leave healthy alternatives available. File STOR locks, missing folders, login denials and other sites retain their previous handling.
+- Bridge 2.1 / live-slot helper: one database query per section request, correlated helper errors allow immediate fallback, and repeated timeout warnings are limited to once per minute with counters in /fluxvisi status. Native DLLs remain v2.0; the mIRC changes still require a runtime test.
+
 ## 2.1.58 — 2026-10-29 (Windows)
 
 - Adds Activate all in Sections to check Trading active for every displayed mapping. Users can uncheck exceptions before Save. FTPRush section imports activate the selected imported site/section mappings, including existing mappings, while preserving unselected mappings and existing path/rule merge behavior.

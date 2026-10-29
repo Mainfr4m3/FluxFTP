@@ -8,6 +8,7 @@ using IoFtp.Desktop.Models;
 using IoFtp.Desktop.Services;
 
 var assertions = 0;
+if (args.FirstOrDefault() == "--locked-directory-checks") { await LockedDirectoryChecks.Run(); return; }
 if (args.FirstOrDefault() == "--section-chain-checks") { await SectionChainPolicyChecks.Run(); return; }
 if (args.FirstOrDefault() == "--site-tools-checks") { await SiteToolsChecks.Run(); return; }
 if (args.FirstOrDefault() == "--hard-slot-checks") { await HardSlotLimitChecks.Run(); return; }
@@ -153,6 +154,14 @@ if (args.FirstOrDefault() == "--bridge-info-checks")
         VisionaryLogVisibility.IsCommandReport("SERVER DETAILS [file.rar] Transfer CRC failed"))
         throw new Exception("Command report classification failed");
     var failureSite = VisionaryLogVisibility.FailureSite("FTP 550 denied | site=TIS; command=RETR /file");
+    if (VisionaryLogVisibility.FailureContext("550 Permission denied | site=GBIT02; command=CWD /release", "CR", "TIS") != "GBIT02" ||
+        VisionaryLogVisibility.FailureContext("550 denied | site=unknown; command=CWD /release", "CR", "TIS") != "route CR → TIS" ||
+        VisionaryLogVisibility.FailureContext("550 denied", null, "TIS") != "TIS" ||
+        VisionaryLogVisibility.FailureContext("550 denied", "", "") != "FTP")
+        throw new Exception("Failure context must prefer the replying server and label ambiguous source/destination routes honestly");
+    if (VisionaryLogVisibility.CompactTransferFailure("file.rar", "550 Permission denied | site=GBIT02; command=CWD /release", "GBIT02") !=
+        "TRANSFER FAILED (550) [GBIT02] : file.rar — CWD: ACCESS DENIED")
+        throw new Exception("550 permission summary lost the site, command or reason");
     if (failureSite != "TIS" || VisionaryLogVisibility.CompactTransferFailure("FTP", "550 denied", failureSite) != "TRANSFER FAILED (550) [TIS]")
         throw new Exception("550 summary must identify the replying site");
 

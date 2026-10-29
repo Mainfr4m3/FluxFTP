@@ -38,30 +38,31 @@ public static class TransferRejection
     }
 
     public static async Task EnsureDirectoryAsync(string path,
-        Func<string, CancellationToken, Task<RemoteCommandResult>> command, CancellationToken token)
+        Func<string, CancellationToken, Task<RemoteCommandResult>> command, CancellationToken token, string? site = null)
     {
         var current = "";
         foreach (var part in path.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries))
         {
             current += "/" + part;
             var cwd = await command("CWD " + current, token);
-            if (cwd.StatusCode == 530) throw new FtpCommandException(530, cwd.Message, command: "CWD " + current);
+            if (cwd.StatusCode == 530) throw new FtpCommandException(530, cwd.Message, site, "CWD " + current);
             if (cwd.StatusCode is >= 200 and < 300) continue;
             var mkdir = await command("MKD " + current, token);
-            if (mkdir.StatusCode == 530) throw new FtpCommandException(530, mkdir.Message, command: "MKD " + current);
+            if (mkdir.StatusCode == 530) throw new FtpCommandException(530, mkdir.Message, site, "MKD " + current);
             if (mkdir.StatusCode is >= 200 and < 300) continue;
             // A parallel upload may have created the same directory in the meantime.
             cwd = await command("CWD " + current, token);
-            if (cwd.StatusCode == 530) throw new FtpCommandException(530, cwd.Message, command: "CWD " + current);
+            if (cwd.StatusCode == 530) throw new FtpCommandException(530, cwd.Message, site, "CWD " + current);
             if (cwd.StatusCode is >= 200 and < 300) continue;
-            throw new DestinationDirectoryException(current, cwd, mkdir);
+            throw new DestinationDirectoryException(current, cwd, mkdir, site);
         }
     }
 }
 
-public sealed class DestinationDirectoryException(string path, RemoteCommandResult cwd, RemoteCommandResult mkdir)
-    : IOException($"Cannot create destination directory {path}. MKD returned FTP {mkdir.StatusCode}: {TransferRejection.Clean(mkdir.Message).Trim()} | Final CWD returned FTP {cwd.StatusCode}: {TransferRejection.Clean(cwd.Message).Trim()}")
+public sealed class DestinationDirectoryException(string path, RemoteCommandResult cwd, RemoteCommandResult mkdir, string? site = null)
+    : IOException($"Cannot create destination directory {path}. MKD returned FTP {mkdir.StatusCode}: {TransferRejection.Clean(mkdir.Message).Trim()} | Final CWD returned FTP {cwd.StatusCode}: {TransferRejection.Clean(cwd.Message).Trim()}" + (string.IsNullOrWhiteSpace(site) ? "" : $" | site={site}; command=CWD {path}"))
 {
+    public string? Site { get; } = site;
     public string DirectoryPath { get; } = path;
     public bool IsPermanent { get; } = cwd.StatusCode is >= 500 and < 600 && mkdir.StatusCode is >= 500 and < 600;
 }

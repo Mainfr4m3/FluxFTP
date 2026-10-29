@@ -1646,7 +1646,7 @@ public partial class MainWindow : Window
     }
 
     private static Task EnsureRemoteDirectoryAsync(FtpRemoteSession session, string path, CancellationToken token)
-        => TransferRejection.EnsureDirectoryAsync(NormalizeRemotePath(path), session.ExecuteDirectoryProbeAsync, token);
+        => TransferRejection.EnsureDirectoryAsync(NormalizeRemotePath(path), session.ExecuteDirectoryProbeAsync, token, session.SiteName);
 
     private async void QueueLeft_Click(object sender, RoutedEventArgs e) => await TransferLeftAsync(false);
     private async void QueueRight_Click(object sender, RoutedEventArgs e) => await TransferRightAsync(false);
@@ -1927,6 +1927,10 @@ public partial class MainWindow : Window
         if (apiProfile is not null) apiProfile = ApplyGlobalProxy(apiProfile);
         if (apiFxpSource is not null) apiFxpSource = ApplyGlobalProxy(apiFxpSource);
         if (apiFxpDestination is not null) apiFxpDestination = ApplyGlobalProxy(apiFxpDestination);
+        var failureSites = SitesFor(entry.Direction);
+        entry.FailureRoute = VisionaryLogVisibility.FailureContext("",
+            profiles.FirstOrDefault(profile => profile.Id == (entry.SourceProfileId ?? failureSites.Source))?.Name,
+            profiles.FirstOrDefault(profile => profile.Id == (entry.DestinationProfileId ?? failureSites.Destination))?.Name);
         if ((needsLeft && leftProfile is null) || (needsRight && rightProfile is null) || (entry.Direction == TransferDirection.ApiDownload && apiProfile is null) ||
             (entry.Direction == TransferDirection.ApiFxp && (apiFxpSource is null || apiFxpDestination is null)))
             throw new InvalidOperationException("A required site is not connected.");
@@ -2312,6 +2316,7 @@ public partial class MainWindow : Window
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            if (entry.DirectorySkipLabel is not null) { entry.State = "Completed"; return; }
             entry.State = "Paused";
             AppendFtpLog($"{Environment.NewLine}Transfer paused: {entry.Name}");
             throw;
@@ -2320,6 +2325,31 @@ public partial class MainWindow : Window
         {
             entry.State = "Failed";
             var rejection = TransferRejection.Category(exception.Message);
+            if (_raceJobOwners.TryGetValue(entry.Id, out var skippedRace) &&
+                (skippedRace.DirectorySkip ?? LockedDirectorySkip.Match(exception,
+                    apiFxpSource?.Name, apiFxpDestination?.Name)) is { } directorySkip)
+            {
+                skippedRace.SkipDirectory(directorySkip);
+                entry.DirectorySkipLabel = directorySkip.Site;
+                entry.State = "Completed";
+                _skippedTransferJobs.Add(entry.Id);
+                if (!skippedRace.DirectorySkipReported)
+                {
+                    skippedRace.DirectorySkipReported = true;
+                    AppendFtpLog($"{Environment.NewLine}SKIP [{directorySkip.Site}]: {entry.RuleRelease ?? entry.Name} — DIRECTORY LOCKED (550)");
+                    _raceLog.Write("SKIP-DIRECTORY", $"{entry.Id} {entry.FailureRoute}: {exception.Message}");
+                    var siblings = _raceJobOwners.Where(pair => pair.Key != entry.Id &&
+                        (directorySkip.Destination ? ReferenceEquals(pair.Value.DestinationOwner, skippedRace.DestinationOwner) : ReferenceEquals(pair.Value, skippedRace)))
+                        .Select(pair => pair.Key).ToArray();
+                    foreach (var id in siblings)
+                    {
+                        if (_queue.FirstOrDefault(item => item.Id == id) is { } sibling) sibling.DirectorySkipLabel = directorySkip.Site;
+                        RemoveTransferJob(id);
+                    }
+                }
+                skippedRace.NotifyTransferCompleted();
+                return;
+            }
             if (_raceJobOwners.TryGetValue(entry.Id, out var raceOwner) && raceOwner.DirectoryDenied)
             {
                 if (!raceOwner.DirectoryDenialReported)
@@ -2341,7 +2371,7 @@ public partial class MainWindow : Window
                 AppendFtpLog($"{Environment.NewLine}Transfer integrity FAILED ({entry.Name}): server rejected CRC/size verification; file is not marked complete.");
                 AppendConnectionLog($"{Environment.NewLine}SERVER DETAILS [{entry.Name}]{Environment.NewLine}{exception.Message}");
             }
-            else if (VisionaryLogVisibility.Is550(exception.Message)) Append550(exception.Message, entry.Name);
+            else if (VisionaryLogVisibility.Is550(exception.Message)) Append550(exception.Message, entry.Name, entry.FailureRoute);
             else if (VisionaryLogVisibility.UploadBusySummary(exception.Message) is not null)
                 AppendBridgeInfo(TransferRejection.FormatFailure(entry.Name, exception.Message));
             else AppendConnectionLog(Environment.NewLine + (_visionaryDebugEnabled
@@ -3126,7 +3156,7 @@ public partial class MainWindow : Window
                         var recoverable = !entry.VisionaryRace && _hardResetRecovery.Capture(entry.Id, status.Error);
                         if (recoverable) _hardResetEntries[entry.Id] = entry;
                         var failureDetails = $"Failed job {(retryRace ? "waiting for RACE retry" : recoverable ? "saved for hard reset" : "skipped and removed")}: {entry.Name} ({status.Error}).";
-                        if (VisionaryLogVisibility.Is550(failureDetails)) Append550(failureDetails, entry.Name);
+                        if (VisionaryLogVisibility.Is550(failureDetails)) Append550(failureDetails, entry.Name, entry.FailureRoute);
                         else if (VisionaryLogVisibility.UploadBusySummary(failureDetails) is not null)
                             AppendConnectionLog(Environment.NewLine + failureDetails);
                         else
@@ -3221,7 +3251,7 @@ public partial class MainWindow : Window
 
     private void Append550(string message, string subject = "FTP", string? site = null)
     {
-        var knownSite = site ?? VisionaryLogVisibility.FailureSite(message) ?? "SITE UNKNOWN";
+        var knownSite = VisionaryLogVisibility.FailureSite(message) ?? site ?? "FTP";
         _raceLog.Write("FTP-550", $"[{knownSite}] {message}");
         if (_visionaryDebugEnabled) { AppendFtpLog(Environment.NewLine + $"[{knownSite}] {message.Trim()}"); return; }
         var shortText = VisionaryLogVisibility.CompactTransferFailure(subject, message, knownSite);
@@ -4763,6 +4793,8 @@ public partial class MainWindow : Window
         public TransferDirection Direction { get; } = direction;
         public Guid Id { get; } = id ?? Guid.NewGuid();
         public int ManualQueueOrder { get; set; } = int.MaxValue;
+        public string? FailureRoute { get; set; }
+        public string? DirectorySkipLabel { get; set; }
         private long _totalBytes = totalBytes;
         public long TotalBytes { get => _totalBytes; set { _totalBytes = value; Changed(); Changed(nameof(ProgressPercent)); Changed(nameof(ProgressDisplay)); } }
         private long _speedBytesPerSecond;

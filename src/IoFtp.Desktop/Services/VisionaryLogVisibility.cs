@@ -11,7 +11,18 @@ internal static class VisionaryLogVisibility
     {
         var match = System.Text.RegularExpressions.Regex.Match(message, @"\bsite=([^;|\r\n]+)",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
-        return match.Success ? match.Groups[1].Value.Trim() : null;
+        var site = match.Success ? match.Groups[1].Value.Trim() : null;
+        return string.IsNullOrWhiteSpace(site) || site.Equals("unknown", StringComparison.OrdinalIgnoreCase) ? null : site;
+    }
+
+    public static string FailureContext(string message, string? source, string? destination)
+    {
+        if (FailureSite(message) is { } site) return site;
+        if (string.IsNullOrWhiteSpace(source)) source = null;
+        if (string.IsNullOrWhiteSpace(destination)) destination = null;
+        if (!string.IsNullOrWhiteSpace(source) && !string.IsNullOrWhiteSpace(destination))
+            return $"route {source} → {destination}";
+        return source ?? destination ?? "FTP";
     }
 
     public static bool Is550(string message) => System.Text.RegularExpressions.Regex.IsMatch(message,
@@ -24,7 +35,16 @@ internal static class VisionaryLogVisibility
         if (category != "FILE-LOCKED" && Is550(message)) heading += " (550)";
         else if (category is not null && category != "FILE-LOCKED") heading += " [" + category + "]";
         if (!string.IsNullOrWhiteSpace(site)) heading += " [" + site + "]";
-        return filename == "FTP" ? heading : heading + " : " + filename;
+        var result = filename == "FTP" ? heading : heading + " : " + filename;
+        var flags = System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant;
+        var reason = System.Text.RegularExpressions.Regex.IsMatch(message, @"\b(?:permission|access) denied\b", flags) ? "ACCESS DENIED"
+            : System.Text.RegularExpressions.Regex.IsMatch(message, @"\bno such file or directory\b|\bfile not found\b", flags) ? "NOT FOUND" : null;
+        if (reason is not null)
+        {
+            var command = System.Text.RegularExpressions.Regex.Match(message, @"\bcommand=([A-Z]+)(?:\s|[;|)]|$)", flags);
+            result += " — " + (command.Success ? command.Groups[1].Value.ToUpperInvariant() + ": " : "") + reason;
+        }
+        return result;
     }
 
     public static bool IsBridgeMessage(string message)

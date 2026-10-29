@@ -192,10 +192,21 @@ internal static class RaceFlowChecks
         try
         {
             await TransferRejection.EnsureDirectoryAsync("/denied", (_, _) =>
-            { authCommands++; return Task.FromResult(new RemoteCommandResult(530, "530 Access denied")); }, default);
+            { authCommands++; return Task.FromResult(new RemoteCommandResult(530, "530 Access denied")); }, default, "JBG");
             throw new Exception("530 was ignored");
         }
-        catch (FtpCommandException ex) { Check(ex.StatusCode == 530 && authCommands == 1 && ex.Command == "CWD /denied", "530 CWD does not trigger MKD"); }
+        catch (FtpCommandException ex) { Check(ex.StatusCode == 530 && authCommands == 1 && ex.Command == "CWD /denied" && ex.Site == "JBG", "530 CWD preserves the site and does not trigger MKD"); }
+        try
+        {
+            await TransferRejection.EnsureDirectoryAsync("/denied", (_, _) =>
+                Task.FromResult(new RemoteCommandResult(550, "550 Permission denied")), default, "GBIT02");
+            throw new Exception("Directory rejection was ignored");
+        }
+        catch (DestinationDirectoryException ex)
+        {
+            Check(ex.Site == "GBIT02" && ex.Message.Contains("site=GBIT02; command=CWD /denied") && ex.IsPermanent,
+                "Final directory failure must retain destination site and command");
+        }
         var cancelled = false;
         try { await TransferRejection.EnsureDirectoryAsync("/release", (_, _) => throw new OperationCanceledException(), default); }
         catch (OperationCanceledException) { cancelled = true; }

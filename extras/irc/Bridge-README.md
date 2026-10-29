@@ -48,12 +48,12 @@ Enable the Visionary bridge in FluxFTP. FluxFTP and mIRC must run on the same Wi
 The unified script already handles FU_FXP_CHAINS; do not add a separate cbftp UDP handler for FluxFTP.
 
 For live slots, copy the supplied fluxftp_chains.pl into Visionary's custom folder (beside its other .pl modules).
-Every FU_FXP_CHAINS invokes this read-only module to read User_Files/sites.db and send the source download and destination upload limits with each pair.
+Every FU_FXP_CHAINS invokes this read-only module to read User_Files/sites.db and send the source download and destination upload limits with each pair. Helper 2.1 reads the section in one database query. Install the new helper together with the updated FluxFTP-Bridge.mrc: correlated helper errors immediately forward the pending chain using the existing cached-limit fallback, without waiting for the one-second timeout. Old helpers remain compatible through the timeout path. Repeated timeout warnings are limited to once per minute; /fluxvisi status shows the timeout count and last helper error. A slow Visionary custom-command queue may still reach the one-second timeout; this update does not remove that wait in every case.
 Nonzero sectslotsdn/sectslotsup override slotsdn/slotsup, matching Visionary Chains.pm.
 Changes are picked up on the next incoming chain, including existing watches; this is not continuous polling.
 Missing values retain Flux site settings. The Flux total connection cap and disabled upload/download directions still apply.
 Without the custom module, a warning is logged and chains continue with Flux site limits.
-Use the updated Flux application together with bridge 2.0. Older Flux applications cannot parse the extended slot pairs.
+Use the updated Flux application together with bridge 2.1 (native DLLs remain v2.0). Older Flux applications cannot parse the extended slot pairs.
 
 Pipe error 2 means the FluxFTP named pipe is missing. Check FluxFTP is running, the Visionary bridge is enabled and the current DLLs are loaded.
 Configure section paths per site in FluxFTP. Missing section mappings prevent races.
@@ -78,12 +78,12 @@ Existing section-specific /fluxvisi donebot mappings also work. Only mapped bots
 
 Update and reload FluxFTP-Bridge.mrc (or the standalone Visionary-FluxFTP.mrc). No new Visionary DLL is needed. mIRC titlebar metrics still use /fluxbridge metrics on.
 
-Server stats in Metrics now provide Update server stats, SITE USER fallback for unsupported custom SITE username commands, and SITE STATS fallback display. Manual refresh reuses idle shared sessions and never opens extra FTP logins. Busy/unavailable sessions show a visible status.
+Status commands are configured in Global Settings, defaulting to SITE WKUP 50 every 60 minutes per site, using idle shared sessions. Replies appear in COMMANDS. Automatic SITE USER queries remain disabled.
 
 
 ### Race slots from Visionary (2.1.36)
 
-Install custom/fluxftp_chains.pl in Visionary and reload the updated FluxFTP-Bridge.mrc. Valid Visi download/upload limits control race capacity; imported Flux total limits no longer reduce that capacity. Flux reserves extra connection room for its shared listing and open panes. The server still enforces its own connection limits.
+Install custom/fluxftp_chains.pl in Visionary and reload the updated FluxFTP-Bridge.mrc. Visi download/upload limits control transfer directions within the saved Flux total login ceiling. Shared listing and browsing connections count within that ceiling; Flux does not increase Max slots to make room for them. Other clients using the same account have their own connections.
 
 Flux saves the last known values per site/direction in %LOCALAPPDATA%/FluxFTP/visionary-slots.json. If the helper times out or Flux restarts, those values remain in use until Visi sends new values. A direction with no Visi value uses Flux settings. Explicit zero disables that direction. A missing helper cannot supply values that have never been received; install/fix the helper for automatic migration.
 
