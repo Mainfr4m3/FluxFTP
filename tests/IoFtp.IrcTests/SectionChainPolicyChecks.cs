@@ -41,15 +41,19 @@ Diagnose(Section(sites, [fast.Name]), [[fast.Name, fast2.Name]]);
 Check(rejected.Single().Contains("Trading active is off"), "Inactive destination needs an explicit diagnostic");
 var plan = Plan(section, sites, [[fast2.Name, slow.Name, "2", "3"], [slow.Name, fast.Name]]);
 Check(plan[0].SequenceEqual(new[] { fast2.Name, slow.Name, "2", "3" }), "Visionary pair order and live slots must be preserved");
-Check(plan.Length == 8, "Four classified participants must produce all eight permitted directed routes");
+Check(plan.Length == 1, "Section filtering must never add routes not sent by Visionary");
+Check(!plan.Any(pair => pair[1] == fast.Name || pair[1] == fast2.Name), "A Visi-omitted destination must stay omitted even when Trading active");
+Check(Plan(section, sites, []).Length == 0, "No incoming Visi routes means no planned transfers");
+var ordered = Plan(section, sites, [[fast2.Name, slow.Name, "2", "3"], [fast.Name, slow.Name, "4", "1"], [fast2.Name, slow.Name]]);
+Check(ordered.Length == 2 && ordered[0][0] == fast2.Name && ordered[1][0] == fast.Name && ordered[1][2] == "4", "Keep only explicitly authorized source pairs, their order and slot values without duplicates");
 Check(plan.All(pair => pair[0] != "UNKNOWN" && pair[1] != "UNKNOWN" && !(pair[0].StartsWith("SLOW") && pair[1].StartsWith("FAST"))), "No unknown or 1->10 alternate routes");
-var inactive = Plan(Section(sites, [fast.Name, slow.Name]), sites, []);
-Check(inactive.Length == 1 && inactive[0].SequenceEqual(new[] { fast.Name, slow.Name }), "Inactive participants must never enter expanded chains");
+var inactive = Plan(Section(sites, [fast.Name, slow.Name]), sites, [[fast.Name, slow.Name], [fast2.Name, slow.Name]]);
+Check(inactive.Length == 1 && inactive[0].SequenceEqual(new[] { fast.Name, slow.Name }), "Inactive participants must be removed from incoming chains");
 var noPaths = JsonSerializer.Serialize(section, sectionType).Replace("\"/MOVIES\"", "\"\"");
 Check(Plan(JsonSerializer.Deserialize(noPaths, sectionType)!, sites, []).Length == 0, "Missing section paths must exclude participants");
 var many = Enumerable.Range(0, 40).Select(i => Site($"SITE{i:D2}", i < 20 ? 10 : 1)).ToArray();
 var large = Plan(Section(many, many.Select(p => p.Name).ToArray()), many, [[many[0].Name, many[1].Name]]);
-Check(large.Length == 1160 && large.Select(p => p[1]).Distinct().Count() == 40, "All 40 destinations must participate without forbidden slow->fast routes");
+Check(large.Length == 1 && large[0].SequenceEqual(new[] { many[0].Name, many[1].Name }), "40 active sites must not expand a single Visi-approved route");
 var optionsJson = JsonSerializer.Serialize(new SiteOptions(LinkSpeedGbps: 10));
 Check(JsonSerializer.Deserialize<SiteOptions>(optionsJson)!.LinkSpeedGbps == 10, "Speed class must survive serialization");
 var fixture = Path.Combine(Path.GetTempPath(), "chain-profile-" + Guid.NewGuid().ToString("N"));
@@ -64,7 +68,7 @@ var settingsType = assembly.GetType("IoFtp.Desktop.Models.GlobalSettings")!;
 var settings = JsonSerializer.Deserialize("{\"VisionarySectionChains\":true}", settingsType)!;
 Check((bool)settingsType.GetProperty("VisionarySectionChains")!.GetValue(settings)!, "Global mode must survive settings serialization");
 var sectionJson = JsonSerializer.Serialize(section, sectionType);
-Check(Plan(JsonSerializer.Deserialize(sectionJson, sectionType)!, sites, []).Length == 8, "Trading-active membership must survive serialization");
+Check(Plan(JsonSerializer.Deserialize(sectionJson, sectionType)!, sites, [[fast.Name, slow.Name]]).Length == 1, "Trading-active membership must survive serialization without inventing routes");
 var pipeType = assembly.GetType("IoFtp.Desktop.Services.VisionaryPipeServer")!;
 var constructor = pipeType.GetConstructors().Single();
 Delegate Adapt(Type signature, string method) {
@@ -81,9 +85,12 @@ var receiver = constructor.Invoke([Adapt(parameters[0].ParameterType, "Start"), 
     (Func<string, string, string, bool>)((_, a, b) => Allows(byName[a], byName[b]))]);
 await using (var running = (IAsyncDisposable)receiver) {
     var ack = await (Task<string>)pipeType.GetMethod("SubmitChainsAsync")!.Invoke(receiver, ["MOVIES", "Local.Policy.Test-GROUP", "SLOW;FAST"] )!;
-    Check(ack.StartsWith("OK RECEIVED 8"), "Pipeline must replace rejected input with all permitted section routes");
+    Check(ack.StartsWith("OK RECEIVED 0") && ack.Contains("filtered=1; added=0"), "A rejected Visi route must never be replaced with unrelated routes");
+    Check(PipelineProbe.Routes.IsEmpty, "Rejected-only announcement must not schedule any transfer");
+    ack = await (Task<string>)pipeType.GetMethod("SubmitChainsAsync")!.Invoke(receiver, ["MOVIES", "Local.Policy.Test-GROUP", "FAST2;SLOW;2;3,FAST;SLOW2;1;1,SLOW;FAST"] )!;
+    Check(ack.StartsWith("OK RECEIVED 2") && ack.Contains("incoming=3; filtered=1; added=0"), "Pipeline must filter Visi input without adding routes");
     await PipelineProbe.AllRoutes.Task.WaitAsync(TimeSpan.FromSeconds(5));
-    Check(PipelineProbe.Routes.Count == 8 && !PipelineProbe.Routes.Keys.Any(r => r.StartsWith("SLOW->FAST") || r.StartsWith("SLOW2->FAST")), "No forbidden alternate source may reach race scheduling");
+    Check(PipelineProbe.Routes.Count == 2 && PipelineProbe.Routes.ContainsKey("FAST2->SLOW") && PipelineProbe.Routes.ContainsKey("FAST->SLOW2"), "Only exact Visi-approved pairs may reach race scheduling");
 }
 Console.WriteLine($"PASS: {checks} section-chain policy checks, including all direction combinations, active membership, live slots, 40 destinations, blocks and serialization. No real sites contacted.");
 
@@ -97,7 +104,7 @@ public static class PipelineProbe {
     token.ThrowIfCancellationRequested();
     var type = request.GetType();
     var route = type.GetProperty("SrcSite")!.GetValue(request) + "->" + type.GetProperty("DstSite")!.GetValue(request);
-    Routes[route] = true; if (Routes.Count == 8) AllRoutes.TrySetResult();
+    Routes[route] = true; if (Routes.Count == 2) AllRoutes.TrySetResult();
     return Task.FromResult(false);
  }
 }

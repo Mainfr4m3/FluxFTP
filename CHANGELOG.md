@@ -2,6 +2,10 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.61 — 2026-10-29 (Windows)
+
+- Visionary section-chain mode now only filters the exact source/destination pairs sent by Visionary. It no longer adds routes among Trading active sites, which could bypass Visionary's release rules for omitted destinations. Incoming pair order and live slot values are preserved; Flux permissions, slot limits and speed-class restrictions still apply. Existing watches from an older executable should be stopped by restarting Flux when upgrading.
+
 ## 2.1.60 — 2026-10-29 (Windows)
 
 - Reuses successful destination-directory preparation for files and sources sharing the same destination race and exact path, reducing repeated parent-directory checks. Each FTP transfer still changes to its own directory; directory locks and failed or cancelled preparation retain their checks. Separate paths and races do not share this cache.

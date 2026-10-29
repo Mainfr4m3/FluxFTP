@@ -30,7 +30,10 @@ for busy slots within their request timeout and close the rented session afterwa
 | 1 → 10 Gbit | No |
 
 Permitted incoming Visionary pairs retain their order and live slot values.
-The planner then adds remaining allowed routes among the trading-active sites.
+Trading-active membership and link classes only filter those incoming pairs.
+The planner never adds routes, destinations or alternate sources that Visionary
+did not send for this release. Visionary remains responsible for evaluating its
+release rules before sending chains; Trading active is not release-rule approval.
 Each destination release retains one shared writer and normal file reservations.
 Upload/download permissions, source/target blocks, slot limits and file rules
 still apply. A route needs available source files before it can transfer data.

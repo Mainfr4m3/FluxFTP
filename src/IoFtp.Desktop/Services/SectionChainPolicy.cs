@@ -55,10 +55,10 @@ internal static class SectionChainPolicy
             }
             if (seen.Add(pair[0] + "\t" + pair[1])) result.Add(pair);
         }
-        // Retain Visionary's pair order and live slot values before adding routes.
+        // Visionary has already evaluated its release rules for these exact pairs.
+        // Trading-active membership only restricts them; it must never add routes
+        // whose destination or source was not authorized by Visionary.
         foreach (var pair in incoming) Add(pair, report: true);
-        foreach (var a in participants.Values.OrderByDescending(p => p.EffectiveOptions.LinkSpeedGbps).ThenBy(p => p.Name, StringComparer.OrdinalIgnoreCase))
-            foreach (var b in participants.Values.OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase)) Add([a.Name, b.Name]);
         if (result.Count > 4096) throw new InvalidOperationException("Section chain plan exceeds 4096 routes; reduce trading-active participants.");
         return result.ToArray();
     }
