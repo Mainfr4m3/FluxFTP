@@ -2,6 +2,10 @@
 
 All notable FluxFTP changes are documented here.
 
+## Bridge remote control 1.04 — 2026-10-29
+
+- Remote control 1.04 decodes RAW JSON replies into site-labelled server lines instead of echoing escaped JSON. Blank lines do not truncate subsequent output; the unified bridge shares the formatter with the DLL command path. API formats, EXE and DLLs are unchanged.
+
 ## 2.1.62 — 2026-10-29 (Windows)
 
 - Enlarges Global Settings, bounds its initial size to the desktop work area, and makes the FXP tab scrollable with wrapping checkbox labels and explicit explanations of file averages, live estimates and the 60-second Metrics rate.

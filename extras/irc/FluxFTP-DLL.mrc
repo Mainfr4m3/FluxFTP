@@ -25,7 +25,8 @@ alias fluxdll {
   if (!$isfile(%dll)) { echo -ag FluxFTP DLL: missing $qt(%dll) | return }
   var %request = $iif(%fluxdll.host,%fluxdll.host,127.0.0.1) $iif(%fluxdll.port,%fluxdll.port,55477) %fluxdll.password $1-
   var %reply = $dll(%dll,FluxFTPCommand,%request)
-  echo -ag FluxFTP: %reply
+  if ($isalias(fluxftp.reply)) fluxftp.reply %reply
+  else echo -ag FluxFTP: %reply
 }
 
 menu menubar {

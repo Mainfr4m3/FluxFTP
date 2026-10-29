@@ -1,4 +1,4 @@
-; FluxFTP remote control v1.03 for mIRC and AdiIRC
+; FluxFTP remote control v1.04 for mIRC and AdiIRC
 ; Load with: /load -rs "C:\path\to\FluxFTP.mrc"
 
 alias fluxftp {
@@ -49,7 +49,7 @@ alias flux {
   fluxftp $1-
 }
 
-alias fluxftp.version return 1.03
+alias fluxftp.version return 1.04
 
 alias -l fluxftp.send {
   if (!%fluxftp.password) {
@@ -97,7 +97,7 @@ menu menubar {
   ..-
   ..Configure...:fluxftp.menu.config
   ..Forget configuration:fluxftp forget
-  ..Help / About (v1.03):fluxftp help
+  ..Help / About (v1.04):fluxftp help
 }
 
 ; Channel right-click menu: FluxFTP (alongside tools such as d-tool)
@@ -110,7 +110,7 @@ menu channel {
   .-
   .Configure...:fluxftp.menu.config
   .Forget configuration:fluxftp forget
-  .Help / About (v1.03):fluxftp help
+  .Help / About (v1.04):fluxftp help
 }
 
 alias -l fluxftp.menu.config {
@@ -161,6 +161,60 @@ alias -l fluxftp.menu.download {
   fluxftp download %site %path
 }
 
+; RAW results are a flat JSON array. Decode only string fields, once, without
+; evaluating server text as mIRC commands or identifiers. No JSON add-on needed.
+alias fluxftp.reply {
+  var -n %rest = $1-, %count = 0
+  if ($left(%rest,1) != $chr(91)) { fluxftp.reply.lines FluxFTP: %rest | return }
+  while ($regex(fluxftp.object,%rest,/(\{(?:[^"{}]|"(?:\\.|[^"\\])*")*\})/)) {
+    var -n %object = $regml(fluxftp.object,1)
+    var %next = $calc($regml(fluxftp.object,1).pos + $len(%object))
+    %rest = $mid(%rest,%next)
+    var -n %site = $fluxftp.json.field(%object,name)
+    if (%site != $null) {
+      var -n %result = $fluxftp.json.field(%object,result)
+      var -n %error = $fluxftp.json.field(%object,error)
+      var -n %prefix = $+(FluxFTP[,%site,]:)
+      if (%error != $null) fluxftp.reply.lines %prefix ERROR: %error
+      elseif (%result != $null) fluxftp.reply.lines %prefix %result
+      else echo -ag %prefix Command returned an empty response.
+      inc %count
+    }
+  }
+  if (%count == 0) fluxftp.reply.lines FluxFTP: $1-
+}
+
+alias -l fluxftp.json.field {
+  var %pattern = $+(/",$2,"\s*:\s*("(?:\\.|[^"\\])*")/)
+  if (!$regex(fluxftp.field,$1,%pattern)) return
+  var -n %quoted = $regml(fluxftp.field,1)
+  return $fluxftp.json.decode($mid(%quoted,2,$calc($len(%quoted) - 2)))
+}
+
+alias -l fluxftp.json.decode {
+  ; A single replacement pass preserves spaces and literal \\n text.
+  return $regsubex(fluxftp.decode,$1,/\\(u[0-9a-fA-F]{4}|["\\\/bfnrt])/g,$fluxftp.json.escape(\1))
+}
+
+alias -l fluxftp.json.escape {
+  if ($left($1,1) == u) return $chr($base($mid($1,2),16,10))
+  if ($1 == n) return $lf
+  if ($1 == r) return $cr
+  if ($1 == t) return $chr(9)
+  if ($1 == b) return $chr(8)
+  if ($1 == f) return $chr(12)
+  return $1
+}
+
+alias -l fluxftp.reply.lines {
+  var -n %prefix = $1, %text = $remove($2-,$cr), %i = 1
+  while (%i <= $numtok(%text,10)) {
+    var -n %line = $gettok(%text,%i,10)
+    echo -ag %prefix %line
+    inc %i
+  }
+}
+
 on *:UDPREAD:fluxftp:{
   .timerFluxFTPTimeout off
   if ($sockerr) {
@@ -171,12 +225,7 @@ on *:UDPREAD:fluxftp:{
   unset %fluxftp.reply
   sockread -f %fluxftp.reply
   if (!$sockbr) return
-  var %i = 1, %line
-  while ($gettok(%fluxftp.reply,%i,10) != $null) {
-    %line = $remove($gettok(%fluxftp.reply,%i,10),$cr)
-    echo -ag FluxFTP: %line
-    inc %i
-  }
+  fluxftp.reply %fluxftp.reply
   sockclose $sockname
 }
 

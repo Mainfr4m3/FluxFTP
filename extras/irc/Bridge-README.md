@@ -1,5 +1,17 @@
 # FluxFTP unified mIRC bridge
 
+## Readable RAW responses
+
+Remote control 1.04 decodes the flat JSON RAW result array in the IRC script and
+prints the server response one line at a time, prefixed with its site name.
+JSON-escaped CR/LF, quotes, backslashes and Unicode escapes are decoded once;
+literal backslash sequences in server text are preserved. Blank lines do not
+stop later response lines from being printed. Errors are shown under their site.
+The UDP and HTTP JSON API formats are unchanged. The unified script also uses
+this formatter for the DLL command path; the standalone DLL script retains its
+old fallback when the formatter is not loaded. Replace and reload the bridge
+script to use this change; no EXE or DLL update is needed.
+
 ## Live-slot callback diagnostics (probe 1)
 
 After loading this script, `/fluxvisi status` reports `probe 1 available`.
