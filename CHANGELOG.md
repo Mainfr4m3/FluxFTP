@@ -2,6 +2,11 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.60 — 2026-10-29 (Windows)
+
+- Reuses successful destination-directory preparation for files and sources sharing the same destination race and exact path, reducing repeated parent-directory checks. Each FTP transfer still changes to its own directory; directory locks and failed or cancelled preparation retain their checks. Separate paths and races do not share this cache.
+- Verified with 176 race-flow checks, locked-directory checks and a clean Windows build. Live JBG race timing still requires verification on the server. Bridge files remain unchanged from 2.1.59; Linux remains on 2.1.50.
+
 ## 2.1.59 — 2026-10-29 (Windows)
 
 - Preserves the server and CWD command through destination-directory failures, adds concise ACCESS DENIED / NOT FOUND reasons and uses an explicit source/destination route when the replying server is not identifiable instead of SITE UNKNOWN.

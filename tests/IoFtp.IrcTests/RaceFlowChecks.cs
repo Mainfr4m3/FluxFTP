@@ -144,6 +144,57 @@ internal static class RaceFlowChecks
         var otherContinued = false;
         await otherDestination.EnsureDestinationDirectoryAsync(() => { otherContinued = true; return Task.CompletedTask; }, default);
         Check(otherContinued && !otherDestination.DirectoryDenied, "directory denial does not block other destinations or a new race");
+        var preparedOwner = new object();
+        var preparedA = new VisionaryRaceState(new()) { DestinationOwner = preparedOwner };
+        var preparedB = new VisionaryRaceState(new()) { DestinationOwner = preparedOwner };
+        var preparedCalls = 0;
+        var enteredPreparation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finishPreparation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var preparing = preparedA.EnsureDestinationDirectoryAsync("/TV/Release", async () =>
+        {
+            preparedCalls++;
+            enteredPreparation.SetResult();
+            await finishPreparation.Task;
+        }, default);
+        await enteredPreparation.Task;
+        var waitingPreparations = Enumerable.Range(0, 12).Select(_ => preparedB.EnsureDestinationDirectoryAsync("/TV/Release",
+            () => { preparedCalls++; return Task.CompletedTask; }, default)).ToArray();
+        finishPreparation.SetResult();
+        await Task.WhenAll(waitingPreparations.Append(preparing));
+        Check(preparedCalls == 1, "parallel race sources prepare the same destination path only once");
+        foreach (var path in new[] { "/TV/Release/Sample", "/TV/release", "/TV/Release2" })
+            await preparedB.EnsureDestinationDirectoryAsync(path, () => { preparedCalls++; return Task.CompletedTask; }, default);
+        Check(preparedCalls == 4, "subdirectories and case-sensitive distinct paths have independent preparation");
+        await new VisionaryRaceState(new()).EnsureDestinationDirectoryAsync("/TV/Release",
+            () => { preparedCalls++; return Task.CompletedTask; }, default);
+        Check(preparedCalls == 5, "another race destination does not reuse a previous race's preparation");
+        var retryPreparation = new VisionaryRaceState(new());
+        var retryCalls = 0;
+        try
+        {
+            await retryPreparation.EnsureDestinationDirectoryAsync("/TV/Retry", () =>
+            { retryCalls++; throw new IOException("temporary connection failure"); }, default);
+        }
+        catch (IOException) { }
+        await retryPreparation.EnsureDestinationDirectoryAsync("/TV/Retry", () => { retryCalls++; return Task.CompletedTask; }, default);
+        Check(retryCalls == 2, "failed preparation is not cached and can be retried");
+        using (var cancelledPreparation = new CancellationTokenSource())
+        {
+            try
+            {
+                await retryPreparation.EnsureDestinationDirectoryAsync("/TV/Cancelled", () =>
+                { cancelledPreparation.Cancel(); return Task.CompletedTask; }, cancelledPreparation.Token);
+            }
+            catch (OperationCanceledException) { }
+        }
+        var cancelledRetried = false;
+        await retryPreparation.EnsureDestinationDirectoryAsync("/TV/Cancelled", () => { cancelledRetried = true; return Task.CompletedTask; }, default);
+        Check(cancelledRetried, "cancelled preparation is not cached even when the callback returns");
+        preparedA.SkipDirectory(new LockedDirectorySkip("GBIT02", true));
+        var cachedPathStopped = false;
+        try { await preparedB.EnsureDestinationDirectoryAsync("/TV/Release", () => Task.CompletedTask, default); }
+        catch (RaceDirectorySkippedException) { cachedPathStopped = true; }
+        Check(cachedPathStopped, "a later directory lock stops even a previously prepared path");
         var commands = new List<string>();
         try
         {

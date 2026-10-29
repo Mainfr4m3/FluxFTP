@@ -2104,6 +2104,7 @@ public partial class MainWindow : Window
                     entry.Direction == TransferDirection.RelayLeftToRight ? rightProfile! : leftProfile!;
                 if (_raceJobOwners.TryGetValue(entry.Id, out var directoryRace))
                     await directoryRace.EnsureDestinationDirectoryAsync(
+                        RemoteParent(entry.Destination),
                         () => EnsureRemoteDirectoryAsync(destinationSession, RemoteParent(entry.Destination), cancellationToken), cancellationToken);
                 else await EnsureRemoteDirectoryAsync(destinationSession, RemoteParent(entry.Destination), cancellationToken);
                 long fxpOffset = 0;

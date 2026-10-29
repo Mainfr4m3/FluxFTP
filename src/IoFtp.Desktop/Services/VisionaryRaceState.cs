@@ -101,6 +101,7 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
         public string? Failure;
         public bool Reported;
         public LockedDirectorySkip? Skip;
+        public readonly HashSet<string> PreparedPaths = new(StringComparer.Ordinal);
     }
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<object, DirectoryState> DirectoryStates = new();
     private DirectoryState SharedDirectory => DirectoryStates.GetValue(DestinationOwner, _ => new());
@@ -119,14 +120,25 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
         if (skip.Destination) SharedDirectory.Skip ??= skip;
         else _directorySkip ??= skip;
     }
-    public async Task EnsureDestinationDirectoryAsync(Func<Task> ensure, CancellationToken token)
+    public Task EnsureDestinationDirectoryAsync(Func<Task> ensure, CancellationToken token) =>
+        EnsureDestinationDirectoryAsync(null, ensure, token);
+
+    public async Task EnsureDestinationDirectoryAsync(string? path, Func<Task> ensure, CancellationToken token)
     {
         var shared = SharedDirectory;
         await shared.Gate.WaitAsync(token);
         try
         {
             ThrowIfStopped();
-            try { await ensure(); }
+            // This caches directory creation checks, never a session's working directory.
+            // Each transfer still performs its own CWD before STOR/RETR.
+            if (path is not null && shared.PreparedPaths.Contains(path)) return;
+            try
+            {
+                await ensure();
+                token.ThrowIfCancellationRequested();
+                if (path is not null) shared.PreparedPaths.Add(path);
+            }
             catch (Exception exception) when (exception is DestinationDirectoryException { IsPermanent: true } || TransferRejection.Category(exception.Message) == "DIRECTORY-DENIED")
             {
                 shared.Failure = exception.Message;
