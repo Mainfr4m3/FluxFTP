@@ -22,6 +22,14 @@ internal static class ChainBatchChecks
         if (!response.StartsWith("ERROR") || accepted.Count != 3) throw new Exception("Invalid batch must not partially dispatch");
         response = await Send("TRANSFER\tTV\tRelease-GROUP\tA\tE");
         if (!response.StartsWith("OK") || accepted.Last() != "A->E") throw new Exception("Legacy single transfer broken");
+        var diagnostics = new List<string>();
+        await using var filtered = new VisionaryPipeServer(_ => Task.FromResult<object>(new { ok = true }),
+            log: diagnostics.Add, sectionChainMode: () => true,
+            planChains: (_, pairs) => pairs.Where(pair => pair[0] != "JBG" && pair[1] != "JBG").ToArray());
+        var filteredAck = await Send("CHAINS\tTV\tFilter.Check-GROUP\tA;B,A;JBG\t0\t0", filtered);
+        if (!filteredAck.StartsWith("OK RECEIVED 1") || !filteredAck.Contains("incoming=2; filtered=1; added=0") ||
+            !diagnostics.Any(message => message.Contains("CHAINS RECEIVED") && message.Contains("sites=A,B,JBG")))
+            throw new Exception("Pre-filter receipt must retain JBG and distinguish received from permitted chain counts");
         Console.WriteLine("PASS: complete chain batch, invalid batch rejection, acknowledgement and legacy single transfer.");
         string? resultEvent = null;
         await using var results = new VisionaryPipeServer(_ => throw new Exception("Result must not start a transfer"),

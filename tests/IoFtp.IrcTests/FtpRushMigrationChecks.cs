@@ -83,14 +83,30 @@ internal static class FtpRushMigrationChecks
             var names = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["PRiME"] = "PRiME", ["SECOND"] = "SECOND" };
             var merged = FtpRushSectionMigration.Merge([], rows, names, false);
             Check(merged.Count == 2 && merged.Single(s => s.Name == "TV-HD").SitePaths.Count == 2, "same section keeps independent site paths");
+            Check(merged.All(section => section.SitePaths.Keys.All(site => section.TradingSites?.Contains(site, StringComparer.OrdinalIgnoreCase) == true)),
+                "All selected imported mappings must be Trading active");
             var direct = new SectionStore().Import(xml);
             Check(direct.Count == 2 && direct.Single(s => s.Name == "TV-HD").SitePaths["SECOND"] == "/TV/HD/", "Sections XML import preserves Rush site identities");
+            Check(direct.All(section => section.TradingSites?.Length == section.SitePaths.Count), "Direct Rush section import must also activate mappings");
             var existing = new SectionDefinition("TV-HD", new() { ["prime"] = "/old" }, 4, "re:HD", "re:BAD", SectionValidationMode.Block);
             var kept = FtpRushSectionMigration.Merge([existing], rows, names, false).Single(s => s.Name == "TV-HD");
             Check(kept.SitePaths["PRiME"] == "/old" && kept.Hotkey == 4 && kept.DenyPatterns == "re:BAD" && kept.ValidationMode == SectionValidationMode.Block, "skip preserves path and rules");
+            Check(kept.TradingSites?.Contains("PRiME", StringComparer.OrdinalIgnoreCase) == true,
+                "Import activates selected existing mappings even when keeping their existing path");
             var replaced = FtpRushSectionMigration.Merge([existing], rows, names, true).Single(s => s.Name == "TV-HD");
             Check(replaced.SitePaths["PRiME"] == "/incoming/TV-HD/" && replaced.AllowPatterns == "re:HD", "replace changes path but preserves precheck");
             Check(existing.SitePaths["prime"] == "/old", "merge does not mutate originals");
+            Check(existing.TradingSites is null, "Import activation must not mutate original section records");
+            var selection = rows.Select(row => new FtpRushSectionRow { Selected = row.Site.Equals("PRiME", StringComparison.OrdinalIgnoreCase),
+                Section = row.Section, Site = row.Site, Path = row.Path }).ToArray();
+            var untouched = existing with { SitePaths = new() { ["PRiME"] = "/old", ["SECOND"] = "/second", ["KEEP"] = "/keep" }, TradingSites = ["KEEP"] };
+            var selective = FtpRushSectionMigration.Merge([untouched], selection, names, false).Single(section => section.Name == "TV-HD");
+            Check(selective.TradingSites!.Contains("KEEP") && selective.TradingSites!.Contains("PRiME") && !selective.TradingSites!.Contains("SECOND"),
+                "Only selected mappings are activated and unrelated activation is preserved");
+            var repeat = FtpRushSectionMigration.Merge([selective], selection, names, false).Single(section => section.Name == "TV-HD");
+            Check(repeat.TradingSites!.Length == repeat.TradingSites.Distinct(StringComparer.OrdinalIgnoreCase).Count(), "Repeated imports must not duplicate active sites");
+            var restoredSection = System.Text.Json.JsonSerializer.Deserialize<SectionDefinition>(System.Text.Json.JsonSerializer.Serialize(selective))!;
+            Check(restoredSection.TradingSites!.SequenceEqual(selective.TradingSites!), "Imported activation must survive serialization");
             var special = FtpRushSectionMigration.Preview([new("TV", "/one", "A"), new("TV", "/two", "A"), new("Local", "/C:/Desktop"), new("Global", "/MP3")]);
             Check(special.All(row => !row.Selected), "conflicts, local and global bookmarks require review");
             Check(special.Single(row => row.Section == "TV").Path == "", "conflicting path never chosen silently");

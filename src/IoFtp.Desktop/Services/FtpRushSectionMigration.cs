@@ -56,8 +56,16 @@ internal static class FtpRushSectionMigration
                 throw new InvalidDataException($"Conflicting paths for {resolvedSite}/{sectionName}.");
             incoming[key] = path;
             var index = result.FindIndex(section => section.Name.Equals(sectionName, StringComparison.OrdinalIgnoreCase));
-            if (index < 0) { result.Add(new(sectionName, new(StringComparer.OrdinalIgnoreCase) { [resolvedSite] = path })); continue; }
+            if (index < 0)
+            {
+                result.Add(new(sectionName, new(StringComparer.OrdinalIgnoreCase) { [resolvedSite] = path }, TradingSites: [resolvedSite]));
+                continue;
+            }
             if (replace || !result[index].SitePaths.ContainsKey(resolvedSite)) result[index].SitePaths[resolvedSite] = path;
+            result[index] = result[index] with
+            {
+                TradingSites = (result[index].TradingSites ?? []).Append(resolvedSite).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+            };
         }
         return result;
     }

@@ -22,6 +22,12 @@ public partial class SectionsWindow : Window
 
     private void Add_Click(object sender, RoutedEventArgs e) { var row = new SectionRow("New section", "ioFTPD", "/", 0, "", "", SectionValidationMode.Disabled); _rows.Add(row); SectionsGrid.SelectedItem = row; SectionsGrid.ScrollIntoView(row); }
     private void Remove_Click(object sender, RoutedEventArgs e) { if (SectionsGrid.SelectedItem is SectionRow row) _rows.Remove(row); }
+    private void ActivateAll_Click(object sender, RoutedEventArgs e)
+    {
+        SectionsGrid.CommitEdit(); SectionsGrid.CommitEdit();
+        foreach (var row in _rows) row.TradingActive = true;
+        SectionsGrid.Items.Refresh();
+    }
     private void ImportSections_Click(object sender, RoutedEventArgs e)
     {
         SectionsGrid.CommitEdit(); SectionsGrid.CommitEdit();

@@ -58,7 +58,8 @@ internal sealed class ApiServer : IAsyncDisposable
             _visionaryPipe = new VisionaryPipeServer(startTransfer, diagnosticLog, visionaryStep, visionarySlots,
                 settings.VisionaryConcurrentScheduling, settings.VisionaryRecheckSeconds, sourcePriority, raceObserved, raceResult,
                 sectionChainMode: () => Volatile.Read(ref _runtimeSettings).VisionarySectionChains,
-                planChains: SectionChainRuntime.LoadPlan, routeAllowed: SectionChainRuntime.LoadAllows);
+                planChains: (section, pairs) => SectionChainRuntime.LoadPlanWithDiagnostics(section, pairs, diagnosticLog),
+                routeAllowed: SectionChainRuntime.LoadAllows);
             if (settings.EnableVisionaryBridge)
             {
             _visionaryPipe.Start();

@@ -47,7 +47,7 @@
         </TabItem>
         <TabItem x:Name="SectionsTab" Header="Sections and paths">
          <DockPanel>
-          <TextBlock DockPanel.Dock="Top" Margin="8" TextWrapping="Wrap" Text="Site-specific remote bookmarks become sections automatically. Conflicting paths and global/local bookmarks are unselected. Edit a site/path to resolve it, then select the row. Skip/Replace also applies to existing section paths; existing precheck rules are preserved."/>
+          <TextBlock DockPanel.Dock="Top" Margin="8" TextWrapping="Wrap" Text="Site-specific remote bookmarks become sections automatically. Imported mappings have Trading active enabled; uncheck exceptions in Sections after import. Conflicting paths and global/local bookmarks are unselected. Edit a site/path to resolve it, then select the row. Skip/Replace also applies to existing section paths; existing precheck rules are preserved."/>
           <DataGrid x:Name="SectionsGrid" AutoGenerateColumns="False" CanUserAddRows="False">
            <DataGrid.Columns>
             <DataGridCheckBoxColumn Header="IMPORT" Binding="{Binding Selected, UpdateSourceTrigger=PropertyChanged}" Width="70"/>

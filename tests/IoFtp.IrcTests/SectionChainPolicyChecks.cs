@@ -30,6 +30,15 @@ Check(!Allows(fast with { Options = fast.EffectiveOptions with { BlockTransfersT
 Check(!Allows(fast, slow with { Options = slow.EffectiveOptions with { BlockTransfersFrom = "fast" } }), "Blocked source must apply");
 var sites = new[] { fast, fast2, slow, slow2, unknown }.Select(p => p with { Description = "Shared description" }).ToArray();
 var section = Section(sites, sites.Select(p => p.Name).ToArray());
+var rejected = new List<string>();
+string[][] Diagnose(object config, string[][] incoming) => (string[][])policy.GetMethod("PlanWithDiagnostics", flags)!.Invoke(null,
+    [config, sites, incoming, (Action<string>)rejected.Add])!;
+Diagnose(section, [[fast.Name, unknown.Name], [slow.Name, fast.Name]]);
+Check(rejected.Count == 2 && rejected.Any(message => message.Contains("speed class")) && rejected.Any(message => message.Contains("1 Gbit source to 10 Gbit")),
+    "Filtered incoming routes must report speed classification and slow-to-fast reasons");
+rejected.Clear();
+Diagnose(Section(sites, [fast.Name]), [[fast.Name, fast2.Name]]);
+Check(rejected.Single().Contains("Trading active is off"), "Inactive destination needs an explicit diagnostic");
 var plan = Plan(section, sites, [[fast2.Name, slow.Name, "2", "3"], [slow.Name, fast.Name]]);
 Check(plan[0].SequenceEqual(new[] { fast2.Name, slow.Name, "2", "3" }), "Visionary pair order and live slots must be preserved");
 Check(plan.Length == 8, "Four classified participants must produce all eight permitted directed routes");

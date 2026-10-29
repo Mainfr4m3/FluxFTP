@@ -2,6 +2,12 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.58 — 2026-10-29 (Windows)
+
+- Adds Activate all in Sections to check Trading active for every displayed mapping. Users can uncheck exceptions before Save. FTPRush section imports activate the selected imported site/section mappings, including existing mappings, while preserving unselected mappings and existing path/rule merge behavior.
+
+- Logs incoming Visionary chain counts and sites before section filtering. Acknowledgements distinguish incoming, filtered and added routes. Section-chain rejections report the affected pair and reason, including Trading active, missing paths and speed classes, without changing trading permissions or route selection.
+
 ## 2.1.57 — 2026-10-28 (Windows)
 
 - Site Manager shows configured total/upload/download slots, site priority and manual link speed directly after Name. Unknown speed classes display Not classified. Columns can be sorted with the existing header controls.

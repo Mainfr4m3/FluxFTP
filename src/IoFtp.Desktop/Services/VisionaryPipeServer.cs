@@ -107,12 +107,19 @@ internal sealed class VisionaryPipeServer : IAsyncDisposable
                 var pairs = fields[3].Split(',', StringSplitOptions.RemoveEmptyEntries).Select(pair => pair.Split(';')).ToArray();
                 if (pairs.Length is < 1 or > 256 || pairs.Any(pair => pair.Length is not (2 or 4) || pair.Take(2).Any(site => string.IsNullOrWhiteSpace(site) || site.Any(char.IsWhiteSpace) || site.Contains('/') || site.Contains('\\')) || (pair.Length == 4 && pair.Skip(2).Any(value => !ValidSlots(value)))))
                     throw new ArgumentException("Invalid chain batch (maximum 256 pairs).");
+                var incomingCount = pairs.Length;
+                var incomingRoutes = pairs.Select(pair => pair[0] + "\t" + pair[1]).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var sites = string.Join(",", pairs.SelectMany(pair => pair.Take(2)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(site => site, StringComparer.OrdinalIgnoreCase));
+                _log?.Invoke($"VISIONARY CHAINS RECEIVED [{fields[1]}] {fields[2]}: incoming={incomingCount}; sites={sites}; section-chain-mode={SectionChains}");
                 if (!planned && SectionChains && _planChains is not null)
                 {
                     pairs = _planChains(fields[1], pairs);
                     _log?.Invoke($"VISIONARY section chains {fields[1]} / {fields[2]}: {pairs.Length} permitted routes; 1 Gbit -> 10 Gbit blocked");
                 }
-                await writer.WriteLineAsync($"OK RECEIVED {pairs.Length} chain pairs; per-pair results are in the FluxFTP log");
+                var permitted = pairs.Select(pair => pair[0] + "\t" + pair[1]).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var filtered = incomingRoutes.Count(route => !permitted.Contains(route));
+                var added = permitted.Count(route => !incomingRoutes.Contains(route));
+                await writer.WriteLineAsync($"OK RECEIVED {pairs.Length} chain pairs; incoming={incomingCount}; filtered={filtered}; added={added}; per-pair results are in the FluxFTP log");
                 acknowledged = true;
                 foreach (var pair in pairs)
                 {
