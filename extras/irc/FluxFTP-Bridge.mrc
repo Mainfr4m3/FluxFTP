@@ -252,9 +252,20 @@ alias -l fluxdll.menu.download {
 alias -l fluxvisi.dll return $scriptdir $+ $iif($bits == 64,FluxFTPVisionary64.dll,FluxFTPVisionary32.dll)
 
 alias fluxvisi {
+  if ($1 == probe) {
+    if ($0 != 4) { echo -ag Usage: /fluxvisi probe SECTION SOURCE DESTINATION | return }
+    var %probe.root = $deltok($replace(%visi_folder,$chr(92),/),-1,47)
+    if (!$isfile($+(%probe.root,/custom/fluxftp_chains.pl))) { echo -ag FluxFTP probe: helper missing in Visionary/custom. | return }
+    set -e %fluxvisi.probe.tick $ticks
+    .timerFluxVisiProbe -mo 1 3000 fluxvisi.probe.timeout %fluxvisi.probe.tick
+    echo -ag FluxFTP probe: reading live slots for $2 $3 -> $4 $+ . No transfer will be started.
+    custom fluxftp_chains.pl FLUXFTP_LIVE_PROBE $2 FluxFTP.Probe %fluxvisi.probe.tick $+($3,;,$4)
+    return
+  }
   if ($1 == status) {
     echo -ag FluxFTP bridge: pending live-slot replies: $hget(FluxVisiPending,0).item $+ . Script: $script
     echo -ag FluxFTP live-slot helper: timeouts: $iif(%fluxvisi.live.timeouts,%fluxvisi.live.timeouts,0) - last error: $iif(%fluxvisi.live.error != $null,%fluxvisi.live.error,none)
+    echo -ag FluxFTP live-slot diagnostics: probe 1 available. Usage: /fluxvisi probe SECTION SOURCE DESTINATION
     return
   }
   if ($1 == winbot) {
@@ -346,6 +357,26 @@ on *:SIGNAL:FU_FXP_CHAINS:{
   }
   echo @FluxFTP $timestamp WARNING live slots unavailable; install custom/fluxftp_chains.pl in Visionary. Using last known Visi limits in Flux; Flux fallback only where unknown.
   fluxvisi.sendchains %section %release $replace(%chains,$chr(32),$chr(44)) %chain.tick
+}
+
+alias -l fluxvisi.probe.timeout {
+  if (%fluxvisi.probe.tick != $1) return
+  echo -ag FluxFTP probe: no helper callback within 3000ms. Check Visionary console and custom/fluxftp_chains.pl; race slot limits are unchanged.
+}
+
+on *:SIGNAL:FLUXFTP_LIVE_PROBE:{
+  if ($1 == ERROR) {
+    if ($4 != %fluxvisi.probe.tick) return
+    .timerFluxVisiProbe off
+    echo -ag FluxFTP probe: helper ERROR after $calc($ticks - $4) ms: $5-
+    unset %fluxvisi.probe.tick
+    return
+  }
+  if ($0 < 4 || $3 !isnum) { echo -ag FluxFTP probe: invalid callback: $1- | return }
+  if ($3 != %fluxvisi.probe.tick) return
+  .timerFluxVisiProbe off
+  echo -ag FluxFTP probe: helper replied after $calc($ticks - $3) ms. Section: $1 - SOURCE;DESTINATION;DOWNLOAD;UPLOAD: $4
+  unset %fluxvisi.probe.tick
 }
 
 alias -l fluxvisi.sendchains {

@@ -43,6 +43,10 @@ $rows{'B/TV'} = [4, 0, 0, 0];
 die 'live changes or zero not retained' unless run('A;B') =~ /A;B;9;0\n$/;
 die 'missing values not marked unknown' unless run('A;UNKNOWN') =~ /A;UNKNOWN;9;-\n$/;
 die 'case-insensitive site matching lost' unless run('a;b') =~ /a;b;9;0\n$/;
+
+$return_sig = 'FLUXFTP_LIVE_PROBE';
+die 'diagnostic probe must use its isolated callback' unless run('A;B') =~ /^!SIGNAL FLUXFTP_LIVE_PROBE TV Release-GROUP 123 A;B;9;0\n$/;
+$return_sig = 'FLUXFTP_LIVE_CHAINS';
 die 'invalid chain not rejected' unless run('A;B', 'INVALID') =~ /ERROR/;
 $fail = 1;
 die 'database error lost request correlation' unless run('A;B') =~ /ERROR TV Release-GROUP 123 .*database unavailable/;

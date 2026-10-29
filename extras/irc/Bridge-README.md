@@ -1,4 +1,17 @@
-# FluxFTP unified mIRC bridge 2.0
+# FluxFTP unified mIRC bridge
+
+## Live-slot callback diagnostics (probe 1)
+
+After loading this script, `/fluxvisi status` reports `probe 1 available`.
+Run `/fluxvisi probe TV-1080P RC JBG` using a section and site names present in Visionary.
+The probe reads the same live slot database through Visionary's custom helper, but uses
+a separate callback and never calls FluxFTPChains or starts a transfer.
+It prints elapsed milliseconds and source download / destination upload limits, or a
+helper error. A warning after 3000ms means no callback has arrived by then; a later
+callback still reports its elapsed time. No callback does not by itself identify
+whether Visionary failed to execute the helper or failed to return its response.
+This diagnostic needs no EXE or DLL update. Its mIRC runtime behavior must be checked
+on the VM; the helper's isolated callback is covered by the local Perl test.
 
 Keep FluxFTP-Bridge.mrc and the four DLL files together in this folder:
 - FluxFTP32.dll
