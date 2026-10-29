@@ -2,6 +2,12 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.62 — 2026-10-29 (Windows)
+
+- Enlarges Global Settings, bounds its initial size to the desktop work area, and makes the FXP tab scrollable with wrapping checkbox labels and explicit explanations of file averages, live estimates and the 60-second Metrics rate.
+- Uses decimal MB/s consistently for status, transfer jobs, detailed rate statistics and IRC metrics, matching FXP average and Metrics cards. Previously some fields displayed binary MiB/s values labelled MB/s.
+- Measures the final per-file FXP average over the full successful attempt, including negotiation such as CPSV, using one wall clock without double-counting parallel stages. Resume offsets remain excluded from transferred bytes; failures produce no successful average. Restores the Metrics label to FXP RATE · 60s and removes approximation prefixes from FXP displays. The 60-second Metrics calculation and underlying live-estimate accounting remain unchanged.
+
 ## 2.1.61 — 2026-10-29 (Windows)
 
 - Visionary section-chain mode now only filters the exact source/destination pairs sent by Visionary. It no longer adds routes among Trading active sites, which could bypass Visionary's release rules for omitted destinations. Incoming pair order and live slot values are preserved; Flux permissions, slot limits and speed-class restrictions still apply. Existing watches from an older executable should be stopped by restarting Flux when upgrading.

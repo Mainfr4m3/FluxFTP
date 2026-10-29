@@ -87,6 +87,8 @@ public partial class GlobalSettingsWindow : Window
         _originalTheme = s.Theme ?? ThemeManager.Default;
         InitializeComponent(); ProtocolBox.ItemsSource = Enum.GetValues<TransferProtocol>().Select(protocol => new ProtocolChoice(protocol)).ToArray(); ProxyTypeBox.ItemsSource = Enum.GetValues<ProxyType>(); LegendModeBox.ItemsSource = new[] { "Scrolling", "Static", "Activity", "Compact", "Hidden" };
         Closing += (_, args) => { if (_backupBusy) args.Cancel = true; };
+        Width = Math.Min(Width, Math.Max(MinWidth, SystemParameters.WorkArea.Width - 32));
+        Height = Math.Min(Height, Math.Max(MinHeight, SystemParameters.WorkArea.Height - 32));
         if (BackupService.Current().HasPendingImport) BackupStatusText.Text = "A backup import is pending. Close FluxFTP completely and start it again, or cancel the pending import.";
         PassiveFromBox.Text = s.PassivePortMin == 0 ? "" : s.PassivePortMin.ToString();
         PassiveToBox.Text = s.PassivePortMax == 0 ? "" : s.PassivePortMax.ToString();

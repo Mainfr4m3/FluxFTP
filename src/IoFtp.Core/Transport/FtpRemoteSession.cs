@@ -267,6 +267,9 @@ public sealed class FtpRemoteSession : IRemoteSession
         if (ReferenceEquals(this, destination)) throw new InvalidOperationException("FXP requires two different sessions.");
         _lastFxpStageTimings.Clear();
         LastFxpNegotiation = "None";
+        // One wall clock covers negotiation and data, including parallel commands
+        // exactly once. Failed attempts leave the successful duration at zero.
+        var attemptTimer = Stopwatch.StartNew();
 
         var sourceProfile = _profile!;
         var destinationProfile = destination._profile!;
@@ -360,6 +363,7 @@ public sealed class FtpRemoteSession : IRemoteSession
                 ConfigureActiveFxpEndpointAsync(destination, sourceAdvertised, cancellationToken));
             LastFxpNegotiation = secureFxp ? usedCpsv ? "source CPSV / destination PORT" : "source PASV / destination SSCN+PORT" : "PASV/PORT (reverse)";
             await StartAndCompleteFxpAsync(destination, sourceFile, destinationFile, cancellationToken);
+            LastFxpTransferElapsed = attemptTimer.Elapsed;
             return;
         }
         FtpResponse passive;
@@ -431,6 +435,7 @@ public sealed class FtpRemoteSession : IRemoteSession
         FtpPassivePortRange.Ensure(destinationProfile.EffectiveOptions, advertised.Port, destinationProfile.Name);
         await MeasureFxpStageAsync("PORT", () => ConfigureActiveFxpEndpointAsync(this, advertised, cancellationToken));
         await StartAndCompleteFxpAsync(destination, sourceFile, destinationFile, cancellationToken);
+        LastFxpTransferElapsed = attemptTimer.Elapsed;
     }
 
     public async Task RetryFxpWithReversedTopologyAsync(FtpRemoteSession destination, string sourcePath,
@@ -456,7 +461,6 @@ public sealed class FtpRemoteSession : IRemoteSession
                 if (reply.Code != 350) throw new FtpResumeRejectedException($"Resume rejected by {session._profile!.Name}: {reply.Message}. Choose Overwrite to restart.", reply.Code);
             }
         }
-        var transferTimer = Stopwatch.StartNew();
         // Start both ends together. Some FTP servers do not emit 125/150 until
         // the peer has actually opened the negotiated data connection; awaiting
         // STOR before sending RETR can therefore deadlock until a 425 timeout.
@@ -475,7 +479,6 @@ public sealed class FtpRemoteSession : IRemoteSession
         if (_fxpResumeOffset > 0 && FtpResumeRejectedException.IsAppendPermissionRejection(completions[1].Code, completions[1].Message))
             throw new FtpResumeRejectedException(completions[1].Message, completions[1].Code);
         EnsureSuccess(completions[1], 226, 250);
-        LastFxpTransferElapsed = transferTimer.Elapsed;
     }
 
     private async Task<TransferStart> StartTransferCommandAsync(string command, CancellationToken cancellationToken, long resumeOffset = 0)

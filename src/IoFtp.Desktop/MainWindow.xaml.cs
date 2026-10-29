@@ -216,6 +216,8 @@ public partial class MainWindow : Window
         }
     }
 
+    private static string FormatSpeed(long bytesPerSecond) => $"{Math.Max(0, bytesPerSecond) / 1_000_000d:0.00} MB/s";
+
     private static string FormatSize(long bytes)
     {
         string[] units = ["B", "KB", "MB", "GB", "TB"];
@@ -2224,7 +2226,7 @@ public partial class MainWindow : Window
                             entry.FxpAverageMeasured = true;
                             entry.SpeedBytesPerSecond = average;
                             _fxpPairSpeeds.Record(sourceProfile.Id, destinationProfile.Id, sessionNewBytes, sourceSession.LastFxpTransferElapsed);
-                            var measurement = FormattableString.Invariant($"FXP average: {entry.Name} | bytes={sessionNewBytes}; transfer={sourceSession.LastFxpTransferElapsed.TotalSeconds:F3}s; average={average / 1000000.0:F2} MB/s; mode=passive");
+                            var measurement = FormattableString.Invariant($"FXP average: {entry.Name} | bytes={sessionNewBytes}; total={sourceSession.LastFxpTransferElapsed.TotalSeconds:F3}s; average={average / 1000000.0:F2} MB/s; mode=passive");
                             AppendFtpLog(Environment.NewLine + FormattableString.Invariant($"FXP average: {entry.Name} | {average / 1000000.0:F2} MB/s"));
                             _raceLog.Write("FXP-AVERAGE", $"{entry.Id} {sourceProfile.Name} -> {destinationProfile.Name}: {measurement}");
                         }
@@ -3692,7 +3694,7 @@ public partial class MainWindow : Window
         var active = _queue.Count(item => item.State is "Queued" or "Transferring");
         var running = _queue.Where(item => item.State == "Transferring").ToList();
         var speed = running.Sum(item => item.SpeedBytesPerSecond); var bytes = _queue.Sum(item => item.BytesTransferred);
-        var currentSpeed = $"{(running.Any(item => item.FxpSpeedEstimated) ? "≈" : "")}{FormatSize(speed)}/s";
+        var currentSpeed = FormatSpeed(speed);
         var fxp = _queue.Where(item => item.Direction.ToString().StartsWith("Relay", StringComparison.Ordinal)).ToList();
         var total = _totalStatistics.Snapshot();
         var rows = new List<MetricRow>
@@ -3706,8 +3708,8 @@ public partial class MainWindow : Window
             new("Session running", $"{(long)_sessionStatistics.Uptime.TotalHours} h {_sessionStatistics.Uptime.Minutes} min", "Since this FluxFTP process started; resets on restart"),
             new("Session uploaded", FormatSize(_sessionStatistics.Uploaded), "New bytes from successful uploads"),
             new("Session downloaded", FormatSize(_sessionStatistics.Downloaded), "New bytes from successful downloads; resumed bytes excluded"),
-            new("FXP / relay rate, last 60 s", $"{FormatSize(_sessionStatistics.FxpRecentRate)}/s", "Completed bytes in 60 one-second buckets / 60; updates on completion, no server polling"),
-            new("Session FXP / relay average", $"{FormatSize(_sessionStatistics.FxpSessionRate)}/s", "Completed FXP/relay bytes / session uptime, including idle time; not live throughput"),
+            new("FXP / relay rate, last 60 s", FormatSpeed(_sessionStatistics.FxpRecentRate), "Completed bytes in 60 one-second buckets / 60; updates on completion, no server polling"),
+            new("Session FXP / relay average", FormatSpeed(_sessionStatistics.FxpSessionRate), "Completed FXP/relay bytes / session uptime, including idle time; not live throughput"),
             new("Session FXP / relay", FormatSize(_sessionStatistics.Fxp), "Successful server-to-server files, counted once per file"),
             new("Session local copies", FormatSize(_sessionStatistics.Local), "Successful disk-to-disk copies"),
             new("Session completed files", _sessionStatistics.Completed.ToString(), "Independent of saved or cleared queue history"),
@@ -3718,7 +3720,7 @@ public partial class MainWindow : Window
             new("Transfer jobs", _queue.Count.ToString(), $"Queued/active: {active}"),
             new("Completed", _queue.Count(item => item.State == "Completed").ToString(), $"Failed: {_queue.Count(item => item.State == "Failed")}"),
             new("FXP jobs", fxp.Count.ToString(), $"Completed: {fxp.Count(item => item.State == "Completed")}   Failed: {fxp.Count(item => item.State == "Failed")}"),
-            new("Current throughput", currentSpeed, $"Running transfers: {running.Count}; ≈ includes display-only FXP estimates"),
+            new("Current throughput", currentSpeed, $"Running transfers: {running.Count}; includes display-only FXP estimates"),
             new("Transferred this queue", FormatSize(bytes), $"Remaining: {FormatSize(_queue.Sum(item => Math.Max(0, item.TotalBytes - item.BytesTransferred)))}"),
             new("API", _settings.EnableHttpsApi ? "Enabled" : "Disabled", _settings.EnableHttpsApi ? $"HTTPS port {_settings.HttpsApiPort}" : "—")
         };
@@ -3857,12 +3859,12 @@ public partial class MainWindow : Window
             : 0;
         StatusProgressBar.IsIndeterminate = current.State == "Transferring" && current.TotalBytes <= 0;
         StatusProgressBar.Value = percent;
-        StatusProgressText.Text = current.TotalBytes > 0 ? $"{(current.FxpSpeedEstimated ? "≈" : "")}{percent:0}%" : current.State;
+        StatusProgressText.Text = current.TotalBytes > 0 ? $"{percent:0}%" : current.State;
         var speedText = current.SpeedBytesPerSecond > 0 || (current.FxpLiveMeasured && !current.FxpSpeedUnavailable)
-            ? $"{(current.FxpSpeedEstimated ? "≈" : "")}{current.SpeedBytesPerSecond / 1048576d:0.00} MB/s"
+            ? FormatSpeed(current.SpeedBytesPerSecond)
             : "— MB/s";
         TransferBytesText.Text = (current.SavingToDestination ? "Saving · " : "") + (current.TotalBytes > 0
-            ? $"{(current.FxpSpeedEstimated ? "≈" : "")}{FormatSize(current.DisplayBytesTransferred)} / {FormatSize(current.TotalBytes)} · {speedText}"
+            ? $"{FormatSize(current.DisplayBytesTransferred)} / {FormatSize(current.TotalBytes)} · {speedText}"
             : $"{FormatSize(current.DisplayBytesTransferred)} · {speedText}");
 
         var elapsed = current.StartedAt is { } started
@@ -3871,7 +3873,7 @@ public partial class MainWindow : Window
         ElapsedText.Text = $"Elapsed: {FormatTransferTime(elapsed)}";
         var remainingBytes = Math.Max(0, current.TotalBytes - current.DisplayBytesTransferred);
         RemainingText.Text = current.SpeedBytesPerSecond > 0 && current.TotalBytes > 0
-            ? $"Remaining: {(current.FxpSpeedEstimated ? "≈" : "")}{FormatTransferTime(TimeSpan.FromSeconds(remainingBytes / (double)current.SpeedBytesPerSecond))}"
+            ? $"Remaining: {FormatTransferTime(TimeSpan.FromSeconds(remainingBytes / (double)current.SpeedBytesPerSecond))}"
             : "Remaining: —";
         var oldestQueued = active.Where(item => item.QueuedAt is not null).MinBy(item => item.QueuedAt)?.QueuedAt;
         QueueTimeText.Text = $"Queue: {FormatTransferTime(oldestQueued is { } queued ? DateTimeOffset.Now - queued.ToLocalTime() : TimeSpan.Zero)}";
@@ -4032,7 +4034,6 @@ public partial class MainWindow : Window
         var total = _totalStatistics.Snapshot();
         var allTime = FormatSize(total.Uploaded + total.Downloaded + total.Fxp + total.Local);
         var liveSpeed = _queue.Where(entry => entry.State == "Transferring").Sum(entry => entry.SpeedBytesPerSecond);
-        var estimated = _queue.Any(entry => entry.State == "Transferring" && entry.FxpSpeedEstimated) ? "~" : "";
         var current = CurrentStatusTransfer();
         var progress = "Idle";
         if (current is not null)
@@ -4046,7 +4047,7 @@ public partial class MainWindow : Window
             }
             else progress = current.State == "Transferring" ? "Progress unknown" : "Queued";
         }
-        _ircMetricsFile.Publish($"FluxFTP - {progress} - Traffic {estimated}{FormatSize(liveSpeed)}/s - Session {transferred} - Total {allTime} - FXP(60s) {rate} - Files {_sessionStatistics.Completed} - Jobs {queued}/{active} - Pool {pool} - Uptime {uptime} - Session peak {FormatSize(_sessionStatistics.PeakSpeedBytesPerSecond)}/s - Total peak {FormatSize(total.PeakSpeedBytesPerSecond)}/s - Total files {total.Completed}");
+        _ircMetricsFile.Publish($"FluxFTP - {progress} - Traffic {FormatSpeed(liveSpeed)} - Session {transferred} - Total {allTime} - FXP(60s) {rate} - Files {_sessionStatistics.Completed} - Jobs {queued}/{active} - Pool {pool} - Uptime {uptime} - Session peak {FormatSpeed(_sessionStatistics.PeakSpeedBytesPerSecond)} - Total peak {FormatSpeed(total.PeakSpeedBytesPerSecond)} - Total files {total.Completed}");
         if (_trayMetrics.Count != 6) return;
         var rows = new[] { $"Transferred · session: {transferred}", $"Completed files: {_sessionStatistics.Completed:N0}",
             $"FXP rate · last 60 s: {rate}", $"Queued / active: {queued} / {active}", $"Idle pool: {pool}", $"Session running: {uptime}" };
@@ -4726,12 +4727,12 @@ public partial class MainWindow : Window
             _ => "R2→R1"
         };
         var progressPercent = entry.State == "Completed" ? 100d : entry.TotalBytes > 0 ? Math.Clamp(entry.DisplayBytesTransferred * 100d / entry.TotalBytes, 0, entry.FxpSpeedEstimated ? 99 : 100) : 0d;
-        var done = entry.State == "Completed" ? "100%" : entry.TotalBytes > 0 ? $"{(entry.FxpSpeedEstimated ? "≈" : "")}{progressPercent:0}%" : entry.State == "Transferring" ? "RUN" : entry.State.ToUpperInvariant();
+        var done = entry.State == "Completed" ? "100%" : entry.TotalBytes > 0 ? $"{progressPercent:0}%" : entry.State == "Transferring" ? "RUN" : entry.State.ToUpperInvariant();
         return new TransferJobInfo(entry.Id, entry.QueuedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "—", entry.StartedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "—", direction,
             remoteToRemote ? "FXP" : "FTP", entry.Name, $"{entry.Source} → {entry.Destination}",
             entry.TotalBytes > 0 ? FormatSize(entry.TotalBytes) : entry.ProgressText, "1",
             entry.TotalBytes > 0 ? FormatSize(Math.Max(0, entry.TotalBytes - entry.DisplayBytesTransferred)) : "—",
-            entry.SpeedBytesPerSecond > 0 ? $"{(entry.FxpSpeedEstimated ? "≈" : "")}{entry.SpeedBytesPerSecond / 1048576d:0.00} MB/s" : "—", done, entry.State, progressPercent);
+            entry.SpeedBytesPerSecond > 0 ? FormatSpeed(entry.SpeedBytesPerSecond) : "—", done, entry.State, progressPercent);
     }).ToList();
 
     private static string RemoteLeaf(string path) => path.TrimEnd('/').Split('/').LastOrDefault() ?? path;
@@ -4823,9 +4824,9 @@ public partial class MainWindow : Window
         public DateTime LastPersistedAt { get; set; }
         public string State { get => _state; set { _state = value; Changed(); Changed(nameof(ProgressPercent)); Changed(nameof(ProgressDisplay)); } }
         public long BytesTransferred { get => _bytesTransferred; set { _bytesTransferred = value; Changed(); Changed(nameof(ProgressText)); Changed(nameof(ProgressPercent)); Changed(nameof(ProgressDisplay)); } }
-        public string ProgressText => (FxpSpeedEstimated ? "≈" : "") + FormatSize(DisplayBytesTransferred);
+        public string ProgressText => FormatSize(DisplayBytesTransferred);
         public double ProgressPercent => State == "Completed" ? 100 : TotalBytes > 0 ? Math.Clamp(DisplayBytesTransferred * 100d / TotalBytes, 0, FxpSpeedEstimated ? 99 : 100) : 0;
-        public string ProgressDisplay => (SavingToDestination ? "Saving · " : "") + (TotalBytes > 0 ? $"{(FxpSpeedEstimated ? "≈" : "")}{FormatSize(DisplayBytesTransferred)} / {FormatSize(TotalBytes)}  ({ProgressPercent:0}%)" : ProgressText);
+        public string ProgressDisplay => (SavingToDestination ? "Saving · " : "") + (TotalBytes > 0 ? $"{FormatSize(DisplayBytesTransferred)} / {FormatSize(TotalBytes)}  ({ProgressPercent:0}%)" : ProgressText);
         public event PropertyChangedEventHandler? PropertyChanged;
         private void Changed([CallerMemberName] string? property = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(property));
     }

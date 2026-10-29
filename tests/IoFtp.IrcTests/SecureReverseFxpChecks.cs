@@ -46,6 +46,9 @@ internal static class SecureReverseFxpChecks
             }
             var from = Session("drFTPD", sourceReader, sourceWriter, true);
             var to = Session("ioFTPD", targetReader, targetWriter, false);
+            var delayedCpsv = !advertisedPret && !sscnFallback && !resume && rejection == 0;
+            if (delayedCpsv)
+                from.ProtocolMessage += message => { if (message == "> CPSV") Thread.Sleep(30); };
             var failed = false;
             try { await from.FxpToAsync(to, "/release/file.rar", "/release/file.rar", default, reverseDataConnection: true, offset: resume ? 50 : 0); }
             catch (FtpCommandException exception) when (exception.StatusCode == 553 && (!resume || rejection == 1))
@@ -56,6 +59,9 @@ internal static class SecureReverseFxpChecks
             catch (FtpResumeRejectedException exception) when (resume && rejection >= 2 && exception.CanOverwrite) { failed = true; }
             if (resume && rejection >= 2 && !failed) throw new Exception("Destination append rejection must be eligible for resume recovery");
             if ((!failed && from.LastFxpTransferElapsed <= TimeSpan.Zero) || (failed && from.LastFxpTransferElapsed != TimeSpan.Zero)) throw new Exception("Passive timing must require successful replies from both servers.");
+            if (delayedCpsv && (from.LastFxpStageTimings.Single(stage => stage.Name == "CPSV").Elapsed < TimeSpan.FromMilliseconds(25) ||
+                from.LastFxpTransferElapsed < from.LastFxpStageTimings.Single(stage => stage.Name == "CPSV").Elapsed))
+                throw new Exception("The FXP file average must include CPSV negotiation time, not only the data phase.");
             if (!from.LastFxpStageTimings.Any(stage => stage.Name == "STOR") ||
                 from.LastFxpStageTimings.Single(stage => stage.Name == "STOR").Elapsed > from.LastFxpStageTimings.Single(stage => stage.Name == "STOR/RETR").Elapsed)
                 throw new Exception("Destination STOR must be measured separately within the parallel start stage.");
