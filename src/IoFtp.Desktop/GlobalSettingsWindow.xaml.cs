@@ -354,13 +354,15 @@ public partial class GlobalSettingsWindow : Window
     private void UpdateSkipFilterMode()
     {
         if (SkipPatternsBox is null || SkipFilterNotice is null || UseAdvancedSkipBox is null) return;
-        var advanced = !_visionaryBridge && UseAdvancedSkipBox.IsChecked == true;
-        UseAdvancedSkipBox.IsEnabled = !_visionaryBridge;
+        var advanced = UseAdvancedSkipBox.IsChecked == true;
+        UseAdvancedSkipBox.IsEnabled = true;
         SkipPatternsBox.IsEnabled = !advanced;
         if (EnableSkipListBox is not null) EnableSkipListBox.Content = advanced ? "Enable advanced filters" : "Enable Skip List";
         if (_visionaryBridge)
         {
-            SkipFilterNotice.Text = "Visionary applies its per-site release/section regex rules before sending chains. Flux advanced filters are disabled. You may enable the normal wildcard skiplist here. Resume/Skip/Overwrite target-file actions remain available under FXP.";
+            SkipFilterNotice.Text = advanced
+                ? "Advanced filter mode selected. Check Enable advanced filters to apply it. These filters only restrict files Visionary has already allowed; Allow rules cannot override Visionary rules or add routes. The normal wildcard skiplist is not evaluated. Resume/Skip/Overwrite actions remain under FXP."
+                : "Visionary applies its per-site release/section rules before sending chains. You may enable the normal wildcard skiplist or explicitly select and enable advanced filters as additional restrictions. Neither mode overrides Visionary rules or adds routes. Resume/Skip/Overwrite actions remain under FXP.";
             return;
         }
         SkipFilterNotice.Text = advanced

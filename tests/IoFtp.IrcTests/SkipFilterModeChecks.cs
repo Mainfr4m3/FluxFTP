@@ -19,11 +19,18 @@ internal static class SkipFilterModeChecks
         foreach (var advanced in new[] { false, true })
         {
             var bridge = s with { EnableVisionaryBridge = true, UseAdvancedSkipFilters = advanced, SkipZeroByteFiles = true };
-            if (SkipRuleMatcher.UsesAdvanced(bridge)) throw new Exception("Global advanced filters active with Visionary");
-            if (!Denied(bridge, "archive.rar")) throw new Exception("Optional normal wildcard list inactive with Visionary");
-            if (Denied(bridge with { SkipPatterns = "*.tmp" }, "archive.bad")) throw new Exception("Advanced regex active with Visionary");
-            if (Denied(bridge with { EnableSkipList = false }, "archive.rar")) throw new Exception("Normal skiplist cannot be disabled with Visionary");
+            if (SkipRuleMatcher.UsesAdvanced(bridge) != advanced) throw new Exception("Visionary advanced mode did not follow explicit opt-in");
+            if (Denied(bridge, "archive.rar") == advanced) throw new Exception("Visionary wildcard and advanced modes are not mutually exclusive");
+            if (Denied(bridge with { SkipPatterns = "*.tmp" }, "archive.bad") != advanced) throw new Exception("Visionary regex did not follow selected mode");
+            if (Denied(bridge with { EnableSkipList = false }, "archive.bad")) throw new Exception("Visionary master enable switch ignored");
+            if (!SkipRuleMatcher.ShouldSkip(bridge, "empty.rar", automatic: true, size: 0)) throw new Exception("Common zero-byte filter lost in Visionary mode");
         }
+        if (SkipRuleMatcher.UsesAdvanced(s with { EnableVisionaryBridge = true, UseAdvancedSkipFilters = null }))
+            throw new Exception("Legacy advanced rules must not auto-enable with Visionary");
+        if (Denied(s with { EnableVisionaryBridge = true, UseAdvancedSkipFilters = true, SkipTransferMode = "Manual" }, "archive.bad"))
+            throw new Exception("Manual-only advanced rule applied to automatic Visionary transfers");
+        var allow = s with { EnableVisionaryBridge = true, AdvancedSkipRules = [new(".*", true, "File", "Allow", "Transfer")] };
+        if (Denied(allow, "archive.bad")) throw new Exception("Explicit advanced Allow should only clear the local skip decision");
         GlobalSettingsChecks.Run(); SkipMatchChecks.Run();
         Console.WriteLine("PASS: mutually exclusive wildcard/advanced modes, regex-only fallback exclusion, master off, old settings inference and package persistence.");
     }

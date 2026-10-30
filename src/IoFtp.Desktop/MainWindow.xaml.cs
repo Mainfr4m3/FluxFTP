@@ -2123,6 +2123,8 @@ public partial class MainWindow : Window
                         var action = FxpExistingFilePolicy.Resolve(_settings, sourceSize, targetSize, entry.VisionaryRace, finalRaceSource);
                         if (action == ExistingTargetAction.Skip)
                         {
+                            if (sourceSize is > 0 && sourceSize == targetSize && _raceJobOwners.TryGetValue(entry.Id, out var sfvOwner))
+                                sfvOwner.Sfv.Confirm(entry.Destination, sourceSize.Value);
                             var reason = $"Existing target skipped: {entry.Name}; source={sourceSize} bytes, target={targetSize} bytes; policy=Skip.";
                             AppendConnectionLog(Environment.NewLine + reason); _raceLog.Write("SKIP", reason);
                             entry.State = "Skipped"; _skippedTransferJobs.Add(entry.Id); reuseWorkers = true; return;
@@ -2504,6 +2506,7 @@ public partial class MainWindow : Window
         _totalStatistics.Complete(kind, newBytes);
         if (_raceJobOwners.TryGetValue(entry.Id, out var race))
         {
+            race.Sfv.Confirm(entry.Destination, entry.TotalBytes);
             if (entry.SourceProfileId is { } source) _raceListings.Invalidate(source);
             if (entry.DestinationProfileId is { } destination) _raceListings.Invalidate(destination);
             race.NotifyTransferCompleted();
@@ -4457,6 +4460,11 @@ public partial class MainWindow : Window
         }
         timeout.Token.ThrowIfCancellationRequested();
         race?.EndListing();
+        var sfvFirst = race is not null && TransferFilePriority.Categories(_settings.TransferCategoryOrder)[0] == "SFV";
+        if (race is not null) race.WaitForSfv = sfvFirst;
+        if (sfvFirst)
+            foreach (var file in apiFiles.Where(file => TransferFilePriority.Category(file.Entry.Name, file.Entry.FullPath) == "SFV"))
+                race!.Sfv.Observe(file.Destination, file.Entry.Size);
         if (race?.HasPendingPayload == true) race.StartTrace?.Mark("waiting-source-payload", "zero or unknown source size; rescan before transfer");
         race?.StartTrace?.Mark("source-inventory-ready", $"eligible-files={apiFiles.Count}");
         if (apiFiles.Count > 0) race?.StartTrace?.Mark("first-eligible-payload", $"files={apiFiles.Count}");
@@ -4517,6 +4525,8 @@ public partial class MainWindow : Window
                     // transfer workers for a previously skipped path again.
                     if (race.IsSkipped(file.Entry.FullPath, RaceJobState))
                         targetSize = await _raceListings.ReadSizeAsync(ApplyGlobalProxy(destinationProfile), file.Destination, timeout.Token);
+                    if (file.Entry.Size is > 0 && file.Entry.Size == targetSize)
+                        race.Sfv.Confirm(file.Destination, file.Entry.Size.Value);
                     if (targetSize is null ||
                         FxpExistingFilePolicy.Resolve(_settings, file.Entry.Size, targetSize, true,
                             race.IsFinal(file.Entry.FullPath) && FtpTransferMode.CanResume(file.Entry.FullPath, sourceProfile.EffectiveOptions) && FtpTransferMode.CanResume(file.Destination, destinationProfile.EffectiveOptions)) != ExistingTargetAction.Skip)
@@ -4547,6 +4557,19 @@ public partial class MainWindow : Window
             .ThenBy(file => file.Entry.Name, NaturalNameComparer.Instance).ToList();
         if (race is not null)
         {
+            if (sfvFirst)
+            {
+                var ready = race.Sfv.Select(orderedFiles, file => file.Destination);
+                foreach (var deferred in orderedFiles.Except(ready)) race.DeferExistingTarget(deferred.Entry.FullPath);
+                orderedFiles = ready.ToList();
+                if (race.Sfv.PendingCount > 0)
+                {
+                    var message = $"RACE SFV FIRST [{request.SrcSite} -> {request.DstSite}] {request.Name}: waiting for {race.Sfv.PendingCount} SFV file(s); other files deferred";
+                    if (race.LastSfvWaitSummary != message)
+                    { race.LastSfvWaitSummary = message; _raceLog.Write("SFV-WAIT", message); }
+                }
+                else race.LastSfvWaitSummary = null;
+            }
             // Scheduling runs on the Dispatcher. Reserve paths and publish jobs
             // without an await between the check and AddQueue, across all sources.
             var busy = _queue.Where(entry => entry.State is "Queued" or "Transferring" || _skippedTransferJobs.Contains(entry.Id)).ToArray();

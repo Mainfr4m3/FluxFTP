@@ -6,6 +6,7 @@ internal static class RaceFlowChecks
 {
     public static async Task Run()
     {
+        RaceSfvBarrierChecks.Run();
         var checks = 0;
         void Check(bool value, string name) { if (!value) throw new Exception(name); checks++; }
         var reservations = new HashSet<string>(StringComparer.Ordinal);

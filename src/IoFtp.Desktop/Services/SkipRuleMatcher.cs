@@ -5,7 +5,9 @@ namespace IoFtp.Desktop.Services;
 
 internal static class SkipRuleMatcher
 {
-    public static bool UsesAdvanced(GlobalSettings settings) => !settings.EnableVisionaryBridge && (settings.UseAdvancedSkipFilters ?? (settings.AdvancedSkipRules?.Any(rule => !string.IsNullOrWhiteSpace(rule.Pattern)) == true));
+    public static bool UsesAdvanced(GlobalSettings settings) => settings.EnableVisionaryBridge
+        ? settings.UseAdvancedSkipFilters == true // Explicit opt-in; do not activate legacy imported rules implicitly.
+        : settings.UseAdvancedSkipFilters ?? (settings.AdvancedSkipRules?.Any(rule => !string.IsNullOrWhiteSpace(rule.Pattern)) == true);
 
     public static bool Applies(GlobalSettings settings, bool automatic) => settings.EnableSkipList &&
         (settings.SkipTransferMode == "Both" || settings.SkipTransferMode == (automatic ? "Auto" : "Manual"));

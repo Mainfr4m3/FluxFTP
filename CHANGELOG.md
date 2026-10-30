@@ -2,6 +2,12 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.64 — 2026-10-30 (Windows)
+
+- Allows explicitly selecting advanced skip filters while the Visionary bridge is enabled. The master Enable advanced filters switch and Auto/Manual scope still apply. Legacy imported regex rules do not auto-activate in Visionary mode; local Allow rules do not override Visionary's own filters or create routes. The selected advanced mode replaces the normal wildcard list.
+
+- When SFV is the highest transfer category, race scheduling waits for allowed SFVs already observed on a source before queuing other files. Sources share the barrier per destination release. Successful SFV completion or an equal positive destination size releases the wait; missing SFVs are not required, Sample/Proof retain their categories, and existing running transfers are not interrupted. Unknown/zero or growing SFVs remain pending, without bypassing filters or target-file policy.
+
 ## 2.1.63 — 2026-10-30 (Windows)
 
 - Reissues PRET for the same file on the affected peer before passive FXP fallback after rejected CPSV/EPSV commands. This restores drFTPD pre-transfer state before the next passive mode, for both destination-passive and source-passive routes. Configured/advertised PRET support is respected; rejected PRET still stops the attempt and secure FXP is not downgraded. Covered by 12 fallback cases.

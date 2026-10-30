@@ -102,9 +102,13 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
         public bool Reported;
         public LockedDirectorySkip? Skip;
         public readonly HashSet<string> PreparedPaths = new(StringComparer.Ordinal);
+        public readonly RaceSfvBarrier Sfv = new();
     }
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<object, DirectoryState> DirectoryStates = new();
     private DirectoryState SharedDirectory => DirectoryStates.GetValue(DestinationOwner, _ => new());
+    public RaceSfvBarrier Sfv => SharedDirectory.Sfv;
+    public bool WaitForSfv { get; set; }
+    public string? LastSfvWaitSummary { get; set; }
     public bool DirectoryDenied => SharedDirectory.Failure is not null;
     public bool DirectoryDenialReported { get => SharedDirectory.Reported; set => SharedDirectory.Reported = value; }
     private LockedDirectorySkip? _directorySkip;
@@ -289,6 +293,6 @@ internal sealed class VisionaryRaceState(VisionaryRaceOptions options, Visionary
     }
     public void SkipExistingTarget(string path) => _existingTargets.Add(path);
     public bool IsSkipped(string path, Func<Guid, string?> status) => _existingTargets.Contains(path) || _files.TryGetValue(path, out var file) && status(file.Job) == "Skipped";
-    public bool Finished(Func<Guid, string?> status) => DestinationAlreadyComplete || _pendingTargets.Count == 0 && _deferredTargets.Count == 0 && !HasPendingPayload && SourceComplete && (_files.Count + _existingTargets.Count) > 0 &&
+    public bool Finished(Func<Guid, string?> status) => DestinationAlreadyComplete || (!WaitForSfv || Sfv.PendingCount == 0) && _pendingTargets.Count == 0 && _deferredTargets.Count == 0 && !HasPendingPayload && SourceComplete && (_files.Count + _existingTargets.Count) > 0 &&
         _files.All(pair => _existingTargets.Contains(pair.Key) || status(pair.Value.Job) == "Skipped" || IsFinal(pair.Key) && pair.Value.Final && status(pair.Value.Job) == "Completed");
 }
