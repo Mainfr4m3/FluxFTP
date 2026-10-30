@@ -101,6 +101,7 @@ internal static class SecureReverseFxpChecks
                     throw new Exception("530 diagnostics lost site/command or exposed credentials");
             }
         }
+        await PretFallbackChecks.Run();
         Console.WriteLine("PASS: secure reverse FXP, PRET, correct peer/command attribution and credential-safe 530 diagnostics.");
     }
 }

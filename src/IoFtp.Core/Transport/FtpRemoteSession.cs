@@ -298,6 +298,10 @@ public sealed class FtpRemoteSession : IRemoteSession
         await MeasureFxpStageAsync("PRET", async () => await Task.WhenAll(
             PrepareDataCommandAsync($"RETR {sourceFile}", cancellationToken, FtpTransferMode.IsAscii(sourceFile, sourceProfile.EffectiveOptions) && !destinationProfile.EffectiveOptions.ForceBinaryMode),
             destination.PrepareDataCommandAsync($"STOR {destinationFile}", cancellationToken, FtpTransferMode.IsAscii(sourceFile, sourceProfile.EffectiveOptions) && !destinationProfile.EffectiveOptions.ForceBinaryMode)));
+        // A rejected passive command can clear drFTPD's pre-transfer state.
+        // Re-arm the same file on that peer before trying another passive mode.
+        Task RepreparePassiveAsync(FtpRemoteSession peer, string command) =>
+            MeasureFxpStageAsync("PRET", () => peer.PreparePretCommandAsync(command, cancellationToken));
         if (reverseDataConnection)
         {
             FtpResponse sourcePassive = new(0, "");
@@ -315,6 +319,7 @@ public sealed class FtpRemoteSession : IRemoteSession
                 {
                     if (!(Capabilities.Contains("SSCN") && destination.Capabilities.Contains("SSCN")))
                         throw new NotSupportedException("Secure source-passive FXP requires source CPSV or SSCN on both sites.");
+                    if (sourcePassive.Code != 0) await RepreparePassiveAsync(this, $"RETR {sourceFile}");
                     sourcePassive = await MeasureFxpStageAsync("PASV", () => FxpCommandAsync("PASV", cancellationToken));
                 }
                 // Preserve the CPSV endpoint; never substitute the master's control address for a slave address.
@@ -331,6 +336,7 @@ public sealed class FtpRemoteSession : IRemoteSession
                     // CEPR may be enabled for a bouncer while the currently selected
                     // endpoint does not implement EPSV. Fall back without sacrificing
                     // the otherwise valid PASV/PORT FXP route.
+                    await RepreparePassiveAsync(this, $"RETR {sourceFile}");
                     sourcePassive = await MeasureFxpStageAsync("PASV", () => FxpCommandAsync("PASV", cancellationToken));
                     EnsureSuccess(sourcePassive, 227);
                     sourceAdvertised = ParsePassiveEndpoint(sourcePassive.Message);
@@ -380,11 +386,15 @@ public sealed class FtpRemoteSession : IRemoteSession
                 // preferring CPSV before falling all the way back to PASV/SSCN.
                 if (secureFxp && destination._profile!.EffectiveOptions.UseCpsv && destination.Capabilities.Contains("CPSV"))
                 {
+                    await RepreparePassiveAsync(destination, $"STOR {destinationFile}");
                     passive = await MeasureFxpStageAsync("CPSV", () => destination.FxpCommandAsync("CPSV", cancellationToken));
                     usedCpsv = passive.Code == 227;
                 }
                 if (!usedCpsv)
+                {
+                    await RepreparePassiveAsync(destination, $"STOR {destinationFile}");
                     passive = await MeasureFxpStageAsync("PASV", () => destination.FxpCommandAsync("PASV", cancellationToken));
+                }
                 EnsureSuccess(passive, 227);
                 advertised = ParsePassiveEndpoint(passive.Message);
             }
@@ -393,7 +403,11 @@ public sealed class FtpRemoteSession : IRemoteSession
         {
             passive = await MeasureFxpStageAsync("CPSV", () => destination.FxpCommandAsync("CPSV", cancellationToken));
             usedCpsv = passive.Code == 227;
-            if (!usedCpsv) passive = await MeasureFxpStageAsync("PASV", () => destination.FxpCommandAsync("PASV", cancellationToken));
+            if (!usedCpsv)
+            {
+                await RepreparePassiveAsync(destination, $"STOR {destinationFile}");
+                passive = await MeasureFxpStageAsync("PASV", () => destination.FxpCommandAsync("PASV", cancellationToken));
+            }
             EnsureSuccess(passive, 227);
             advertised = ParsePassiveEndpoint(passive.Message);
         }
@@ -1136,6 +1150,11 @@ public sealed class FtpRemoteSession : IRemoteSession
         if (command.StartsWith("RETR ", StringComparison.OrdinalIgnoreCase) ||
             command.StartsWith("STOR ", StringComparison.OrdinalIgnoreCase))
             EnsureSuccess(await FxpCommandAsync((ascii ?? FtpTransferMode.IsAscii(command[5..], _profile?.EffectiveOptions ?? new())) ? "TYPE A" : "TYPE I", cancellationToken), 200);
+        await PreparePretCommandAsync(command, cancellationToken);
+    }
+
+    private async Task PreparePretCommandAsync(string command, CancellationToken cancellationToken)
+    {
         if (_profile?.EffectiveOptions.NeedsPret != true && !Capabilities.Contains("PRET")) return;
         var response = await FxpCommandAsync($"PRET {command}", cancellationToken);
         EnsureSuccess(response, 200);

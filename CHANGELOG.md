@@ -2,6 +2,10 @@
 
 All notable FluxFTP changes are documented here.
 
+## 2.1.63 — 2026-10-30 (Windows)
+
+- Reissues PRET for the same file on the affected peer before passive FXP fallback after rejected CPSV/EPSV commands. This restores drFTPD pre-transfer state before the next passive mode, for both destination-passive and source-passive routes. Configured/advertised PRET support is respected; rejected PRET still stops the attempt and secure FXP is not downgraded. Covered by 12 fallback cases.
+
 ## Bridge remote control 1.04 — 2026-10-29
 
 - Remote control 1.04 decodes RAW JSON replies into site-labelled server lines instead of echoing escaped JSON. Blank lines do not truncate subsequent output; the unified bridge shares the formatter with the DLL command path. API formats, EXE and DLLs are unchanged.
